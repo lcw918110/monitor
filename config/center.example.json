@@ -1,0 +1,23 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "data_dir": "data",
+  "token": "",
+  "offline_seconds": 90,
+  "retention_days": 7,
+  "cleanup_interval_seconds": 3600,
+  "anomaly": {
+    "cpu_warn_percent": 80,
+    "cpu_critical_percent": 95,
+    "cpu_load_per_core_warn": 2.0,
+    "mem_warn_percent": 85,
+    "mem_critical_percent": 95,
+    "disk_warn_percent": 85,
+    "disk_critical_percent": 95,
+    "accel_util_warn_percent": 95,
+    "accel_temp_warn_c": 85,
+    "accel_temp_critical_c": 95,
+    "accel_mem_warn_percent": 90,
+    "accel_mem_critical_percent": 98
+  }
+}

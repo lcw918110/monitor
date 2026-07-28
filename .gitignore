@@ -1,0 +1,11 @@
+data/
+*.db
+config/center.json
+config/agent.json
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+.deploy-center/
+.deploy-agent/

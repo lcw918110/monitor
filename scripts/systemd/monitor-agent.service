@@ -1,0 +1,14 @@
+[Unit]
+Description=简易多机监控采集端
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/monitor
+Environment=PYTHONPATH=/opt/monitor
+ExecStart=/usr/bin/python3 -m agent --config /opt/monitor/config/agent.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>简易多机监控</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>简易多机监控</h1>
+        <p class="sub">中心控制台 · CPU / 加速卡监测与阈值着色 · v1.4.0</p>
+      </div>
+    </div>
+    <div class="top-meta">
+      <a class="link" href="/deploy.html">客户端部署</a>
+      <a class="link" href="/api/v1/export/hosts.csv">导出 CSV</a>
+      <a class="link" href="/api/v1/export/hosts.json">导出 JSON</a>
+      <span id="refreshHint">自动刷新 15s</span>
+      <button type="button" id="btnRefresh" class="btn">立即刷新</button>
+    </div>
+  </header>
+
+  <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
+  <section class="stats" id="stats" aria-label="集群统计"></section>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>主机资源</h2>
+        <div class="filters">
+          <input id="filterQ" type="search" placeholder="搜索主机..." />
+          <select id="filterType">
+            <option value="">全部类型</option>
+            <option value="cpu">CPU</option>
+            <option value="gpu">GPU（加速卡）</option>
+            <option value="auto">auto</option>
+          </select>
+          <select id="filterStatus">
+            <option value="">全部判定</option>
+            <option value="critical">异常</option>
+            <option value="warn">偏高</option>
+            <option value="normal">正常</option>
+            <option value="unknown">未知</option>
+          </select>
+          <span class="muted" id="hostCount"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>在线</th>
+              <th>资源判定</th>
+              <th>主机</th>
+              <th>类型</th>
+              <th>CPU</th>
+              <th>NPU</th>
+              <th>最近上报</th>
+            </tr>
+          </thead>
+          <tbody id="hostBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel detail">
+      <div class="panel-head">
+        <h2>主机详情</h2>
+        <span class="muted" id="detailTitle">请选择左侧主机</span>
+      </div>
+      <div id="detailBody" class="detail-body">
+        <p class="empty">暂无选中主机</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>聚焦 CPU / NPU 监测与统计 · 异常仅判定展示 · 不引入外部监控软件</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
