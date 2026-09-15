@@ -106,13 +106,23 @@ class Storage:
             "system": {
                 "cpu_percent": system.get("cpu_percent"),
                 "cpu_count": system.get("cpu_count"),
+                "cpu_freq_mhz": system.get("cpu_freq_mhz"),
+                "cpu_freq_max_mhz": system.get("cpu_freq_max_mhz"),
                 "mem_percent": system.get("mem_percent"),
+                "mem_used_mb": system.get("mem_used_mb"),
+                "mem_total_mb": system.get("mem_total_mb"),
                 "disk_percent": system.get("disk_percent"),
+                "disk_used_gb": system.get("disk_used_gb"),
+                "disk_total_gb": system.get("disk_total_gb"),
                 "load1": system.get("load1"),
                 "load5": system.get("load5"),
                 "load15": system.get("load15"),
                 "net_rx_mbps": system.get("net_rx_mbps"),
                 "net_tx_mbps": system.get("net_tx_mbps"),
+                "net_rated_mbps": system.get("net_rated_mbps"),
+                "net_link_mbps": system.get("net_link_mbps"),
+                "net_rx_percent": system.get("net_rx_percent"),
+                "net_tx_percent": system.get("net_tx_percent"),
             },
             "npus": [
                 {
@@ -120,6 +130,9 @@ class Storage:
                     "util_percent": n.get("util_percent"),
                     "temp_c": n.get("temp_c"),
                     "mem_percent": n.get("mem_percent"),
+                    "mem_used_mb": n.get("mem_used_mb"),
+                    "mem_total_mb": n.get("mem_total_mb"),
+                    "power_w": n.get("power_w"),
                     "health": n.get("health"),
                 }
                 for n in npus
@@ -129,10 +142,16 @@ class Storage:
                     "index": g.get("index"),
                     "util_percent": g.get("util_percent"),
                     "temp_c": g.get("temp_c"),
+                    "mem_percent": g.get("mem_percent"),
+                    "mem_used_mb": g.get("mem_used_mb"),
+                    "mem_total_mb": g.get("mem_total_mb"),
+                    "power_w": g.get("power_w"),
+                    "power_limit_w": g.get("power_limit_w"),
                 }
                 for g in gpus
             ],
         }
+
     def _is_online(self, last_seen: int, now: Optional[int] = None) -> bool:
         now = now if now is not None else int(time.time())
         return (now - int(last_seen)) <= self.offline_seconds
@@ -162,6 +181,9 @@ class Storage:
             "mem_percent": system.get("mem_percent"),
             "disk_percent": system.get("disk_percent"),
             "load1": system.get("load1"),
+            "net_rx_mbps": system.get("net_rx_mbps"),
+            "net_tx_mbps": system.get("net_tx_mbps"),
+            "net_rated_mbps": system.get("net_rated_mbps"),
             "npu_count": len(npus),
             "npu_util_avg": round(sum(npu_utils) / len(npu_utils), 2) if npu_utils else None,
             "gpu_count": len(gpus),
@@ -299,6 +321,9 @@ class Storage:
             "load1": system.get("load1"),
             "net_rx_mbps": system.get("net_rx_mbps"),
             "net_tx_mbps": system.get("net_tx_mbps"),
+            "net_rated_mbps": system.get("net_rated_mbps"),
+            "net_rx_percent": system.get("net_rx_percent"),
+            "net_tx_percent": system.get("net_tx_percent"),
             "npu_util_avg": round(sum(npu_utils) / len(npu_utils), 2) if npu_utils else None,
             "npu_temp_max": max(npu_temps) if npu_temps else None,
             "npu_count": len(npus),
@@ -380,6 +405,9 @@ class Storage:
             "load1": [],
             "net_rx_mbps": [],
             "net_tx_mbps": [],
+            "net_rated_mbps": [],
+            "net_rx_percent": [],
+            "net_tx_percent": [],
             "accel_util_avg": [],
             "accel_temp_max": [],
         }
@@ -409,6 +437,9 @@ class Storage:
                 "load1": pt.get("load1"),
                 "net_rx_mbps": pt.get("net_rx_mbps"),
                 "net_tx_mbps": pt.get("net_tx_mbps"),
+                "net_rated_mbps": pt.get("net_rated_mbps"),
+                "net_rx_percent": pt.get("net_rx_percent"),
+                "net_tx_percent": pt.get("net_tx_percent"),
                 "accel_util_avg": accel_util,
                 "accel_temp_max": accel_temp,
             }
@@ -442,6 +473,9 @@ class Storage:
                 "load1": _agg(series["load1"]),
                 "net_rx_mbps": _agg(series["net_rx_mbps"]),
                 "net_tx_mbps": _agg(series["net_tx_mbps"]),
+                "net_rated_mbps": _agg(series["net_rated_mbps"]),
+                "net_rx_percent": _agg(series["net_rx_percent"]),
+                "net_tx_percent": _agg(series["net_tx_percent"]),
                 "accel_util_avg": _agg(series["accel_util_avg"]),
                 "accel_temp_max": _agg(series["accel_temp_max"]),
             },

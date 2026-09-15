@@ -38,9 +38,26 @@
     filterStatus: document.getElementById("filterStatus"),
   };
 
-  function fmtPct(v) {
+  function fmtMbps(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
-    return Number(v).toFixed(1) + "%";
+    const n = Number(v);
+    if (Math.abs(n) >= 100) return n.toFixed(0);
+    if (Math.abs(n) >= 10) return n.toFixed(1);
+    return n.toFixed(2);
+  }
+
+  function fmtNum(v, digits) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+    return Number(v).toFixed(digits == null ? 1 : digits);
+  }
+
+  function rtRated(realtimeText, ratedText) {
+    return (
+      '<span class="rt-tag">实时</span> ' +
+      realtimeText +
+      ' <span class="rt-tag">额定</span> ' +
+      ratedText
+    );
   }
 
   function fmtTime(ts) {
@@ -212,14 +229,17 @@
   function renderPeriodStatsTable(stats) {
     const metrics = (stats && stats.metrics) || {};
     const rows = [
-      ["CPU 利用率", metrics.cpu_percent, "%"],
-      ["内存利用率", metrics.mem_percent, "%"],
-      ["磁盘利用率", metrics.disk_percent, "%"],
-      ["负载 load1", metrics.load1, ""],
+      ["CPU 利用率（实时）", metrics.cpu_percent, "%"],
+      ["内存利用率（实时）", metrics.mem_percent, "%"],
+      ["磁盘利用率（实时）", metrics.disk_percent, "%"],
+      ["负载 load1（实时）", metrics.load1, ""],
       ["加速卡利用率", metrics.accel_util_avg, "%"],
       ["加速卡最高温度", metrics.accel_temp_max, "°C"],
-      ["网络入向", metrics.net_rx_mbps, " Mbps"],
-      ["网络出向", metrics.net_tx_mbps, " Mbps"],
+      ["网络入向（实时）", metrics.net_rx_mbps, " Mbps"],
+      ["网络出向（实时）", metrics.net_tx_mbps, " Mbps"],
+      ["额定链路带宽", metrics.net_rated_mbps, " Mbps"],
+      ["网络入向利用率", metrics.net_rx_percent, "%"],
+      ["网络出向利用率", metrics.net_tx_percent, "%"],
     ];
     const count = (stats && stats.sample_count) || 0;
     let meta =
@@ -382,7 +402,9 @@
           "</td>" +
           "<td>" +
           metricSpan(
-            fmtPct(h.cpu_percent) + (h.cpu_count ? " / " + h.cpu_count + "核" : ""),
+            "实时 " +
+              fmtPct(h.cpu_percent) +
+              (h.cpu_count ? " / 额定 " + h.cpu_count + "核" : ""),
             cpuLevel
           ) +
           "</td>" +
@@ -521,25 +543,48 @@
       ) +
       "</div>";
     html +=
-      '<div class="chart-card"><div class="title">内存 %</div>' +
+      '<div class="chart-card"><div class="title">内存 %（实时/总量）</div>' +
       sparkline(
         pts.map((x) => x.mem_percent),
         "#46c2b0"
       ) +
       "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络入向 Mbps（实时）</div>' +
+      sparkline(
+        pts.map((x) => x.net_rx_mbps),
+        "#7ec8e3"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络出向 Mbps（实时）</div>' +
+      sparkline(
+        pts.map((x) => x.net_tx_mbps),
+        "#e3c07e"
+      ) +
+      "</div>";
     html += "</div>";
 
-    html += '<div class="section-title">CPU / 基础资源</div>';
+    html += '<div class="section-title">CPU / 基础资源（实时用量 + 额定/总量）</div>';
     html += '<div class="kv">';
+    const cpuFreqRt =
+      sys.cpu_freq_mhz != null
+        ? " · " + fmtNum(sys.cpu_freq_mhz, 0) + " MHz"
+        : "";
+    const cpuFreqRated =
+      sys.cpu_freq_max_mhz != null
+        ? " · " + fmtNum(sys.cpu_freq_max_mhz, 0) + " MHz"
+        : "";
     html +=
       '<div class="k">CPU</div><div class="v">' +
-      metricPct(sys.cpu_percent, thresholds.cpu_warn_percent, thresholds.cpu_critical_percent) +
-      " · " +
-      (sys.cpu_count ?? "-") +
-      " 核 · " +
-      escapeHtml(sys.cpu_arch || "-") +
-      " · " +
-      escapeHtml(sys.os_name || "-") +
+      rtRated(
+        metricPct(
+          sys.cpu_percent,
+          thresholds.cpu_warn_percent,
+          thresholds.cpu_critical_percent
+        ) + cpuFreqRt,
+        (sys.cpu_count ?? "-") + " 核" + cpuFreqRated
+      ) +
       " " +
       bar(sys.cpu_percent) +
       "</div>";
@@ -550,25 +595,115 @@
         "</div>";
     }
     html +=
-      '<div class="k">负载</div><div class="v">1m=' +
+      '<div class="k">架构 / 系统</div><div class="v">' +
+      escapeHtml(sys.cpu_arch || "-") +
+      " · " +
+      escapeHtml(sys.os_name || "-") +
+      "</div>";
+    let loadRated = "";
+    if (sys.cpu_count) {
+      const l1 = Number(sys.load1);
+      if (!Number.isNaN(l1)) {
+        loadRated =
+          " （相对额定 " +
+          sys.cpu_count +
+          " 核约 " +
+          fmtPct((l1 / Number(sys.cpu_count)) * 100) +
+          "）";
+      } else {
+        loadRated = " （额定 " + sys.cpu_count + " 核）";
+      }
+    }
+    html +=
+      '<div class="k">负载</div><div class="v">' +
+      '<span class="rt-tag">实时</span> 1m=' +
       (sys.load1 ?? "-") +
       " · 5m=" +
       (sys.load5 ?? "-") +
       " · 15m=" +
       (sys.load15 ?? "-") +
+      loadRated +
       "</div>";
     html +=
       '<div class="k">内存</div><div class="v">' +
-      metricPct(sys.mem_percent, thresholds.mem_warn_percent, thresholds.mem_critical_percent) +
-      " (" +
-      (sys.mem_used_mb ?? "-") +
-      " / " +
-      (sys.mem_total_mb ?? "-") +
-      " MB)</div>";
+      rtRated(
+        fmtNum(sys.mem_used_mb, 1) + " MB",
+        fmtNum(sys.mem_total_mb, 1) + " MB"
+      ) +
+      " " +
+      metricPct(
+        sys.mem_percent,
+        thresholds.mem_warn_percent,
+        thresholds.mem_critical_percent
+      ) +
+      " " +
+      bar(sys.mem_percent) +
+      "</div>";
     html +=
       '<div class="k">磁盘</div><div class="v">' +
-      metricPct(sys.disk_percent, thresholds.disk_warn_percent, thresholds.disk_critical_percent) +
+      rtRated(
+        fmtNum(sys.disk_used_gb, 2) + " GB",
+        fmtNum(sys.disk_total_gb, 2) + " GB"
+      ) +
+      " " +
+      metricPct(
+        sys.disk_percent,
+        thresholds.disk_warn_percent,
+        thresholds.disk_critical_percent
+      ) +
+      " " +
+      bar(sys.disk_percent) +
       "</div>";
+    const netUtil = Math.max(
+      Number(sys.net_rx_percent) || 0,
+      Number(sys.net_tx_percent) || 0
+    );
+    let netRated = sys.net_rated_mbps != null ? fmtMbps(sys.net_rated_mbps) + " Mbps" : "-";
+    if (
+      sys.net_link_mbps != null &&
+      sys.net_rated_mbps != null &&
+      Number(sys.net_link_mbps) !== Number(sys.net_rated_mbps)
+    ) {
+      netRated += "（主链路 " + fmtMbps(sys.net_link_mbps) + " Mbps）";
+    }
+    html +=
+      '<div class="k">网络</div><div class="v">' +
+      rtRated(
+        "入 " +
+          fmtMbps(sys.net_rx_mbps) +
+          " / 出 " +
+          fmtMbps(sys.net_tx_mbps) +
+          " Mbps",
+        netRated
+      );
+    if (sys.net_rx_percent != null || sys.net_tx_percent != null) {
+      html +=
+        " 利用率 入 " +
+        fmtPct(sys.net_rx_percent) +
+        " · 出 " +
+        fmtPct(sys.net_tx_percent);
+    }
+    html += " " + bar(netUtil);
+    const ifaces = sys.net_ifaces || [];
+    if (ifaces.length) {
+      html +=
+        '<div class="iface-list">' +
+        ifaces
+          .map((n) => {
+            const spd =
+              n.speed_mbps != null ? fmtMbps(n.speed_mbps) + " Mbps" : "速率未知";
+            return (
+              escapeHtml(n.name || "?") +
+              " " +
+              (n.up ? "UP" : "DOWN") +
+              " " +
+              spd
+            );
+          })
+          .join(" · ") +
+        "</div>";
+    }
+    html += "</div>";
     html +=
       '<div class="k">运行时长</div><div class="v">' +
       fmtUptime(sys.uptime_sec) +
@@ -586,7 +721,7 @@
     } else {
       html +=
         '<table class="gpu-table"><thead><tr>' +
-        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存</th><th>温度</th><th>功耗</th>" +
+        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存 实时/额定</th><th>温度</th><th>功耗 实时/额定</th>" +
         "</tr></thead><tbody>";
       const uw = thresholds.accel_util_warn_percent || thresholds.npu_util_warn_percent;
       const tw = thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c;
@@ -616,9 +751,34 @@
               )
               .join(" ") +
             ")</span>";
-        } else if (n.freq_mhz != null) {
-          utilExtra =
-            ' <span class="muted">' + Number(n.freq_mhz).toFixed(0) + " MHz</span>";
+        }
+        if (n.core_count) {
+          utilExtra +=
+            ' <span class="muted">额定 ' + n.core_count + " 核</span>";
+        }
+        if (n.freq_mhz != null || n.freq_max_mhz != null) {
+          utilExtra +=
+            ' <span class="muted">' +
+            (n.freq_mhz != null
+              ? "实时 " + Number(n.freq_mhz).toFixed(0) + " MHz"
+              : "") +
+            (n.freq_max_mhz != null
+              ? " / 额定 " + Number(n.freq_max_mhz).toFixed(0) + " MHz"
+              : "") +
+            "</span>";
+        }
+        let powerText = "-";
+        if (n.power_w != null || n.power_limit_w != null) {
+          if (n.power_limit_w != null) {
+            powerText =
+              "实时 " +
+              (n.power_w != null ? fmtNum(n.power_w, 1) : "-") +
+              " / 额定 " +
+              fmtNum(n.power_limit_w, 1) +
+              " W";
+          } else {
+            powerText = fmtNum(n.power_w, 1) + " W";
+          }
         }
         html +=
           "<tr><td>" +
@@ -636,15 +796,16 @@
           bar(n.util_percent) +
           "</td><td>" +
           metricPct(memPct, mw, mc) +
-          " (" +
-          (n.mem_used_mb ?? "-") +
-          " / " +
-          (n.mem_total_mb ?? "-") +
-          " MB)</td><td>" +
+          " " +
+          rtRated(
+            fmtNum(n.mem_used_mb, 0) + " MB",
+            fmtNum(n.mem_total_mb, 0) + " MB"
+          ) +
+          "</td><td>" +
           metricTemp(n.temp_c, tw, tc) +
           "</td><td>" +
-          (n.power_w ?? "-") +
-          " W</td></tr>";
+          powerText +
+          "</td></tr>";
       });
       html += "</tbody></table>";
     }

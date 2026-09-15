@@ -170,6 +170,9 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         "npu_util_avg",
         "gpu_count",
         "gpu_util_avg",
+        "net_rx_mbps",
+        "net_tx_mbps",
+        "net_rated_mbps",
     ]
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()

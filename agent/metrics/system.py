@@ -12,7 +12,7 @@ import os
 import platform
 import subprocess
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _read_text(path: str) -> Optional[str]:
@@ -216,6 +216,38 @@ def sample_uptime() -> int:
     return 0
 
 
+def sample_cpu_freq() -> Dict[str, Optional[float]]:
+    """实时当前频率与额定最高频率（sysfs cpufreq，kHz→MHz）。不可用则字段为 None。"""
+    n = min(os.cpu_count() or 1, 256)
+    curs: List[float] = []
+    maxes: List[float] = []
+    for i in range(n):
+        cur = _read_text("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq" % i)
+        if not cur:
+            cur = _read_text("/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_cur_freq" % i)
+        mx = _read_text("/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq" % i)
+        cv = None
+        mv = None
+        try:
+            if cur:
+                cv = float(cur.strip().split()[0])
+        except (TypeError, ValueError):
+            cv = None
+        try:
+            if mx:
+                mv = float(mx.strip().split()[0])
+        except (TypeError, ValueError):
+            mv = None
+        if cv and cv > 0:
+            curs.append(cv)
+        if mv and mv > 0:
+            maxes.append(mv)
+    return {
+        "cpu_freq_mhz": round(sum(curs) / len(curs) / 1000.0, 1) if curs else None,
+        "cpu_freq_max_mhz": round(max(maxes) / 1000.0, 1) if maxes else None,
+    }
+
+
 def sample_cpu_identity() -> Dict[str, str]:
     arch = platform.machine() or ""
     os_name = platform.system() or ""
@@ -257,6 +289,7 @@ def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[st
         "uptime_sec": sample_uptime(),
     }
     data.update(sample_cpu_identity())
+    data.update(sample_cpu_freq())
     data.update(sample_load())
     data.update(sample_memory())
     data.update(sample_disk(disk_path))
