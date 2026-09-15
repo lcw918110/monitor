@@ -1,0 +1,43 @@
+# Captured from 192.168.15.95 Ascend 310P3, npu-smi 24.1.rc2
+# Observed monitor bugs: temp=380 (hugepages), util=1925564 (process id), npu_count=3 (too high)
+# Ground truth for NPU ID 1: Temp≈71C, AICore≈20-36%, Memory 2962/21527 MB, Hugepages 380/380
+
+=== npu-smi info ===
++--------------------------------------------------------------------------------------------------------+
+| npu-smi 24.1.rc2                                 Version: 24.1.rc2                                     |
++-------------------------------+-----------------+------------------------------------------------------+
+| NPU     Name                  | Health          | Power(W)     Temp(C)           Hugepages-Usage(page) |
+| Chip    Device                | Bus-Id          | AICore(%)    Memory-Usage(MB)                        |
++===============================+=================+======================================================+
+| 1       310P3                 | OK              | NA           71                380   / 380           |
+| 0       0                     | 0000:01:00.0    | 25           2962 / 21527                            |
++===============================+=================+======================================================+
++-------------------------------+-----------------+------------------------------------------------------+
+| NPU     Chip                  | Process id      | Process name             | Process memory(MB)        |
++===============================+=================+======================================================+
+| 1       0                     | 2129107         | main                     | 245                       |
+| 1       0                     | 1925564         | main                     | 393                       |
+| 1       0                     | 2129214         | ffmpeg                   | 215                       |
+| 1       0                     | 1925742         | ffmpeg                   | 215                       |
++===============================+=================+======================================================+
+
+=== npu-smi info -m ===
+	NPU ID                         Chip ID                        Chip Logic ID                  Chip Name                     
+	1                              0                              0                              Ascend 310P3
+	1                              1                              -                              Mcu                           
+
+=== npu-smi info -t usages -i 1 ===
+	NPU ID                         : 1
+	Chip Count                     : 1
+	DDR Capacity(MB)               : 21527
+	DDR Usage Rate(%)              : 13
+	DDR Hugepages Total(page)      : 380
+	DDR Hugepages Usage Rate(%)    : 100
+	Aicore Usage Rate(%)           : 36
+	Aicpu Usage Rate(%)            : 1
+	Ctrlcpu Usage Rate(%)          : 2
+	Vectorcore Usage Rate(%)       : 0
+
+=== npu-smi info -t temp -i 1 ===
+	Temperature (C)                : 71
+	AICORE   (C)                   : 71
