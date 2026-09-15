@@ -13,10 +13,12 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent.metrics.npu import (
+    _enrich_with_typed_queries,
     _parse_chip_mapping,
     _parse_info_table,
     _parse_temp_text,
     _parse_usages_text,
+    _sanitize_parsed_metrics,
     collect_npus,
 )
 
@@ -93,9 +95,11 @@ class Ascend310P3FixtureTests(unittest.TestCase):
         card = npus[0]
         self.assertEqual(card["index"], 1)
         self.assertEqual(card["health"], "OK")
+        # 列对齐：Power=NA、Temp=71、Hugepages=380/380，不能对调
         self.assertEqual(card["temp_c"], 71)
         self.assertNotEqual(card["temp_c"], 380)
-        self.assertEqual(card["power_w"], None)
+        self.assertIsNone(card["power_w"])
+        self.assertNotEqual(card["power_w"], 71)
         self.assertEqual(card["util_percent"], 25)
         self.assertTrue(0 <= card["util_percent"] <= 100)
         self.assertEqual(card["mem_used_mb"], 2962)
@@ -143,6 +147,9 @@ class Ascend310P3FixtureTests(unittest.TestCase):
         card = npus[0]
         self.assertEqual(card["index"], 1)
         self.assertEqual(card["temp_c"], 71)
+        self.assertIsNone(card["power_w"])
+        self.assertNotEqual(card["power_w"], 71)
+        self.assertNotEqual(card["temp_c"], 380)
         self.assertTrue(0 <= card["util_percent"] <= 100)
         self.assertEqual(card["mem_used_mb"], 2962)
         self.assertEqual(card["mem_total_mb"], 21527)
@@ -174,7 +181,70 @@ class Ascend310P3FixtureTests(unittest.TestCase):
             npus = collect_npus()
         self.assertEqual(len(npus), 1)
         self.assertNotEqual(npus[0]["temp_c"], 380)
+        self.assertIsNone(npus[0]["power_w"])
         self.assertLessEqual(npus[0]["util_percent"], 100)
+
+    def test_live_api_column_swap_repaired_by_typed_temp(self) -> None:
+        """center-95 线上对象：temp/power 对调 + 两个 PID 幽灵卡。"""
+        live_cards = [
+            {
+                "index": 1,
+                "chip_id": 0,
+                "name": "310P3",
+                "health": "OK",
+                "util_percent": 29.0,
+                "temp_c": 380.0,
+                "power_w": 71.0,
+                "mem_used_mb": 2962.0,
+                "mem_total_mb": 21527.0,
+                "mem_percent": 13.76,
+                "bus_id": "0000:01:00.0",
+            },
+            {
+                "index": 1,
+                "chip_id": 0,
+                "name": "main",
+                "util_percent": 1925564,
+                "temp_c": None,
+                "power_w": None,
+            },
+            {
+                "index": 1,
+                "chip_id": 0,
+                "name": "ffmpeg",
+                "util_percent": 1925742,
+                "temp_c": None,
+                "power_w": None,
+            },
+        ]
+        with mock.patch("agent.metrics.npu._run_npu_smi", side_effect=self._fake_npu_smi):
+            cards = _sanitize_parsed_metrics([dict(live_cards[0])])
+            cards = _enrich_with_typed_queries(cards)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["temp_c"], 71)
+        self.assertIsNone(cards[0]["power_w"])
+        self.assertEqual(cards[0]["util_percent"], 29.0)
+        parsed = _parse_info_table(self.info)
+        self.assertEqual(len(parsed), 1)
+        self.assertNotIn(1925564, [c.get("util_percent") for c in parsed])
+        self.assertNotIn(1925742, [c.get("util_percent") for c in parsed])
+
+    def test_typed_temp_uses_npu_id_not_mcu_chip(self) -> None:
+        calls: list = []
+
+        def fake_run(args, timeout=10.0):
+            calls.append(list(args))
+            return self._fake_npu_smi(args, timeout)
+
+        with mock.patch("agent.metrics.npu._run_npu_smi", side_effect=fake_run):
+            collect_npus()
+        temp_calls = [c for c in calls if c[:3] == ["info", "-t", "temp"]]
+        self.assertTrue(temp_calls, calls)
+        for args in temp_calls:
+            self.assertIn("-i", args)
+            self.assertEqual(args[args.index("-i") + 1], "1")
+            if "-c" in args:
+                self.assertEqual(args[args.index("-c") + 1], "0")
 
 
 if __name__ == "__main__":

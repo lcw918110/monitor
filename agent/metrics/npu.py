@@ -194,6 +194,37 @@ def _assign_metric_fields(fields: List[str], values: List[str], into: Dict[str, 
         # Hugepages-Usage 等有意忽略，避免当成温度/功耗
 
 
+def _top_row_values_after_health(top_line: str) -> List[str]:
+    cells = _pipe_cells(top_line)
+    values: List[str] = []
+    for cell in cells[1:]:
+        values.extend(_group_value_tokens(cell))
+    if values and values[0].upper() in _HEALTH_TOKENS:
+        values = values[1:]
+    return values
+
+
+def _realign_power_temp_hugepages(top_line: str, card: Dict[str, Any]) -> None:
+    """按列顺序重读顶行：Power(W)、Temp(C)、可选 Hugepages-Usage(page)。
+
+    24.x 三列挤在同一格。Power=NA 时不能把后面的 Temp 当成功耗、把 Hugepages
+    页数当成温度（线上曾出现 power_w=71、temp_c=380）。
+    """
+    values = _top_row_values_after_health(top_line)
+    if not values:
+        return
+    if "/" in values[-1]:
+        values = values[:-1]
+    if not values:
+        return
+    if len(values) == 1:
+        card["power_w"] = None
+        card["temp_c"] = _to_float(values[0])
+        return
+    card["power_w"] = _to_float(values[0])
+    card["temp_c"] = _to_float(values[1])
+
+
 def _parse_device_pair(
     top_line: str,
     bottom_line: str,
@@ -242,6 +273,8 @@ def _parse_device_pair(
 
     if _is_mcu_name(str(card.get("name") or "")):
         return None
+
+    _realign_power_temp_hugepages(top_line, card)
 
     mem_used = card.get("mem_used_mb")
     mem_total = card.get("mem_total_mb")
@@ -359,12 +392,19 @@ def _apply_chip_mapping(
         return npus
     valid_ids = {c["npu_id"] for c in compute}
     names = {c["npu_id"]: c["name"] for c in compute}
+    chip_ids = {}
+    for chip in compute:
+        chip_ids.setdefault(chip["npu_id"], chip["chip_id"])
     filtered = [n for n in npus if n.get("index") in valid_ids]
     for card in filtered:
+        idx = card.get("index")
         if not card.get("name") or card.get("name") == "Ascend-NPU":
-            mapped = names.get(card.get("index"))
+            mapped = names.get(idx)
             if mapped:
                 card["name"] = mapped
+        # typed 查询必须打到计算芯片，不能用 MCU 的 Chip ID
+        if idx in chip_ids:
+            card["chip_id"] = chip_ids[idx]
     return filtered or npus
 
 
@@ -459,6 +499,18 @@ def _sanitize_parsed_metrics(npus: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return npus
 
 
+def _apply_typed_temp(card: Dict[str, Any], typed_temp: Optional[float]) -> None:
+    """用 `npu-smi info -t temp` 覆盖温度，并清掉 Power/Temp 对调残留。"""
+    if typed_temp is None or not _temp_valid(typed_temp):
+        return
+    table_temp = card.get("temp_c")
+    table_power = card.get("power_w")
+    # 线上错位：power_w=71（实为 Temp）、temp_c=380（实为 Hugepages）
+    if table_power is not None and table_power == typed_temp and table_temp != typed_temp:
+        card["power_w"] = None
+    card["temp_c"] = typed_temp
+
+
 def _enrich_with_typed_queries(
     npus: List[Dict[str, Any]], timeout: float = 8.0
 ) -> List[Dict[str, Any]]:
@@ -467,7 +519,10 @@ def _enrich_with_typed_queries(
         chip = int(card.get("chip_id") or 0)
         need_util = not _util_valid(card.get("util_percent"))
         need_mem = card.get("mem_percent") is None
-        need_temp = not _temp_valid(card.get("temp_c"))
+        # 温度始终走 -t temp：表头 Power/Temp/Hugepages 共格时最容易错位
+        temp_out = _run_typed_query("temp", idx, chip, timeout)
+        if temp_out:
+            _apply_typed_temp(card, _parse_temp_text(temp_out))
         if need_util or need_mem:
             out = _run_typed_query("usages", idx, chip, timeout)
             if out:
@@ -478,12 +533,6 @@ def _enrich_with_typed_queries(
                     card["mem_percent"] = parsed["mem_percent"]
                 if card.get("mem_total_mb") is None and parsed.get("mem_total_mb") is not None:
                     card["mem_total_mb"] = parsed["mem_total_mb"]
-        if need_temp:
-            out = _run_typed_query("temp", idx, chip, timeout)
-            if out:
-                temp_c = _parse_temp_text(out)
-                if temp_c is not None:
-                    card["temp_c"] = temp_c
     return npus
 
 
