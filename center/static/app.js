@@ -725,8 +725,8 @@
         '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / npu-smi / cnmon / rknpu）</p>';
     } else {
       html +=
-        '<table class="gpu-table"><thead><tr>' +
-        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存 实时/额定</th><th>温度</th><th>功耗 实时/额定</th>" +
+        '<div class="table-wrap"><table class="gpu-table"><thead><tr>' +
+        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存</th><th>温度</th><th>功耗</th>" +
         "</tr></thead><tbody>";
       const uw = thresholds.accel_util_warn_percent || thresholds.npu_util_warn_percent;
       const tw = thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c;
@@ -812,7 +812,7 @@
           powerText +
           "</td></tr>";
       });
-      html += "</tbody></table>";
+      html += "</tbody></table></div>";
     }
 
     el.detailBody.innerHTML = html;
