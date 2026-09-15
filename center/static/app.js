@@ -38,6 +38,11 @@
     filterStatus: document.getElementById("filterStatus"),
   };
 
+  function fmtPct(v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+    return Number(v).toFixed(1) + "%";
+  }
+
   function fmtMbps(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
     const n = Number(v);
