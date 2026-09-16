@@ -66,7 +66,7 @@
 ### 2.3 运行环境假设
 
 - 操作系统：Linux（主）/ macOS（开发验证）
-- Python：3.8+
+- Python：Agent **3.6+**；Center 3.8+
 - 网络：Agent 可访问中心端 HTTP 端口
 - GPU 主机：可选 NVIDIA 驱动与 `nvidia-smi`
 

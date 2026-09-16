@@ -1,6 +1,6 @@
 """主机类型归一化：仅 auto / cpu / gpu。"""
 
-from __future__ import annotations
+from typing import Optional
 
 # 历史值兼容
 _LEGACY = {
@@ -9,7 +9,7 @@ _LEGACY = {
 }
 
 
-def normalize_host_type(value: str | None) -> str:
+def normalize_host_type(value: Optional[str]) -> str:
     v = (value or "auto").strip().lower()
     v = _LEGACY.get(v, v)
     if v not in ("auto", "cpu", "gpu"):

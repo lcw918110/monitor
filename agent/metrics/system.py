@@ -6,8 +6,6 @@ CPU 采集：
 - 仍上报 `cpu_arch` / `os_name` / `cpu_model`，便于区分处理器架构与机型。
 """
 
-from __future__ import annotations
-
 import os
 import platform
 import subprocess
@@ -44,7 +42,7 @@ def _cpu_percent_macos(interval: float = 0.2) -> float:
     try:
         out = subprocess.check_output(
             ["top", "-l", "2", "-n", "0", "-s", str(delay)],
-            text=True,
+            universal_newlines=True,
             stderr=subprocess.DEVNULL,
             timeout=10,
         )
@@ -86,21 +84,26 @@ def sample_cpu_percent(interval: float = 0.2) -> float:
 
 def _memory_macos() -> Dict[str, float]:
     try:
-        total = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip())
+        total = int(
+            subprocess.check_output(
+                ["sysctl", "-n", "hw.memsize"], universal_newlines=True
+            ).strip()
+        )
     except (OSError, ValueError, subprocess.SubprocessError):
         return {"mem_total_mb": 0, "mem_used_mb": 0, "mem_percent": 0.0}
 
     page_size = 4096
     try:
         page_size = int(
-            subprocess.check_output(["pagesize"], text=True).strip() or "4096"
+            subprocess.check_output(["pagesize"], universal_newlines=True).strip()
+            or "4096"
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
 
     stats: Dict[str, int] = {}
     try:
-        out = subprocess.check_output(["vm_stat"], text=True)
+        out = subprocess.check_output(["vm_stat"], universal_newlines=True)
         for line in out.splitlines():
             if ":" not in line:
                 continue
@@ -206,7 +209,9 @@ def sample_uptime() -> int:
             pass
     # macOS 回退
     try:
-        out = subprocess.check_output(["sysctl", "-n", "kern.boottime"], text=True)
+        out = subprocess.check_output(
+            ["sysctl", "-n", "kern.boottime"], universal_newlines=True
+        )
         # { sec = 123, usec = 0 } ...
         if "sec =" in out:
             sec = int(out.split("sec =")[1].split(",")[0].strip())
@@ -267,7 +272,7 @@ def sample_cpu_identity() -> Dict[str, str]:
         try:
             model = subprocess.check_output(
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
-                text=True,
+                universal_newlines=True,
                 stderr=subprocess.DEVNULL,
                 timeout=2,
             ).strip()

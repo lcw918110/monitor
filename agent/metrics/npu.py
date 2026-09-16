@@ -1,7 +1,5 @@
 """昇腾 NPU 指标：解析 npu-smi info（无第三方库）。"""
 
-from __future__ import annotations
-
 import re
 import shutil
 import subprocess
@@ -38,7 +36,7 @@ def _run_npu_smi(args: List[str], timeout: float = 10.0) -> Optional[str]:
         return subprocess.check_output(
             ["npu-smi", *args],
             stderr=subprocess.STDOUT,
-            text=True,
+            universal_newlines=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):

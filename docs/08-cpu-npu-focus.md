@@ -64,6 +64,8 @@
 ### 客户端与网页部署
 
 - `deploy_agent.sh`：本机变量 `INSTALL_DIR`；非 root 默认 `~/monitor`  
+  - **Python**：先复用已有解释器（`PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`），要求 **≥ 3.6**；都没有且为 root 时再 apt/yum/dnf 安装 `python3`  
+  - `/usr/local/python3.x` 若 libpython 不在默认链接路径，自动设置 `LD_LIBRARY_PATH`  
 - SSH 在线部署：远端使用 `REMOTE_DIR`（勿再嵌套未赋值的 `INSTALL_DIR`）  
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  
 - 保留「测试连通/部署条件」（SSH + 目录可写），已去掉独立「探测勾选」按钮  

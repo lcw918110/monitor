@@ -6,7 +6,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CENTER_DIR="${MONITOR_CENTER_DIR:-$ROOT/.deploy-center}"
 AGENT_DIR="${MONITOR_AGENT_DIR:-$ROOT/.deploy-agent}"
 PORT="${MONITOR_PORT:-8080}"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+
+# shellcheck source=lib/resolve_python.sh
+. "$ROOT/scripts/lib/resolve_python.sh"
+MONITOR_INSTALL_PYTHON=0
+# 本地同时跑中心端，需要 Python 3.8+
+ensure_python 3 8 || exit 1
+log_python_choice
+apply_python_ld_library_path
+PYTHON_BIN="$PY"
 
 cd "$ROOT"
 mkdir -p "$CENTER_DIR/run" "$CENTER_DIR/data" "$AGENT_DIR/run" "$AGENT_DIR/config"
@@ -86,6 +94,17 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 
 DAEMON="$ROOT/scripts/daemonize_run.py"
+    DAEMON_LD=()
+    if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+      DAEMON_LD+=(--env "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}")
+    fi
+    "$PYTHON_BIN" "$DAEMON" \
+      --pidfile "$CENTER_DIR/run/center.pid" \
+      --logfile "$CENTER_DIR/run/center.log" \
+      --cwd "$CENTER_DIR" \
+      --env "PYTHONPATH=$CENTER_DIR" \
+      ${DAEMON_LD[@]+"${DAEMON_LD[@]}"} \
+      -- "$PYTHON_BIN" -m center --config "$CENTER_DIR/config/center.json"
 
 echo "==> 启动中心端（守护进程）"
 "$PYTHON_BIN" "$DAEMON" \
@@ -93,6 +112,7 @@ echo "==> 启动中心端（守护进程）"
   --logfile "$CENTER_DIR/run/center.log" \
   --cwd "$CENTER_DIR" \
   --env "PYTHONPATH=$CENTER_DIR" \
+  "${DAEMON_LD[@]}" \
   -- "$PYTHON_BIN" -m center --config "$CENTER_DIR/config/center.json"
 
 ok=0
@@ -115,6 +135,7 @@ echo "==> 启动本机 Agent（守护进程）"
   --logfile "$AGENT_DIR/run/agent.log" \
   --cwd "$AGENT_DIR" \
   --env "PYTHONPATH=$AGENT_DIR" \
+  "${DAEMON_LD[@]}" \
   -- "$PYTHON_BIN" -m agent --config "$AGENT_DIR/config/agent.json"
 
 sleep 1

@@ -4,8 +4,6 @@
 额定：sysfs `speed`（必要时 ethtool）给出的链路速率；利用率 = 实时/额定。
 """
 
-from __future__ import annotations
-
 import os
 import re
 import shutil
@@ -140,7 +138,7 @@ def _ethtool_speed(name: str) -> Optional[int]:
         out = subprocess.check_output(
             ["ethtool", name],
             stderr=subprocess.DEVNULL,
-            text=True,
+            universal_newlines=True,
             timeout=2,
         )
     except (OSError, subprocess.SubprocessError):

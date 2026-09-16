@@ -1,13 +1,11 @@
 """采集端主程序。"""
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
 import socket
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from agent.metrics.accelerators import (
     collect_accelerators,
@@ -53,7 +51,7 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     # cpu：只采系统指标；gpu / auto：采系统 + 各厂商加速卡
     if configured == "cpu":
-        cards: list = []
+        cards: List[Dict[str, Any]] = []
     else:
         cards = collect_accelerators()
 
@@ -122,7 +120,7 @@ def run_loop(cfg: Dict[str, Any]) -> None:
         time.sleep(max(1.0, interval - elapsed))
 
 
-def main(argv: Optional[list] = None) -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="简易多机监控 — 采集端")
     parser.add_argument(
         "--config",

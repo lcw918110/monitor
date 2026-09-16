@@ -7,6 +7,13 @@
 
 当前版本：**v1.4.0**
 
+运行环境：
+
+| 角色 | Python |
+| --- | --- |
+| **Agent（采集端）** | **3.6+**（部署时优先复用本机已有解释器，没有再用 apt/yum/dnf 安装） |
+| Center（中心端） | 3.8+ |
+
 ## 定位
 
 - **项目性质**：轻量、可本地一把梭部署的**基础资源监控**，适合实验室 / 小机房快速看一眼；不是企业级可观测平台
@@ -36,7 +43,7 @@ chmod +x scripts/*.sh
 | 中心 | `.deploy-center/` | `run/center.log`、`run/center.pid` |
 | Agent | `.deploy-agent/` | `run/agent.log`、`run/agent.pid` |
 
-可选环境变量：`MONITOR_PORT`（默认 8080）、`MONITOR_CENTER_DIR`、`MONITOR_AGENT_DIR`、`PYTHON_BIN`。
+可选环境变量：`MONITOR_PORT`（默认 8080）、`MONITOR_CENTER_DIR`、`MONITOR_AGENT_DIR`、`PYTHON_BIN`（需满足上表版本；Agent 单独部署时 3.6+ 即可）。
 
 ## 一键部署
 
@@ -77,7 +84,9 @@ chmod +x scripts/*.sh
 # 可选: --host-id gpu01 --token 'your-secret' --interval 15 --dir ~/monitor
 ```
 
-脚本会：同步文件 → 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。
+脚本会：解析 Python（先复用本机 `PYTHON_BIN` / `python3.x` / `/usr/local/python3.*`，均需 ≥3.6；都没有且为 root 时再 apt/yum/dnf 安装 python3）→ 同步文件 → 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。
+
+内网常见情况：只有 3.6、PATH 里的 `python3` 过旧但 `/usr/local/python3.12` 可用、或完全没有 python3——脚本按「先复用、再安装」处理。自定义前缀若缺 libpython，会自动加上 `LD_LIBRARY_PATH`。
 
 ### 3. 批量部署多台 Agent（需 SSH）
 
@@ -117,6 +126,8 @@ cp config/hosts.example.txt config/hosts.txt
 | `INSTALL_DIR: unbound variable` | 已修复：在线部署只用 `REMOTE_DIR`；请更新中心代码后重试 |
 | 清演示数据重来 | `./scripts/local_down.sh` 后删除 `.deploy-center/data/monitor.db*`（及 wal/shm），再 `local_up.sh`；不要跑 `demo_seed.py` |
 | 配置报错退出 | 看终端 `[配置错误]`；从 `config/*.example.json` 复制为 `center.json` / `agent.json` |
+| 部署报「未找到可用的 Python >= 3.6」 | 设置 `PYTHON_BIN` 指向本机解释器，或安装 `python3`；`/usr/local/python3.x` 会被自动探测 |
+| `error while loading shared libraries: libpython` | 已处理：使用 `/usr/local/python3.x` 时脚本会设置 `LD_LIBRARY_PATH`；请更新脚本后重装 Agent |
 | macOS 无加速卡工具 | 正常，卡数为 0；仍会上报 CPU/内存等 |
 
 自检命令：
@@ -171,5 +182,5 @@ tail -n 50 .deploy-agent/run/agent.log
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat
 ```

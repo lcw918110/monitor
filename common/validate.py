@@ -1,7 +1,5 @@
 """公共工具：配置校验。"""
 
-from __future__ import annotations
-
 from typing import Any, Dict, List, Tuple
 
 

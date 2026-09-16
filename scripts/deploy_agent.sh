@@ -31,6 +31,9 @@ usage() {
   --no-systemd        不安装 systemd
   --no-start          只安装不启动
   -h, --help          帮助
+
+环境变量:
+  PYTHON_BIN          优先使用的 Python 解释器（需 >= 3.6）
 EOF
 }
 
@@ -70,8 +73,13 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "[info] 非 root，跳过 systemd，将使用 nohup 后台启动"
 fi
 
-command -v python3 >/dev/null || { echo "需要 python3"; exit 1; }
-PY="$(command -v python3)"
+# 先复用本机已有 Python >= 3.6，没有再用 apt/yum/dnf 安装
+# shellcheck source=lib/resolve_python.sh
+. "$ROOT/scripts/lib/resolve_python.sh"
+MONITOR_INSTALL_PYTHON=1
+ensure_python 3 6 || exit 1
+log_python_choice
+apply_python_ld_library_path
 DETECT_HOST="$(hostname 2>/dev/null || echo agent-host)"
 HOST_ID="${HOST_ID:-$DETECT_HOST}"
 HOSTNAME_CFG="${HOSTNAME_CFG:-$DETECT_HOST}"
@@ -115,11 +123,16 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   echo "  [ok] 发现 nvidia-smi（将采集 GPU，可选）"
 fi
 
+LD_EXPORT=""
+if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+  LD_EXPORT="export LD_LIBRARY_PATH=\"${PY_LD_LIBRARY_PATH}\"\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
 cat > "$INSTALL_DIR/run/start_agent.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$INSTALL_DIR"
 export PYTHONPATH="$INSTALL_DIR"
+${LD_EXPORT}
 exec "$PY" -m agent --config "$CFG"
 EOF
 chmod +x "$INSTALL_DIR/run/start_agent.sh"
@@ -127,6 +140,10 @@ chmod +x "$INSTALL_DIR/run/start_agent.sh"
 UNIT_INSTALLED=0
 if [[ "$NO_SYSTEMD" -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
   UNIT=/etc/systemd/system/monitor-agent.service
+  LD_ENV_LINE=""
+  if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+    LD_ENV_LINE="Environment=LD_LIBRARY_PATH=${PY_LD_LIBRARY_PATH}"
+  fi
   cat > "$UNIT" <<EOF
 [Unit]
 Description=简易多机监控采集端
@@ -136,6 +153,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$INSTALL_DIR
 Environment=PYTHONPATH=$INSTALL_DIR
+${LD_ENV_LINE}
 ExecStart=$PY -m agent --config $CFG
 Restart=always
 RestartSec=5
@@ -170,11 +188,15 @@ if [[ "$START" -eq 1 ]]; then
         sleep 1
       fi
     fi
+    DAEMON_ENV=(--env "PYTHONPATH=$INSTALL_DIR")
+    if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+      DAEMON_ENV+=(--env "LD_LIBRARY_PATH=${PY_LD_LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+    fi
     "$PY" "$INSTALL_DIR/scripts/daemonize_run.py" \
       --pidfile "$INSTALL_DIR/run/agent.pid" \
       --logfile "$INSTALL_DIR/run/agent.log" \
       --cwd "$INSTALL_DIR" \
-      --env "PYTHONPATH=$INSTALL_DIR" \
+      "${DAEMON_ENV[@]}" \
       -- "$PY" -m agent --config "$CFG"
     echo "Agent PID=$(cat "$INSTALL_DIR/run/agent.pid" 2>/dev/null || echo '?') 日志: $INSTALL_DIR/run/agent.log"
   fi

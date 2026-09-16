@@ -55,7 +55,7 @@
 | 加速卡采集 | `agent/metrics/accelerators.py` | 多厂商加速卡 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
-| 脚本 | `scripts/*` | 安装、本地守护、批量部署 |
+| 脚本 | `scripts/*` | 安装、本地守护、批量部署；`scripts/lib/resolve_python.sh` 复用本机 Python |
 
 ---
 
