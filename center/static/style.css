@@ -294,7 +294,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .kv {
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 132px 1fr;
   gap: 8px 12px;
   margin-bottom: 18px;
   font-size: 13px;
@@ -302,6 +302,20 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .kv .k { color: var(--muted); }
 .kv .v { font-family: var(--mono); }
+
+.rt-tag {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font);
+}
+
+.iface-list {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+}
 
 .section-title {
   margin: 8px 0 10px;
@@ -483,11 +497,20 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 .gpu-table, .proc-table {
   width: 100%;
   font-size: 12px;
+  table-layout: fixed;
 }
 
 .gpu-table th, .gpu-table td,
 .proc-table th, .proc-table td {
-  padding: 8px 8px;
+  padding: 8px 6px;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  vertical-align: top;
+}
+
+.detail-body .table-wrap {
+  overflow-x: auto;
 }
 
 .bar {

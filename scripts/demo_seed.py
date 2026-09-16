@@ -125,6 +125,7 @@ def main() -> None:
                     "net_rx_mbps": round(8 + (i % 5) * 12.5, 2),
                     "net_tx_mbps": round(2 + (i % 3) * 4.2, 2),
                     "net_rated_mbps": 1000,
+                    "net_link_mbps": 1000,
                     "net_rx_percent": round((8 + (i % 5) * 12.5) / 10.0, 2),
                     "net_tx_percent": round((2 + (i % 3) * 4.2) / 10.0, 2),
                 },

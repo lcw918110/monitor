@@ -203,9 +203,13 @@ class Storage:
             "system": {
                 "cpu_percent": system.get("cpu_percent"),
                 "cpu_count": system.get("cpu_count"),
+                "cpu_freq_mhz": system.get("cpu_freq_mhz"),
+                "cpu_freq_max_mhz": system.get("cpu_freq_max_mhz"),
                 "mem_percent": system.get("mem_percent"),
+                "mem_used_mb": system.get("mem_used_mb"),
                 "mem_total_mb": system.get("mem_total_mb"),
                 "disk_percent": system.get("disk_percent"),
+                "disk_used_gb": system.get("disk_used_gb"),
                 "disk_total_gb": system.get("disk_total_gb"),
                 "load1": system.get("load1"),
                 "load5": system.get("load5"),
@@ -213,6 +217,7 @@ class Storage:
                 "net_rx_mbps": system.get("net_rx_mbps"),
                 "net_tx_mbps": system.get("net_tx_mbps"),
                 "net_rated_mbps": rated,
+                "net_link_mbps": system.get("net_link_mbps"),
                 "net_rx_percent": rx_pct,
                 "net_tx_percent": tx_pct,
             },
@@ -222,6 +227,9 @@ class Storage:
                     "util_percent": n.get("util_percent"),
                     "temp_c": n.get("temp_c"),
                     "mem_percent": n.get("mem_percent"),
+                    "mem_used_mb": n.get("mem_used_mb"),
+                    "mem_total_mb": n.get("mem_total_mb"),
+                    "power_w": n.get("power_w"),
                     "health": n.get("health"),
                 }
                 for n in npus
@@ -231,6 +239,11 @@ class Storage:
                     "index": g.get("index"),
                     "util_percent": g.get("util_percent"),
                     "temp_c": g.get("temp_c"),
+                    "mem_percent": g.get("mem_percent"),
+                    "mem_used_mb": g.get("mem_used_mb"),
+                    "mem_total_mb": g.get("mem_total_mb"),
+                    "power_w": g.get("power_w"),
+                    "power_limit_w": g.get("power_limit_w"),
                 }
                 for g in gpus
             ],
@@ -265,6 +278,9 @@ class Storage:
             "mem_percent": system.get("mem_percent"),
             "disk_percent": system.get("disk_percent"),
             "load1": system.get("load1"),
+            "net_rx_mbps": system.get("net_rx_mbps"),
+            "net_tx_mbps": system.get("net_tx_mbps"),
+            "net_rated_mbps": system.get("net_rated_mbps"),
             "npu_count": len(npus),
             "npu_util_avg": round(sum(npu_utils) / len(npu_utils), 2) if npu_utils else None,
             "gpu_count": len(gpus),

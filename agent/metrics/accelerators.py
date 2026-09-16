@@ -228,12 +228,13 @@ def parse_rknpu_load(text: str) -> Dict[str, Any]:
     return {"util_percent": util, "cores": cores, "core_count": len(cores)}
 
 
-def _rknn_freq_hz() -> Optional[float]:
+def _rknn_freq_hz(kind: str = "cur") -> Optional[float]:
+    fname = "max_freq" if kind == "max" else "cur_freq"
     txt = _read_first(
         [
-            "/sys/class/devfreq/fdab0000.npu/cur_freq",
-            "/sys/devices/platform/fde40000.npu/devfreq/fde40000.npu/cur_freq",
-            "/sys/class/devfreq/fde40000.npu/cur_freq",
+            "/sys/class/devfreq/fdab0000.npu/%s" % fname,
+            "/sys/devices/platform/fde40000.npu/devfreq/fde40000.npu/%s" % fname,
+            "/sys/class/devfreq/fde40000.npu/%s" % fname,
         ]
     )
     return _num(txt) if txt else None
@@ -310,7 +311,8 @@ def _from_rockchip_rknn() -> List[Dict[str, Any]]:
         ]
     )
     parsed = parse_rknpu_load(load_txt or "")
-    freq_hz = _rknn_freq_hz()
+    freq_hz = _rknn_freq_hz("cur")
+    freq_max_hz = _rknn_freq_hz("max")
     name = "Rockchip RKNN NPU"
     if version:
         name = "Rockchip RKNN (%s)" % version.splitlines()[0].strip()[:48]
@@ -331,6 +333,8 @@ def _from_rockchip_rknn() -> List[Dict[str, Any]]:
         "temp_c": _rknn_temp_c(),
         "freq_hz": freq_hz,
         "freq_mhz": round(freq_hz / 1e6, 1) if freq_hz else None,
+        "freq_max_hz": freq_max_hz,
+        "freq_max_mhz": round(freq_max_hz / 1e6, 1) if freq_max_hz else None,
         "health": "OK",
         "power_w": None,
         "driver": "rknpu",
