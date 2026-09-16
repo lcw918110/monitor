@@ -294,7 +294,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .kv {
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 132px 1fr;
   gap: 8px 12px;
   margin-bottom: 18px;
   font-size: 13px;
@@ -302,6 +302,20 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .kv .k { color: var(--muted); }
 .kv .v { font-family: var(--mono); }
+
+.rt-tag {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font);
+}
+
+.iface-list {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+}
 
 .section-title {
   margin: 8px 0 10px;
@@ -361,8 +375,101 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   font-weight: 500;
 }
 
-.period-stats-table td:not(:first-child) {
+.period-util-wrap {
+  padding: 8px 28px 0;
+}
+
+.period-util-panel {
+  min-height: 0;
+}
+
+.period-util-panel .panel-head {
+  padding: 10px 16px;
+}
+
+.period-util-controls {
+  justify-content: flex-end;
+}
+
+.period-util-controls input[type="datetime-local"],
+.period-util-controls input[type="number"] {
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.period-util-controls input[type="datetime-local"] {
+  min-width: 170px;
+}
+
+.period-util-controls input[type="number"] {
+  width: 64px;
+}
+
+.period-custom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.period-util-body {
+  padding: 8px 16px 12px;
+  max-height: min(360px, 38vh);
+  overflow: auto;
+}
+
+.period-util-body .section-title {
+  margin: 4px 0 6px;
+}
+
+.period-util-body .period-stats-table {
+  margin-bottom: 8px;
+}
+
+.period-util-body .period-stats-table th,
+.period-util-body .period-stats-table td {
+  padding: 5px 8px;
+}
+
+.period-util-body .table-wrap {
+  max-height: none;
+}
+
+.period-cluster-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.period-hosts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.period-hosts-table th,
+.period-hosts-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.period-hosts-table td:not(:first-child) {
   font-family: var(--mono);
+}
+
+.period-stats-table tbody tr {
+  cursor: default;
+}
+
+.period-stats-table th:not(:first-child),
+.period-stats-table td:not(:first-child) {
+  text-align: right;
 }
 
 .charts {
@@ -390,11 +497,20 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 .gpu-table, .proc-table {
   width: 100%;
   font-size: 12px;
+  table-layout: fixed;
 }
 
 .gpu-table th, .gpu-table td,
 .proc-table th, .proc-table td {
-  padding: 8px 8px;
+  padding: 8px 6px;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  vertical-align: top;
+}
+
+.detail-body .table-wrap {
+  overflow-x: auto;
 }
 
 .bar {
@@ -528,9 +644,14 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   .stats { grid-template-columns: repeat(3, 1fr); }
   .layout { grid-template-columns: 1fr; }
   .charts { grid-template-columns: 1fr; }
+  .period-util-body { max-height: min(280px, 34vh); }
 }
 
 @media (max-width: 640px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .top { flex-direction: column; align-items: flex-start; }
+}
+
+@media (max-height: 800px) {
+  .period-util-body { max-height: min(240px, 30vh); }
 }

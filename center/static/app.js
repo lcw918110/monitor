@@ -2,8 +2,13 @@
   const REFRESH_MS = 15000;
   let selectedId = null;
   let allHosts = [];
-  /** 主机详情时间段（分钟） */
+  /** 时段利用时间窗（与详情统计共用） */
   let detailMinutes = 120;
+  let periodMode = "preset"; // preset | custom
+  let periodFromTs = null;
+  let periodToTs = null;
+  let busyCpu = 80;
+  let busyAccel = 80;
   const PERIOD_OPTIONS = [
     { minutes: 60, label: "1 小时" },
     { minutes: 120, label: "2 小时" },
@@ -36,11 +41,35 @@
     filterQ: document.getElementById("filterQ"),
     filterType: document.getElementById("filterType"),
     filterStatus: document.getElementById("filterStatus"),
+    periodUtilControls: document.getElementById("periodUtilControls"),
+    periodUtilBody: document.getElementById("periodUtilBody"),
   };
 
   function fmtPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
     return Number(v).toFixed(1) + "%";
+  }
+
+  function fmtMbps(v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+    const n = Number(v);
+    if (Math.abs(n) >= 100) return n.toFixed(0);
+    if (Math.abs(n) >= 10) return n.toFixed(1);
+    return n.toFixed(2);
+  }
+
+  function fmtNum(v, digits) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+    return Number(v).toFixed(digits == null ? 1 : digits);
+  }
+
+  function rtRated(realtimeText, ratedText) {
+    return (
+      '<span class="rt-tag">实时</span> ' +
+      realtimeText +
+      ' <span class="rt-tag">额定</span> ' +
+      ratedText
+    );
   }
 
   function fmtTime(ts) {
@@ -177,9 +206,59 @@
     );
   }
 
+  function periodQuery(extra) {
+    const params = [];
+    if (periodMode === "custom" && periodFromTs && periodToTs) {
+      params.push("from_ts=" + periodFromTs);
+      params.push("to_ts=" + periodToTs);
+    } else {
+      params.push("minutes=" + detailMinutes);
+    }
+    params.push("busy_cpu=" + encodeURIComponent(busyCpu));
+    params.push("busy_accel=" + encodeURIComponent(busyAccel));
+    if (extra) params.push(extra);
+    return params.join("&");
+  }
+
+  function toDatetimeLocal(ts) {
+    if (!ts) return "";
+    const d = new Date(Number(ts) * 1000);
+    const p = (n) => String(n).padStart(2, "0");
+    return (
+      d.getFullYear() +
+      "-" +
+      p(d.getMonth() + 1) +
+      "-" +
+      p(d.getDate()) +
+      "T" +
+      p(d.getHours()) +
+      ":" +
+      p(d.getMinutes())
+    );
+  }
+
+  function fromDatetimeLocal(value) {
+    if (!value) return null;
+    const ms = new Date(value).getTime();
+    if (Number.isNaN(ms)) return null;
+    return Math.floor(ms / 1000);
+  }
+
+  function fmtBusy(v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+    return (Number(v) * 100).toFixed(0) + "%";
+  }
+
   function periodLabel(minutes) {
     const hit = PERIOD_OPTIONS.find((x) => x.minutes === minutes);
     return hit ? hit.label : minutes + " 分钟";
+  }
+
+  function currentWindowLabel(stats) {
+    if (periodMode === "custom" && periodFromTs && periodToTs) {
+      return "自定义 " + fmtTime(periodFromTs) + " ~ " + fmtTime(periodToTs);
+    }
+    return periodLabel(detailMinutes);
   }
 
   function fmtStatNum(v, suffix) {
@@ -189,62 +268,173 @@
     return text + (suffix || "");
   }
 
+  function renderPeriodButtons() {
+    return PERIOD_OPTIONS.map((opt) => {
+      const active =
+        periodMode === "preset" && opt.minutes === detailMinutes ? " active" : "";
+      return (
+        '<button type="button" class="period-btn' +
+        active +
+        '" data-minutes="' +
+        opt.minutes +
+        '">' +
+        opt.label +
+        "</button>"
+      );
+    }).join("");
+  }
+
   function renderPeriodPicker() {
     return (
       '<div class="period-bar">' +
-      '<span class="muted">统计时间段</span>' +
-      PERIOD_OPTIONS.map((opt) => {
-        const active = opt.minutes === detailMinutes ? " active" : "";
-        return (
-          '<button type="button" class="period-btn' +
-          active +
-          '" data-minutes="' +
-          opt.minutes +
-          '">' +
-          opt.label +
-          "</button>"
-        );
-      }).join("") +
+      '<span class="muted">统计时间段（与上方「时段利用」相同）</span>' +
+      renderPeriodButtons() +
       "</div>"
     );
   }
 
+  function renderPeriodControls() {
+    if (!el.periodUtilControls) return;
+    const fromVal = toDatetimeLocal(
+      periodFromTs || Math.floor(Date.now() / 1000) - detailMinutes * 60
+    );
+    const toVal = toDatetimeLocal(periodToTs || Math.floor(Date.now() / 1000));
+    el.periodUtilControls.innerHTML =
+      renderPeriodButtons() +
+      '<span class="period-custom">' +
+      '<span class="muted">自定义</span>' +
+      '<input id="periodFrom" type="datetime-local" value="' +
+      fromVal +
+      '" />' +
+      '<span class="muted">至</span>' +
+      '<input id="periodTo" type="datetime-local" value="' +
+      toVal +
+      '" />' +
+      '<button type="button" class="period-btn" id="btnPeriodCustom">应用</button>' +
+      "</span>" +
+      '<span class="muted">繁忙阈值</span>' +
+      '<label class="muted">CPU <input id="busyCpu" type="number" min="0" max="100" step="1" value="' +
+      busyCpu +
+      '" /></label>' +
+      '<label class="muted">加速卡 <input id="busyAccel" type="number" min="0" max="100" step="1" value="' +
+      busyAccel +
+      '" /></label>' +
+      '<a class="link" id="periodExport" href="/api/v1/export/period-stats.csv?' +
+      periodQuery() +
+      '">导出 CSV</a>';
+    bindPeriodControls();
+  }
+
+  function bindPeriodControls() {
+    Array.from(el.periodUtilControls.querySelectorAll(".period-btn[data-minutes]")).forEach(
+      (btn) => {
+        btn.addEventListener("click", () => {
+          const m = Number(btn.getAttribute("data-minutes"));
+          if (!m) return;
+          periodMode = "preset";
+          detailMinutes = m;
+          periodFromTs = null;
+          periodToTs = null;
+          renderPeriodControls();
+          loadPeriodUtil();
+          if (selectedId) loadDetail(selectedId);
+        });
+      }
+    );
+    const apply = document.getElementById("btnPeriodCustom");
+    if (apply) {
+      apply.addEventListener("click", applyCustomPeriod);
+    }
+    ["periodFrom", "periodTo"].forEach((id) => {
+      const input = document.getElementById(id);
+      if (input) {
+        input.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") applyCustomPeriod();
+        });
+      }
+    });
+    const cpuInput = document.getElementById("busyCpu");
+    const accelInput = document.getElementById("busyAccel");
+    function applyBusy() {
+      const c = Number(cpuInput && cpuInput.value);
+      const a = Number(accelInput && accelInput.value);
+      if (!Number.isNaN(c) && c >= 0) busyCpu = c;
+      if (!Number.isNaN(a) && a >= 0) busyAccel = a;
+      updatePeriodExportLink();
+      loadPeriodUtil();
+      if (selectedId) loadDetail(selectedId);
+    }
+    if (cpuInput) cpuInput.addEventListener("change", applyBusy);
+    if (accelInput) accelInput.addEventListener("change", applyBusy);
+  }
+
+  function applyCustomPeriod() {
+    const fromEl = document.getElementById("periodFrom");
+    const toEl = document.getElementById("periodTo");
+    const fromTs = fromDatetimeLocal(fromEl && fromEl.value);
+    const toTs = fromDatetimeLocal(toEl && toEl.value);
+    if (!fromTs || !toTs || fromTs >= toTs) {
+      el.periodUtilBody.innerHTML =
+        '<p class="muted">自定义时间范围无效：开始时间必须早于结束时间</p>';
+      return;
+    }
+    periodMode = "custom";
+    periodFromTs = fromTs;
+    periodToTs = toTs;
+    renderPeriodControls();
+    loadPeriodUtil();
+    if (selectedId) loadDetail(selectedId);
+  }
+
+  const PERIOD_METRIC_ROWS = [
+    ["CPU 利用率", "cpu_percent", "%"],
+    ["内存利用率", "mem_percent", "%"],
+    ["磁盘利用率", "disk_percent", "%"],
+    ["负载 load1", "load1", ""],
+    ["加速卡利用率", "accel_util_avg", "%"],
+    ["加速卡最高温度", "accel_temp_max", "°C"],
+    ["网络入向", "net_rx_mbps", " Mbps"],
+    ["网络出向", "net_tx_mbps", " Mbps"],
+    ["入向占额定", "net_rx_percent", "%"],
+    ["出向占额定", "net_tx_percent", "%"],
+    ["额定带宽", "net_rated_mbps", " Mbps"],
+  ];
+
   function renderPeriodStatsTable(stats) {
     const metrics = (stats && stats.metrics) || {};
-    const rows = [
-      ["CPU 利用率", metrics.cpu_percent, "%"],
-      ["内存利用率", metrics.mem_percent, "%"],
-      ["磁盘利用率", metrics.disk_percent, "%"],
-      ["负载 load1", metrics.load1, ""],
-      ["加速卡利用率", metrics.accel_util_avg, "%"],
-      ["加速卡最高温度", metrics.accel_temp_max, "°C"],
-      ["网络入向", metrics.net_rx_mbps, " Mbps"],
-      ["网络出向", metrics.net_tx_mbps, " Mbps"],
-    ];
     const count = (stats && stats.sample_count) || 0;
+    const win = (stats && stats.window) || {};
     let meta =
       '<p class="muted period-meta">样本 ' +
       count +
       " 点 · " +
-      periodLabel(detailMinutes);
+      currentWindowLabel(stats);
     if (stats && stats.from_ts && stats.to_ts) {
+      meta += " · 实际覆盖 " + fmtTime(stats.from_ts) + " ~ " + fmtTime(stats.to_ts);
+    }
+    if (win.clamped) {
+      meta += " · 已按保留期裁剪";
+    }
+    const busy = (stats && stats.busy_thresholds) || {};
+    if (busy.cpu_percent != null || busy.accel_util_avg != null) {
       meta +=
-        " · " + fmtTime(stats.from_ts) + " ~ " + fmtTime(stats.to_ts);
+        " · 繁忙：CPU≥" +
+        (busy.cpu_percent != null ? busy.cpu_percent : "-") +
+        "% / 加速卡≥" +
+        (busy.accel_util_avg != null ? busy.accel_util_avg : "-") +
+        "%";
     }
     meta += "</p>";
     if (!count) {
-      return (
-        meta +
-        '<p class="muted">该时间段暂无历史上报，无法统计</p>'
-      );
+      return meta + '<p class="muted">该时间段暂无历史上报，无法统计</p>';
     }
     let html =
       meta +
       '<table class="period-stats-table"><thead><tr>' +
-      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th>" +
+      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th><th>P95</th><th>繁忙占比</th>" +
       "</tr></thead><tbody>";
-    rows.forEach(([label, agg, suffix]) => {
-      const a = agg || {};
+    PERIOD_METRIC_ROWS.forEach(([label, key, suffix]) => {
+      const a = metrics[key] || {};
       html +=
         "<tr><td>" +
         label +
@@ -254,6 +444,10 @@
         fmtStatNum(a.min, suffix) +
         "</td><td>" +
         fmtStatNum(a.max, suffix) +
+        "</td><td>" +
+        fmtStatNum(a.p95, suffix) +
+        "</td><td>" +
+        fmtBusy(a.busy_ratio) +
         "</td></tr>";
     });
     html += "</tbody></table>";
@@ -264,11 +458,134 @@
     Array.from(el.detailBody.querySelectorAll(".period-btn")).forEach((btn) => {
       btn.addEventListener("click", () => {
         const m = Number(btn.getAttribute("data-minutes"));
-        if (!m || m === detailMinutes) return;
+        if (!m) return;
+        periodMode = "preset";
         detailMinutes = m;
+        periodFromTs = null;
+        periodToTs = null;
+        renderPeriodControls();
         loadDetail(hostId);
+        loadPeriodUtil();
       });
     });
+  }
+
+  function updatePeriodExportLink() {
+    const link = document.getElementById("periodExport");
+    if (link) link.setAttribute("href", "/api/v1/export/period-stats.csv?" + periodQuery());
+  }
+
+  function renderPeriodUtil(data) {
+    if (!el.periodUtilBody) return;
+    updatePeriodExportLink();
+    if (!data || data.ok === false) {
+      el.periodUtilBody.innerHTML =
+        '<p class="muted">' +
+        escapeHtml((data && data.error) || "时段统计加载失败") +
+        "</p>";
+      return;
+    }
+    const cluster = data.cluster || {};
+    const hosts = data.hosts || [];
+    let html = "";
+    html +=
+      '<p class="muted period-cluster-note">' +
+      escapeHtml(data.rollup_note || "集群汇总按样本加权") +
+      " · 主机 " +
+      (data.hosts_with_samples || 0) +
+      "/" +
+      (data.host_count || 0) +
+      " 有样本 · 共 " +
+      (data.sample_count || 0) +
+      " 点</p>";
+    html += '<div class="section-title">集群汇总</div>';
+    html += renderPeriodStatsTable({
+      metrics: cluster.metrics,
+      sample_count: cluster.sample_count || data.sample_count,
+      from_ts: data.window && data.window.from_ts,
+      to_ts: data.window && data.window.to_ts,
+      window: data.window,
+      busy_thresholds: data.busy_thresholds,
+    });
+    html += '<div class="section-title">各主机</div>';
+    if (!hosts.length) {
+      html += '<p class="muted">暂无主机</p>';
+      el.periodUtilBody.innerHTML = html;
+      return;
+    }
+    html +=
+      '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
+      "<th>主机</th><th>样本</th><th>CPU 均</th><th>CPU P95</th><th>CPU 繁忙</th>" +
+      "<th>内存均</th><th>磁盘均</th><th>加速卡均</th><th>加速卡 P95</th><th>加速卡繁忙</th>" +
+      "<th>入向占额定</th><th>出向占额定</th>" +
+      "</tr></thead><tbody>";
+    hosts.forEach((h) => {
+      const m = h.metrics || {};
+      const cpu = m.cpu_percent || {};
+      const mem = m.mem_percent || {};
+      const disk = m.disk_percent || {};
+      const accel = m.accel_util_avg || {};
+      const rxp = m.net_rx_percent || {};
+      const txp = m.net_tx_percent || {};
+      const active = h.host_id === selectedId ? " active" : "";
+      html +=
+        '<tr data-id="' +
+        encodeURIComponent(h.host_id) +
+        '" class="' +
+        active.trim() +
+        '"><td>' +
+        escapeHtml(h.hostname || h.host_id) +
+        '<div class="muted">' +
+        escapeHtml(h.host_id) +
+        "</div></td><td>" +
+        (h.sample_count || 0) +
+        "</td><td>" +
+        fmtStatNum(cpu.avg, "%") +
+        "</td><td>" +
+        fmtStatNum(cpu.p95, "%") +
+        "</td><td>" +
+        fmtBusy(cpu.busy_ratio) +
+        "</td><td>" +
+        fmtStatNum(mem.avg, "%") +
+        "</td><td>" +
+        fmtStatNum(disk.avg, "%") +
+        "</td><td>" +
+        fmtStatNum(accel.avg, "%") +
+        "</td><td>" +
+        fmtStatNum(accel.p95, "%") +
+        "</td><td>" +
+        fmtBusy(accel.busy_ratio) +
+        "</td><td>" +
+        fmtStatNum(rxp.avg, "%") +
+        "</td><td>" +
+        fmtStatNum(txp.avg, "%") +
+        "</td></tr>";
+    });
+    html += "</tbody></table></div>";
+    el.periodUtilBody.innerHTML = html;
+    Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((tr) => {
+      tr.addEventListener("click", () => {
+        selectedId = decodeURIComponent(tr.getAttribute("data-id"));
+        loadDetail(selectedId);
+        renderHosts(allHosts);
+        Array.from(el.periodUtilBody.querySelectorAll("tr")).forEach((r) =>
+          r.classList.remove("active")
+        );
+        tr.classList.add("active");
+      });
+    });
+  }
+
+  async function loadPeriodUtil() {
+    if (!el.periodUtilBody) return;
+    try {
+      const res = await fetch("/api/v1/period-stats?" + periodQuery());
+      const data = await res.json();
+      renderPeriodUtil(data);
+    } catch (e) {
+      el.periodUtilBody.innerHTML =
+        '<p class="muted">时段统计加载失败：' + escapeHtml(e.message) + "</p>";
+    }
   }
 
   function renderAnomalySummary(data) {
@@ -382,7 +699,9 @@
           "</td>" +
           "<td>" +
           metricSpan(
-            fmtPct(h.cpu_percent) + (h.cpu_count ? " / " + h.cpu_count + "核" : ""),
+            "实时 " +
+              fmtPct(h.cpu_percent) +
+              (h.cpu_count ? " / 额定 " + h.cpu_count + "核" : ""),
             cpuLevel
           ) +
           "</td>" +
@@ -434,9 +753,13 @@
 
     let hist = { points: [] };
     let periodStats = null;
+    let histMinutes = detailMinutes;
+    if (periodMode === "custom" && periodFromTs && periodToTs) {
+      histMinutes = Math.max(1, Math.ceil((periodToTs - periodFromTs) / 60));
+    }
     const histLimit = Math.min(
       2000,
-      Math.max(240, Math.ceil(detailMinutes / 2))
+      Math.max(240, Math.ceil(histMinutes / 2))
     );
     try {
       const base =
@@ -444,12 +767,10 @@
       const [hr, sr] = await Promise.all([
         fetch(
           base +
-            "/history?minutes=" +
-            detailMinutes +
-            "&limit=" +
-            histLimit
+            "/history?" +
+            periodQuery("limit=" + histLimit)
         ),
-        fetch(base + "/period-stats?minutes=" + detailMinutes),
+        fetch(base + "/period-stats?" + periodQuery()),
       ]);
       if (hr.ok) hist = await hr.json();
       if (sr.ok) periodStats = await sr.json();
@@ -490,13 +811,13 @@
       html += '<p class="muted">当前指标未见异常</p>';
     }
 
-    html += '<div class="section-title">时间段统计</div>';
+    html += '<div class="section-title">时段利用</div>';
     html += renderPeriodPicker();
     html += renderPeriodStatsTable(periodStats);
 
     html +=
-      '<div class="section-title">近 ' +
-      periodLabel(detailMinutes) +
+      '<div class="section-title">' +
+      currentWindowLabel(periodStats) +
       " 趋势</div>";
     html += '<div class="charts">';
     html +=
@@ -521,25 +842,48 @@
       ) +
       "</div>";
     html +=
-      '<div class="chart-card"><div class="title">内存 %</div>' +
+      '<div class="chart-card"><div class="title">内存 %（实时/总量）</div>' +
       sparkline(
         pts.map((x) => x.mem_percent),
         "#46c2b0"
       ) +
       "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络入向 Mbps（实时）</div>' +
+      sparkline(
+        pts.map((x) => x.net_rx_mbps),
+        "#7ec8e3"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络出向 Mbps（实时）</div>' +
+      sparkline(
+        pts.map((x) => x.net_tx_mbps),
+        "#e3c07e"
+      ) +
+      "</div>";
     html += "</div>";
 
-    html += '<div class="section-title">CPU / 基础资源</div>';
+    html += '<div class="section-title">CPU / 基础资源（实时用量 + 额定/总量）</div>';
     html += '<div class="kv">';
+    const cpuFreqRt =
+      sys.cpu_freq_mhz != null
+        ? " · " + fmtNum(sys.cpu_freq_mhz, 0) + " MHz"
+        : "";
+    const cpuFreqRated =
+      sys.cpu_freq_max_mhz != null
+        ? " · " + fmtNum(sys.cpu_freq_max_mhz, 0) + " MHz"
+        : "";
     html +=
       '<div class="k">CPU</div><div class="v">' +
-      metricPct(sys.cpu_percent, thresholds.cpu_warn_percent, thresholds.cpu_critical_percent) +
-      " · " +
-      (sys.cpu_count ?? "-") +
-      " 核 · " +
-      escapeHtml(sys.cpu_arch || "-") +
-      " · " +
-      escapeHtml(sys.os_name || "-") +
+      rtRated(
+        metricPct(
+          sys.cpu_percent,
+          thresholds.cpu_warn_percent,
+          thresholds.cpu_critical_percent
+        ) + cpuFreqRt,
+        (sys.cpu_count ?? "-") + " 核" + cpuFreqRated
+      ) +
       " " +
       bar(sys.cpu_percent) +
       "</div>";
@@ -550,25 +894,115 @@
         "</div>";
     }
     html +=
-      '<div class="k">负载</div><div class="v">1m=' +
+      '<div class="k">架构 / 系统</div><div class="v">' +
+      escapeHtml(sys.cpu_arch || "-") +
+      " · " +
+      escapeHtml(sys.os_name || "-") +
+      "</div>";
+    let loadRated = "";
+    if (sys.cpu_count) {
+      const l1 = Number(sys.load1);
+      if (!Number.isNaN(l1)) {
+        loadRated =
+          " （相对额定 " +
+          sys.cpu_count +
+          " 核约 " +
+          fmtPct((l1 / Number(sys.cpu_count)) * 100) +
+          "）";
+      } else {
+        loadRated = " （额定 " + sys.cpu_count + " 核）";
+      }
+    }
+    html +=
+      '<div class="k">负载</div><div class="v">' +
+      '<span class="rt-tag">实时</span> 1m=' +
       (sys.load1 ?? "-") +
       " · 5m=" +
       (sys.load5 ?? "-") +
       " · 15m=" +
       (sys.load15 ?? "-") +
+      loadRated +
       "</div>";
     html +=
       '<div class="k">内存</div><div class="v">' +
-      metricPct(sys.mem_percent, thresholds.mem_warn_percent, thresholds.mem_critical_percent) +
-      " (" +
-      (sys.mem_used_mb ?? "-") +
-      " / " +
-      (sys.mem_total_mb ?? "-") +
-      " MB)</div>";
+      rtRated(
+        fmtNum(sys.mem_used_mb, 1) + " MB",
+        fmtNum(sys.mem_total_mb, 1) + " MB"
+      ) +
+      " " +
+      metricPct(
+        sys.mem_percent,
+        thresholds.mem_warn_percent,
+        thresholds.mem_critical_percent
+      ) +
+      " " +
+      bar(sys.mem_percent) +
+      "</div>";
     html +=
       '<div class="k">磁盘</div><div class="v">' +
-      metricPct(sys.disk_percent, thresholds.disk_warn_percent, thresholds.disk_critical_percent) +
+      rtRated(
+        fmtNum(sys.disk_used_gb, 2) + " GB",
+        fmtNum(sys.disk_total_gb, 2) + " GB"
+      ) +
+      " " +
+      metricPct(
+        sys.disk_percent,
+        thresholds.disk_warn_percent,
+        thresholds.disk_critical_percent
+      ) +
+      " " +
+      bar(sys.disk_percent) +
       "</div>";
+    const netUtil = Math.max(
+      Number(sys.net_rx_percent) || 0,
+      Number(sys.net_tx_percent) || 0
+    );
+    let netRated = sys.net_rated_mbps != null ? fmtMbps(sys.net_rated_mbps) + " Mbps" : "-";
+    if (
+      sys.net_link_mbps != null &&
+      sys.net_rated_mbps != null &&
+      Number(sys.net_link_mbps) !== Number(sys.net_rated_mbps)
+    ) {
+      netRated += "（主链路 " + fmtMbps(sys.net_link_mbps) + " Mbps）";
+    }
+    html +=
+      '<div class="k">网络</div><div class="v">' +
+      rtRated(
+        "入 " +
+          fmtMbps(sys.net_rx_mbps) +
+          " / 出 " +
+          fmtMbps(sys.net_tx_mbps) +
+          " Mbps",
+        netRated
+      );
+    if (sys.net_rx_percent != null || sys.net_tx_percent != null) {
+      html +=
+        " 利用率 入 " +
+        fmtPct(sys.net_rx_percent) +
+        " · 出 " +
+        fmtPct(sys.net_tx_percent);
+    }
+    html += " " + bar(netUtil);
+    const ifaces = sys.net_ifaces || [];
+    if (ifaces.length) {
+      html +=
+        '<div class="iface-list">' +
+        ifaces
+          .map((n) => {
+            const spd =
+              n.speed_mbps != null ? fmtMbps(n.speed_mbps) + " Mbps" : "速率未知";
+            return (
+              escapeHtml(n.name || "?") +
+              " " +
+              (n.up ? "UP" : "DOWN") +
+              " " +
+              spd
+            );
+          })
+          .join(" · ") +
+        "</div>";
+    }
+    html += "</div>";
     html +=
       '<div class="k">运行时长</div><div class="v">' +
       fmtUptime(sys.uptime_sec) +
@@ -585,7 +1019,7 @@
         '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / npu-smi / cnmon / rknpu）</p>';
     } else {
       html +=
-        '<table class="gpu-table"><thead><tr>' +
+        '<div class="table-wrap"><table class="gpu-table"><thead><tr>' +
         "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存</th><th>温度</th><th>功耗</th>" +
         "</tr></thead><tbody>";
       const uw = thresholds.accel_util_warn_percent || thresholds.npu_util_warn_percent;
@@ -616,9 +1050,34 @@
               )
               .join(" ") +
             ")</span>";
-        } else if (n.freq_mhz != null) {
-          utilExtra =
-            ' <span class="muted">' + Number(n.freq_mhz).toFixed(0) + " MHz</span>";
+        }
+        if (n.core_count) {
+          utilExtra +=
+            ' <span class="muted">额定 ' + n.core_count + " 核</span>";
+        }
+        if (n.freq_mhz != null || n.freq_max_mhz != null) {
+          utilExtra +=
+            ' <span class="muted">' +
+            (n.freq_mhz != null
+              ? "实时 " + Number(n.freq_mhz).toFixed(0) + " MHz"
+              : "") +
+            (n.freq_max_mhz != null
+              ? " / 额定 " + Number(n.freq_max_mhz).toFixed(0) + " MHz"
+              : "") +
+            "</span>";
+        }
+        let powerText = "-";
+        if (n.power_w != null || n.power_limit_w != null) {
+          if (n.power_limit_w != null) {
+            powerText =
+              "实时 " +
+              (n.power_w != null ? fmtNum(n.power_w, 1) : "-") +
+              " / 额定 " +
+              fmtNum(n.power_limit_w, 1) +
+              " W";
+          } else {
+            powerText = fmtNum(n.power_w, 1) + " W";
+          }
         }
         html +=
           "<tr><td>" +
@@ -636,17 +1095,18 @@
           bar(n.util_percent) +
           "</td><td>" +
           metricPct(memPct, mw, mc) +
-          " (" +
-          (n.mem_used_mb ?? "-") +
-          " / " +
-          (n.mem_total_mb ?? "-") +
-          " MB)</td><td>" +
+          " " +
+          rtRated(
+            fmtNum(n.mem_used_mb, 0) + " MB",
+            fmtNum(n.mem_total_mb, 0) + " MB"
+          ) +
+          "</td><td>" +
           metricTemp(n.temp_c, tw, tc) +
           "</td><td>" +
-          (n.power_w ?? "-") +
-          " W</td></tr>";
+          powerText +
+          "</td></tr>";
       });
-      html += "</tbody></table>";
+      html += "</tbody></table></div>";
     }
 
     el.detailBody.innerHTML = html;
@@ -680,6 +1140,7 @@
       renderAnomalySummary(await anomalyRes.json());
       const hostsData = await hostsRes.json();
       renderHosts(hostsData.hosts || []);
+      await loadPeriodUtil();
       if (selectedId) {
         await loadDetail(selectedId);
       } else if ((hostsData.hosts || []).length) {
@@ -695,6 +1156,7 @@
   el.filterQ.addEventListener("input", () => renderHosts(allHosts));
   el.filterType.addEventListener("change", () => renderHosts(allHosts));
   el.filterStatus.addEventListener("change", () => renderHosts(allHosts));
+  renderPeriodControls();
   refresh();
   setInterval(refresh, REFRESH_MS);
 })();

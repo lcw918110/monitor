@@ -40,8 +40,11 @@
 
 ## 主机详情：时间段统计
 
-- API：`GET /api/v1/hosts/{id}/period-stats?minutes=120`
-- UI：详情页可选 1h / 2h / 6h / 24h / 7d，展示平均 / 最低 / 最高；趋势图同步时间窗
+详见 [`docs/11-period-utilization.md`](11-period-utilization.md)。
+
+- 单机：`GET /api/v1/hosts/{id}/period-stats?minutes=120`（仍可用）；亦可 `from_ts`/`to_ts`
+- 集群：`GET /api/v1/period-stats?minutes=120`
+- UI：监测台「时段利用」+ 详情页同步时间窗；平均 / 最低 / 最高 / P95 / 繁忙占比；可导出 CSV
 
 ## 自动化部署行为
 

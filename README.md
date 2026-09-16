@@ -13,7 +13,7 @@
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
-- **详情统计**：可选时间段（1h / 2h / 6h / 24h / 7d）的平均 / 最低 / 最高 + 趋势图
+- **详情统计**：可选时间段（1h / 2h / 6h / 24h / 7d 或自定义起止）的平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总
 - **部署**：Excel/CSV 批量导入；SSH（用户名密码或私钥）；配置地址自动网络探查；一键脚本
 
 > 批量导入只保留 **Excel/CSV**（已去掉与之重合的「文本清单」入口）。
@@ -136,10 +136,12 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/hosts` | 主机列表（含 anomaly） |
 | GET | `/api/v1/hosts/{id}` | 详情 |
 | GET | `/api/v1/hosts/{id}/history` | 历史趋势（`minutes` / `limit`） |
-| GET | `/api/v1/hosts/{id}/period-stats` | 时间段统计（平均/最低/最高） |
+| GET | `/api/v1/hosts/{id}/period-stats` | 单机时段统计（`minutes` 或 `from_ts`/`to_ts`；avg/min/max/p95/busy_ratio） |
+| GET | `/api/v1/period-stats` | 集群时段利用（每主机 + 样本加权汇总） |
 | GET | `/api/v1/stats` | 集群即时统计 |
 | GET | `/api/v1/anomaly` | 异常判定汇总 |
-| GET | `/api/v1/export/hosts.csv` | 导出 |
+| GET | `/api/v1/export/hosts.csv` | 导出当前主机快照 |
+| GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表 |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页） |
 
 异常阈值见中心配置中的 `anomaly` 段（示例见 `config/center.example.json`）。
@@ -154,6 +156,7 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/05-competitive-analysis.md` | 对标分析 |
 | `docs/06-optimization-backlog.md` | 历史优化 backlog |
 | `docs/08-cpu-npu-focus.md` | 加速卡与部署说明 |
+| `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
 | **`docs/10-roadmap.md`** | **下一步待办（服务器实装 / 框架化 / 拓扑图 / 容量验证）** |
 
 ## 下一步（摘要）

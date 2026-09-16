@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测与阈值着色 · v1.4.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · 时段利用 · v1.4.0</p>
       </div>
     </div>
     <div class="top-meta">
@@ -26,6 +26,18 @@
 
   <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
   <section class="stats" id="stats" aria-label="集群统计"></section>
+
+  <section class="period-util-wrap" aria-label="时段利用">
+    <section class="panel period-util-panel">
+      <div class="panel-head">
+        <h2>时段利用</h2>
+        <div class="filters period-util-controls" id="periodUtilControls"></div>
+      </div>
+      <div class="period-util-body" id="periodUtilBody">
+        <p class="muted">加载时段统计…</p>
+      </div>
+    </section>
+  </section>
 
   <main class="layout">
     <section class="panel">
@@ -57,7 +69,7 @@
               <th>资源判定</th>
               <th>主机</th>
               <th>类型</th>
-              <th>CPU</th>
+              <th>CPU 实时/额定</th>
               <th>NPU</th>
               <th>最近上报</th>
             </tr>

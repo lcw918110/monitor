@@ -21,6 +21,7 @@
 | O13 | 多厂商加速卡 | done | 英伟达 / 昇腾 / 寒武纪 / RKNN |
 | O14 | 网页 SSH 部署与 Excel 导入 | done | deploy 页；密码/私钥；自动探查 |
 | O15 | 主机详情时间段统计 | done | `/period-stats` + 1h～7d 切换 |
+| O16 | 时段利用（绝对窗/集群/P95） | done | `docs/11-period-utilization.md` |
 
 ## 需人工决策（历史）
 
