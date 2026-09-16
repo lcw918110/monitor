@@ -46,6 +46,10 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
             "accel_mem_warn_percent": 90,
             "accel_mem_critical_percent": 98,
         },
+        "period_util": {
+            "busy_cpu_percent": 80,
+            "busy_accel_percent": 80,
+        },
     }
     if path and os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -53,14 +57,44 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
         if not isinstance(user, dict):
             raise ValueError("配置文件根节点必须是 JSON 对象")
         anomaly = cfg.get("anomaly") or {}
+        period_util = cfg.get("period_util") or {}
         user_anomaly = user.pop("anomaly", None)
+        user_period_util = user.pop("period_util", None)
         # 兼容旧 alerts 字段名，忽略不用
         user.pop("alerts", None)
         cfg.update(user)
         if isinstance(user_anomaly, dict):
             anomaly.update(user_anomaly)
         cfg["anomaly"] = anomaly
+        if isinstance(user_period_util, dict):
+            period_util.update(user_period_util)
+        cfg["period_util"] = period_util
     return cfg
+
+
+def period_util_thresholds(period_util: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    from center.storage import DEFAULT_BUSY_THRESHOLDS
+
+    thresholds = dict(DEFAULT_BUSY_THRESHOLDS)
+    cfg = period_util or {}
+    mapping = {
+        "busy_cpu_percent": "cpu_percent",
+        "busy_accel_percent": "accel_util_avg",
+        "busy_mem_percent": "mem_percent",
+        "busy_disk_percent": "disk_percent",
+    }
+    for cfg_key, metric in mapping.items():
+        if cfg.get(cfg_key) is None or cfg.get(cfg_key) == "":
+            continue
+        try:
+            value = float(cfg[cfg_key])
+        except (TypeError, ValueError):
+            continue
+        if value < 0:
+            thresholds.pop(metric, None)
+        else:
+            thresholds[metric] = value
+    return thresholds
 
 
 def make_handler(
@@ -69,8 +103,10 @@ def make_handler(
     anomaly_thresholds: Optional[Dict[str, Any]] = None,
     deploy_store: Optional[DeployStore] = None,
     deploy_runner: Optional[DeployRunner] = None,
+    period_util: Optional[Dict[str, Any]] = None,
 ):
     thresholds = anomaly_thresholds or {}
+    busy_defaults = period_util_thresholds(period_util)
     dstore = deploy_store
     drunner = deploy_runner
 
@@ -132,17 +168,27 @@ def make_handler(
                     return
                 if len(parts) == 2 and parts[1] == "history":
                     code, payload = api_mod.handle_host_history(
-                        storage, host_id, query=parsed.query
+                        storage, host_id, query=parsed.query, busy_defaults=busy_defaults
                     )
                     self._send_json(code, payload)
                     return
                 if len(parts) == 2 and parts[1] == "period-stats":
                     code, payload = api_mod.handle_host_period_stats(
-                        storage, host_id, query=parsed.query
+                        storage,
+                        host_id,
+                        query=parsed.query,
+                        busy_defaults=busy_defaults,
                     )
                     self._send_json(code, payload)
                     return
                 self._send_json(404, {"ok": False, "error": "未找到接口"})
+                return
+
+            if path == "/api/v1/period-stats":
+                code, payload = api_mod.handle_cluster_period_stats(
+                    storage, query=parsed.query, busy_defaults=busy_defaults
+                )
+                self._send_json(code, payload)
                 return
 
             if path == "/api/v1/stats":
@@ -153,6 +199,25 @@ def make_handler(
             if path == "/api/v1/anomaly":
                 code, payload = api_mod.handle_anomaly(storage, thresholds=thresholds)
                 self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/export/period-stats.csv":
+                code, text = api_mod.handle_export_period_csv(
+                    storage, query=parsed.query, busy_defaults=busy_defaults
+                )
+                if code != 200:
+                    self._send_json(code, text)
+                    return
+                data = text.encode("utf-8-sig")
+                self.send_response(code)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition",
+                    'attachment; filename="period-stats.csv"',
+                )
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
 
             if path == "/api/v1/export/hosts.json":
@@ -473,6 +538,7 @@ def run_server(config: Dict[str, Any]) -> None:
         anomaly_thresholds=config.get("anomaly") or {},
         deploy_store=deploy_store,
         deploy_runner=deploy_runner,
+        period_util=config.get("period_util") or {},
     )
     httpd = ThreadingHTTPServer((host, port), handler)
     print("中心端已启动: http://%s:%s/" % (host, port), flush=True)

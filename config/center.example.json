@@ -19,5 +19,9 @@
     "accel_temp_critical_c": 95,
     "accel_mem_warn_percent": 90,
     "accel_mem_critical_percent": 98
+  },
+  "period_util": {
+    "busy_cpu_percent": 80,
+    "busy_accel_percent": 80
   }
 }

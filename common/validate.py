@@ -33,6 +33,10 @@ def validate_center_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if anomaly is not None and not isinstance(anomaly, dict):
         errors.append("anomaly 必须是对象")
 
+    period_util = cfg.get("period_util")
+    if period_util is not None and not isinstance(period_util, dict):
+        errors.append("period_util 必须是对象")
+
     return len(errors) == 0, errors
 
 

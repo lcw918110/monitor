@@ -55,6 +55,10 @@
 
 统计口径：仅对 **在线** 主机计算平均值；GPU 卡数统计全部已知主机最新快照中的卡（含刚离线，便于盘点资产）。卡片总数以最新快照为准。
 
+### 1.5 时段利用 `GET /api/v1/hosts/{id}/period-stats` 与 `GET /api/v1/period-stats`
+
+见 `docs/11-period-utilization.md`。相对窗口 `minutes` 保持兼容；绝对窗口 `from_ts`/`to_ts`（Unix 秒）成对使用并裁剪到保留期。集群汇总为**样本加权**（合并各机窗口内样本后再聚合）。
+
 ---
 
 ## 2. Agent 调度设计

@@ -5,18 +5,120 @@ from __future__ import annotations
 import csv
 import io
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
 from center.anomaly import evaluate_cluster, judge_host_payload
-from center.storage import Storage
+from center.storage import DEFAULT_BUSY_THRESHOLDS, PERIOD_METRIC_KEYS, Storage
 
 
 REQUIRED_FIELDS = ("host_id", "system")
 
+BUSY_QUERY_KEYS = {
+    "busy_cpu": "cpu_percent",
+    "busy_accel": "accel_util_avg",
+    "busy_mem": "mem_percent",
+    "busy_disk": "disk_percent",
+}
+
+PERIOD_CSV_FIELDS = [
+    "scope",
+    "host_id",
+    "hostname",
+    "host_type",
+    "sample_count",
+    "from_ts",
+    "to_ts",
+]
+for _metric in PERIOD_METRIC_KEYS:
+    PERIOD_CSV_FIELDS.extend(
+        [
+            "%s_avg" % _metric,
+            "%s_min" % _metric,
+            "%s_max" % _metric,
+            "%s_p95" % _metric,
+            "%s_busy_ratio" % _metric,
+        ]
+    )
+
 
 def _bad_request(msg: str) -> Tuple[int, Dict[str, Any]]:
     return 400, {"ok": False, "error": msg}
+
+
+def _parse_int(raw: Optional[str], field: str) -> Tuple[Optional[int], Optional[str]]:
+    if raw is None or raw == "":
+        return None, None
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return None, "%s 必须是整数" % field
+
+
+def _parse_float(raw: Optional[str], field: str) -> Tuple[Optional[float], Optional[str]]:
+    if raw is None or raw == "":
+        return None, None
+    try:
+        return float(raw), None
+    except (TypeError, ValueError):
+        return None, "%s 必须是数字" % field
+
+
+def parse_busy_thresholds(
+    qs: Dict[str, List[str]],
+    defaults: Optional[Dict[str, float]] = None,
+) -> Tuple[Optional[str], Dict[str, float]]:
+    thresholds = dict(defaults or DEFAULT_BUSY_THRESHOLDS)
+    for qkey, metric in BUSY_QUERY_KEYS.items():
+        raw = (qs.get(qkey) or [None])[0]
+        if raw is None or raw == "":
+            continue
+        value, err = _parse_float(raw, qkey)
+        if err:
+            return err, thresholds
+        if value is None:
+            continue
+        if value < 0:
+            thresholds.pop(metric, None)
+        else:
+            thresholds[metric] = value
+    return None, thresholds
+
+
+def parse_period_request(
+    storage: Storage,
+    query: str = "",
+    defaults: Optional[Dict[str, float]] = None,
+    default_minutes: int = 120,
+) -> Tuple[Optional[str], Dict[str, Any], Dict[str, float], List[str]]:
+    qs = parse_qs(query)
+    busy_err, busy = parse_busy_thresholds(qs, defaults=defaults)
+    if busy_err:
+        return busy_err, {}, busy, []
+
+    from_raw = (qs.get("from_ts") or [None])[0]
+    to_raw = (qs.get("to_ts") or [None])[0]
+    minutes_raw = (qs.get("minutes") or [None])[0]
+    from_ts, err = _parse_int(from_raw, "from_ts")
+    if err:
+        return err, {}, busy, []
+    to_ts, err = _parse_int(to_raw, "to_ts")
+    if err:
+        return err, {}, busy, []
+    minutes, err = _parse_int(minutes_raw, "minutes")
+    if err:
+        return err, {}, busy, []
+    if minutes is None and from_ts is None and to_ts is None:
+        minutes = default_minutes
+    win_err, window = storage.resolve_period_window(
+        minutes=minutes, from_ts=from_ts, to_ts=to_ts
+    )
+    if win_err:
+        return win_err, {}, busy, []
+
+    host_ids_raw = (qs.get("host_ids") or [""])[0]
+    host_ids = [x.strip() for x in host_ids_raw.split(",") if x.strip()] if host_ids_raw else []
+    return None, window, busy, host_ids
 
 
 def handle_metrics_post(
@@ -111,16 +213,33 @@ def handle_host_history(
     storage: Storage,
     host_id: str,
     query: str = "",
+    busy_defaults: Optional[Dict[str, float]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     if not storage.get_host(host_id):
         return 404, {"ok": False, "error": "主机不存在"}
     qs = parse_qs(query)
-    minutes = int((qs.get("minutes") or ["60"])[0])
-    limit = int((qs.get("limit") or ["240"])[0])
-    points = storage.host_history(host_id, minutes=minutes, limit=limit)
+    err, window, _busy, _ids = parse_period_request(
+        storage, query, defaults=busy_defaults, default_minutes=60
+    )
+    if err:
+        return _bad_request(err)
+    limit_raw = (qs.get("limit") or ["240"])[0]
+    limit, limit_err = _parse_int(limit_raw, "limit")
+    if limit_err:
+        return _bad_request(limit_err)
+    if limit is None:
+        limit = 240
+    points = storage.host_history(
+        host_id,
+        minutes=window["minutes"],
+        limit=limit,
+        from_ts=window["from_ts"],
+        to_ts=window["to_ts"],
+    )
     return 200, {
         "host_id": host_id,
-        "minutes": minutes,
+        "minutes": window["minutes"],
+        "window": window,
         "count": len(points),
         "points": points,
     }
@@ -130,13 +249,122 @@ def handle_host_period_stats(
     storage: Storage,
     host_id: str,
     query: str = "",
+    busy_defaults: Optional[Dict[str, float]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     if not storage.get_host(host_id):
         return 404, {"ok": False, "error": "主机不存在"}
-    qs = parse_qs(query)
-    minutes = int((qs.get("minutes") or ["120"])[0])
-    stats = storage.host_period_stats(host_id, minutes=minutes)
+    err, window, busy, _ids = parse_period_request(
+        storage, query, defaults=busy_defaults
+    )
+    if err:
+        return _bad_request(err)
+    stats = storage.host_period_stats(
+        host_id,
+        minutes=window["minutes"],
+        from_ts=window["from_ts"],
+        to_ts=window["to_ts"],
+        busy_thresholds=busy,
+        window=window,
+    )
+    stats.pop("ok", None)
+    if stats.get("error"):
+        return _bad_request(str(stats["error"]))
     return 200, {"ok": True, **stats}
+
+
+def handle_cluster_period_stats(
+    storage: Storage,
+    query: str = "",
+    busy_defaults: Optional[Dict[str, float]] = None,
+) -> Tuple[int, Dict[str, Any]]:
+    err, window, busy, host_ids = parse_period_request(
+        storage, query, defaults=busy_defaults
+    )
+    if err:
+        return _bad_request(err)
+    stats = storage.cluster_period_stats(
+        minutes=window["minutes"],
+        from_ts=window["from_ts"],
+        to_ts=window["to_ts"],
+        host_ids=host_ids or None,
+        busy_thresholds=busy,
+        window=window,
+    )
+    if stats.get("ok") is False:
+        return _bad_request(str(stats.get("error") or "时段统计失败"))
+    return 200, {"ok": True, **stats}
+
+
+def _flatten_period_row(
+    scope: str,
+    host_id: str,
+    hostname: Any,
+    host_type: Any,
+    sample_count: Any,
+    from_ts: Any,
+    to_ts: Any,
+    metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    row: Dict[str, Any] = {
+        "scope": scope,
+        "host_id": host_id,
+        "hostname": hostname or "",
+        "host_type": host_type or "",
+        "sample_count": sample_count or 0,
+        "from_ts": from_ts or "",
+        "to_ts": to_ts or "",
+    }
+    for metric in PERIOD_METRIC_KEYS:
+        agg = (metrics or {}).get(metric) or {}
+        row["%s_avg" % metric] = agg.get("avg")
+        row["%s_min" % metric] = agg.get("min")
+        row["%s_max" % metric] = agg.get("max")
+        row["%s_p95" % metric] = agg.get("p95")
+        row["%s_busy_ratio" % metric] = agg.get("busy_ratio")
+    return row
+
+
+def handle_export_period_csv(
+    storage: Storage,
+    query: str = "",
+    busy_defaults: Optional[Dict[str, float]] = None,
+) -> Tuple[int, Any]:
+    code, payload = handle_cluster_period_stats(
+        storage, query=query, busy_defaults=busy_defaults
+    )
+    if code != 200:
+        return code, payload
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=PERIOD_CSV_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    cluster = payload.get("cluster") or {}
+    window = payload.get("window") or {}
+    writer.writerow(
+        _flatten_period_row(
+            "cluster",
+            "__cluster__",
+            "集群汇总",
+            "",
+            cluster.get("sample_count") or payload.get("sample_count"),
+            window.get("from_ts"),
+            window.get("to_ts"),
+            cluster.get("metrics") or {},
+        )
+    )
+    for host in payload.get("hosts") or []:
+        writer.writerow(
+            _flatten_period_row(
+                "host",
+                host.get("host_id") or "",
+                host.get("hostname"),
+                host.get("host_type"),
+                host.get("sample_count"),
+                host.get("from_ts"),
+                host.get("to_ts"),
+                host.get("metrics") or {},
+            )
+        )
+    return 200, buf.getvalue()
 
 
 def handle_stats(storage: Storage) -> Tuple[int, Dict[str, Any]]:

@@ -46,7 +46,7 @@
 | --- | --- | --- |
 | 中心服务入口 | `center/server.py` | HTTP 服务、路由、静态资源 |
 | 存储层 | `center/storage.py` | SQLite：主机快照、历史、时段聚合、清理 |
-| 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats |
+| 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
 | 异常判定 | `center/anomaly.py` | 阈值着色判定 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
 | Web UI | `center/static/*` | 监测台、部署页 |
