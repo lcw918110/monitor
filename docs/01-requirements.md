@@ -114,6 +114,7 @@
 | FR-03-03 | 统计区：主机总数、在线数、GPU 主机数、GPU 卡总数、集群平均 CPU/内存、GPU 平均利用率 | P0 |
 | FR-03-04 | 页面自动刷新（可配置间隔，默认 15s） | P1 |
 | FR-03-05 | 提供只读 JSON API 供页面调用 | P0 |
+| FR-UTIL-PERIOD | 按时间段统计单机与集群利用率（相对 `minutes` + 绝对 `from_ts`/`to_ts`；avg/min/max/p95/busy_ratio；CSV） | P1 |
 
 ### 3.4 主机识别与在线判定（FR-04）
 

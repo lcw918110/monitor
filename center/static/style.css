@@ -361,8 +361,78 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   font-weight: 500;
 }
 
-.period-stats-table td:not(:first-child) {
+.period-util-wrap {
+  padding: 8px 28px 0;
+}
+
+.period-util-panel {
+  min-height: 0;
+}
+
+.period-util-controls {
+  justify-content: flex-end;
+}
+
+.period-util-controls input[type="datetime-local"],
+.period-util-controls input[type="number"] {
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.period-util-controls input[type="datetime-local"] {
+  min-width: 170px;
+}
+
+.period-util-controls input[type="number"] {
+  width: 64px;
+}
+
+.period-custom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.period-util-body {
+  padding: 12px 16px 16px;
+}
+
+.period-cluster-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.period-hosts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.period-hosts-table th,
+.period-hosts-table td {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.period-hosts-table td:not(:first-child) {
   font-family: var(--mono);
+}
+
+.period-stats-table tbody tr {
+  cursor: default;
+}
+
+.period-stats-table th:not(:first-child),
+.period-stats-table td:not(:first-child) {
+  text-align: right;
 }
 
 .charts {
