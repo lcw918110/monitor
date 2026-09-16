@@ -1,7 +1,5 @@
 """向中心端回传指标（支持有限次重试）。"""
 
-from __future__ import annotations
-
 import json
 import time
 import urllib.error

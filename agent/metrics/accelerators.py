@@ -9,13 +9,11 @@
 返回统一字段，便于中心端阈值判定与展示。
 """
 
-from __future__ import annotations
-
 import os
 import re
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Match, Optional
 
 from agent.metrics.gpu import collect_gpu_processes, collect_gpus
 from agent.metrics.npu import collect_npus
@@ -35,7 +33,7 @@ def _run(cmd: List[str], timeout: float = 8.0) -> str:
         return subprocess.check_output(
             cmd,
             stderr=subprocess.STDOUT,
-            text=True,
+            universal_newlines=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
@@ -118,7 +116,7 @@ def _parse_cnmon_info(text: str) -> List[Dict[str, Any]]:
         if not (idx_m or name_m or util_m or mem_tot_m):
             continue
 
-        def _to_mb(val: Optional[re.Match]) -> Optional[float]:
+        def _to_mb(val: Optional[Match]) -> Optional[float]:
             if not val:
                 return None
             n = _num(val.group(1))

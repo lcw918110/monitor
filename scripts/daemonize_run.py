@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """双重 fork 守护化启动，避免随父 shell / IDE 终端退出被连带杀掉。"""
-from __future__ import annotations
 
 import argparse
 import os
 import sys
 import time
+from typing import Optional
 
 
-def become_daemon(pidfile: str, logfile: str, cwd: str | None) -> None:
+def become_daemon(pidfile: str, logfile: str, cwd: Optional[str]) -> None:
     """父进程直接退出；仅守护子进程继续执行后续逻辑。"""
     if os.fork() > 0:
         time.sleep(0.25)

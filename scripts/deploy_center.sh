@@ -50,8 +50,13 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "[info] 非 root，跳过 systemd，将使用 nohup 后台启动"
 fi
 
-command -v python3 >/dev/null || { echo "需要 python3"; exit 1; }
-PY="$(command -v python3)"
+# 先复用本机已有 Python >= 3.8（中心端），没有再用 apt/yum/dnf 安装
+# shellcheck source=lib/resolve_python.sh
+. "$ROOT/scripts/lib/resolve_python.sh"
+MONITOR_INSTALL_PYTHON=1
+ensure_python 3 8 || exit 1
+log_python_choice
+apply_python_ld_library_path
 
 echo "==> 同步代码到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
@@ -97,11 +102,16 @@ else
 fi
 
 # 生成便捷启动脚本
+LD_EXPORT=""
+if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+  LD_EXPORT="export LD_LIBRARY_PATH=\"${PY_LD_LIBRARY_PATH}\"\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
 cat > "$INSTALL_DIR/run/start_center.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$INSTALL_DIR"
 export PYTHONPATH="$INSTALL_DIR"
+${LD_EXPORT}
 exec "$PY" -m center --config "$CFG"
 EOF
 chmod +x "$INSTALL_DIR/run/start_center.sh"
@@ -109,6 +119,10 @@ chmod +x "$INSTALL_DIR/run/start_center.sh"
 UNIT_INSTALLED=0
 if [[ "$NO_SYSTEMD" -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
   UNIT=/etc/systemd/system/monitor-center.service
+  LD_ENV_LINE=""
+  if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+    LD_ENV_LINE="Environment=LD_LIBRARY_PATH=${PY_LD_LIBRARY_PATH}"
+  fi
   cat > "$UNIT" <<EOF
 [Unit]
 Description=简易多机监控中心端
@@ -118,6 +132,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$INSTALL_DIR
 Environment=PYTHONPATH=$INSTALL_DIR
+${LD_ENV_LINE}
 ExecStart=$PY -m center --config $CFG
 Restart=on-failure
 RestartSec=3
@@ -145,11 +160,15 @@ if [[ "$START" -eq 1 ]]; then
       fi
     fi
     # 双重 fork 守护化，避免随 SSH/终端会话退出被杀
+    DAEMON_ENV=(--env "PYTHONPATH=$INSTALL_DIR")
+    if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
+      DAEMON_ENV+=(--env "LD_LIBRARY_PATH=${PY_LD_LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+    fi
     "$PY" "$INSTALL_DIR/scripts/daemonize_run.py" \
       --pidfile "$INSTALL_DIR/run/center.pid" \
       --logfile "$INSTALL_DIR/run/center.log" \
       --cwd "$INSTALL_DIR" \
-      --env "PYTHONPATH=$INSTALL_DIR" \
+      "${DAEMON_ENV[@]}" \
       -- "$PY" -m center --config "$CFG"
   fi
 

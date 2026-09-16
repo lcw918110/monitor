@@ -5,5 +5,10 @@ cd "$ROOT"
 if [[ ! -f config/agent.json ]]; then
   cp config/agent.example.json config/agent.json
 fi
+# shellcheck source=lib/resolve_python.sh
+. "$ROOT/scripts/lib/resolve_python.sh"
+MONITOR_INSTALL_PYTHON=0
+ensure_python 3 6 || exit 1
+apply_python_ld_library_path
 export PYTHONPATH=.
-exec python3 -m agent --config config/agent.json "$@"
+exec "$PY" -m agent --config config/agent.json "$@"

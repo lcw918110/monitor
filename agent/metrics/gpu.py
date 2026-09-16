@@ -1,7 +1,5 @@
 """GPU 指标：通过 nvidia-smi 查询，不存在则返回空列表。"""
 
-from __future__ import annotations
-
 import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
@@ -74,7 +72,7 @@ def _run_nvidia_query(query: str, timeout: float) -> Optional[str]:
         return subprocess.check_output(
             cmd,
             stderr=subprocess.STDOUT,
-            text=True,
+            universal_newlines=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
@@ -110,7 +108,7 @@ def collect_gpu_processes(timeout: float = 8.0) -> List[Dict[str, Any]]:
         out = subprocess.check_output(
             cmd,
             stderr=subprocess.STDOUT,
-            text=True,
+            universal_newlines=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
