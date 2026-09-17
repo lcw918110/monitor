@@ -110,16 +110,18 @@ deploy_one() {
   local out rc method="tar" part
 
   if command -v rsync >/dev/null 2>&1 && [[ -z "${MONITOR_SYNC_DISABLE_RSYNC:-}" ]]; then
-    if ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "mkdir -p '$REMOTE_DIR' && command -v rsync" >/dev/null; then
+    if ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "mkdir -p '$REMOTE_DIR' /tmp/monitor-agent-src && command -v rsync" >/dev/null; then
       set +e
       out=""
       rc=0
       for part in agent common scripts; do
         out="$(rsync -a --delete \
           --exclude '__pycache__/' \
+          --exclude '._*' \
+          --exclude '.DS_Store' \
           --exclude '*.db' \
           -e "$ssh_e" \
-          "$ROOT/$part/" "${SSH_USER}@${ip}:${REMOTE_DIR}/$part/" 2>&1)"
+          "$ROOT/$part/" "${SSH_USER}@${ip}:/tmp/monitor-agent-src/$part/" 2>&1)"
         rc=$?
         [[ "$rc" -eq 0 ]] || break
       done
@@ -129,7 +131,7 @@ deploy_one() {
           --exclude 'agent.json' \
           --exclude '*.db' \
           -e "$ssh_e" \
-          "$ROOT/config/" "${SSH_USER}@${ip}:${REMOTE_DIR}/config/" 2>&1)"
+          "$ROOT/config/" "${SSH_USER}@${ip}:/tmp/monitor-agent-src/config/" 2>&1)"
         rc=$?
       fi
       set -e
@@ -164,25 +166,28 @@ deploy_one() {
   set +e
   out="$(ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" bash -s <<EOF
 set -euo pipefail
-sudo mkdir -p '$REMOTE_DIR'
+STAGING=/tmp/monitor-agent-src
+sudo mkdir -p '$REMOTE_DIR' "\$STAGING"
 if [[ '$method' == tar && -f /tmp/monitor-agent.tgz ]]; then
   tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py' || {
     echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心树）"
     exit 1
   }
-  sudo tar -xzf /tmp/monitor-agent.tgz -C '$REMOTE_DIR'
+  sudo rm -rf "\$STAGING"
+  sudo mkdir -p "\$STAGING"
+  sudo tar -xzf /tmp/monitor-agent.tgz -C "\$STAGING"
 fi
-if ! sudo test -f '$REMOTE_DIR/agent/__init__.py'; then
-  echo "[fail] package_incomplete: $REMOTE_DIR 缺少 agent/__init__.py"
+if ! sudo test -f "\$STAGING/agent/__init__.py"; then
+  echo "[fail] package_incomplete: 暂存目录缺少 agent/__init__.py"
   exit 1
 fi
-cd '$REMOTE_DIR'
-sudo chmod +x scripts/*.sh || true
-sudo ./scripts/deploy_agent.sh \\
+sudo chmod -R a+x "\$STAGING/scripts" || true
+sudo "\$STAGING/scripts/deploy_agent.sh" \\
   --center-url '$CENTER_URL' \\
   --dir '$REMOTE_DIR' \\
   --host-id '$host_id' \\
   --token '$TOKEN'
+sudo rm -rf "\$STAGING"
 rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE
 EOF

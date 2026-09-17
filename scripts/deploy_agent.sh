@@ -97,8 +97,9 @@ DETECT_HOST="$(hostname 2>/dev/null || echo agent-host)"
 HOST_ID="${HOST_ID:-$DETECT_HOST}"
 HOSTNAME_CFG="${HOSTNAME_CFG:-$DETECT_HOST}"
 
-echo "==> 同步代码到 $INSTALL_DIR"
+echo "==> 停止旧 Agent 并同步到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" || fail_deploy dir_not_writable "无法创建安装目录: $INSTALL_DIR"
+stop_previous_agent "$INSTALL_DIR"
 if ! assert_package_tree "$ROOT" "源码 $ROOT"; then
   fail_deploy package_incomplete "源树缺少 agent 包"
 fi

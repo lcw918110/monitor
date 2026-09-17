@@ -70,7 +70,7 @@
 - `deploy_agent.sh`：本机变量 `INSTALL_DIR`；**无 sudo 的非 root** 若目录是 `/opt/monitor-agent` 或 `/opt/monitor` 会改到 `~/monitor-agent`。中心 SSH 部署对 `/opt` 会 `sudo` 再跑该脚本，从而保住 systemd。  
   - **Python**：先复用已有解释器（`PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`），要求 **≥ 3.6**；都没有且为 root 时再 apt/yum/dnf 安装 `python3`  
   - `/usr/local/python3.x` 若 libpython 不在默认链接路径，自动设置 `LD_LIBRARY_PATH`  
-  - **同步**：只同步 `agent/` `common/` `scripts/`（及配置模板）；优先 `rsync`，否则 `tar` / `cp`（`scripts/lib/sync_tree.sh` 的 `sync_agent_tree`），不捆绑离线 Python 
+  - **同步**：只同步 `agent/` `common/` `scripts/`（及配置模板）；优先 `rsync --delete`，否则先删再 `tar` / `cp`（`sync_agent_tree`）。覆盖安装会先停旧 `monitor-agent`/pidfile/`python -m agent`，再清 AppleDouble `._*`、`__pycache__` 与多余顶层目录（如误拷的 `center/`）。**保留** `config/agent.json` 与 `data/`。包先解到 `/tmp/monitor-agent-src` 再同步进安装目录，避免 inplace 留旧文件。 
 - SSH 在线部署：远端使用 `REMOTE_DIR`（勿再嵌套未赋值的 `INSTALL_DIR`）  
   - 清单/Excel/`deploy_fleet.sh` 支持可选 **ssh_port**（默认 22；CLI `--ssh-port` / `--port`）；**不扫描端口**  
   - 连接超时 / connection closed 自动重试 2～3 次（1s、2s 退避）  

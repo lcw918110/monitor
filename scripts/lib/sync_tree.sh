@@ -197,9 +197,10 @@ sync_agent_tree() {
     return 1
   fi
 
-  # 解压后 ROOT==INSTALL_DIR：包内已是采集端文件，不再整树拷贝
   if [[ "$src_abs" == "$dst_abs" ]]; then
+    # 无独立源树时无法对 agent/ 做文件级 --delete；仍清 junk / 多余顶层目录
     echo "[sync] method=inplace"
+    prune_agent_install_dir "$dst_abs"
     return 0
   fi
 
@@ -207,6 +208,8 @@ sync_agent_tree() {
     for name in agent common scripts; do
       rsync -a --delete \
         --exclude '__pycache__/' \
+        --exclude '._*' \
+        --exclude '.DS_Store' \
         --exclude '*.db' \
         "$src_abs/$name/" "$dst_abs/$name/"
     done
@@ -214,6 +217,7 @@ sync_agent_tree() {
     if [[ -f "$src_abs/README.md" ]]; then
       cp -a "$src_abs/README.md" "$dst_abs/README.md"
     fi
+    prune_agent_install_dir "$dst_abs"
     echo "[sync] method=rsync"
     return 0
   fi
@@ -222,12 +226,17 @@ sync_agent_tree() {
     local names=(agent common scripts)
     [[ -d "$src_abs/config" ]] && names+=(config)
     [[ -f "$src_abs/README.md" ]] && names+=(README.md)
+    for name in agent common scripts; do
+      rm -rf "$dst_abs/$name"
+    done
     if tar -C "$src_abs" \
       --exclude=config/center.json \
       --exclude=config/agent.json \
       --exclude=__pycache__ \
+      --exclude=\._\* \
       --exclude=\*.db \
       -cf - "${names[@]}" | tar -C "$dst_abs" -xf -; then
+      prune_agent_install_dir "$dst_abs"
       echo "[sync] method=tar"
       return 0
     fi
@@ -243,10 +252,88 @@ sync_agent_tree() {
     if [[ -f "$src_abs/README.md" ]]; then
       cp -a "$src_abs/README.md" "$dst_abs/README.md"
     fi
+    prune_agent_install_dir "$dst_abs"
     echo "[sync] method=cp"
     return 0
   fi
 
   echo "[fail] sync_tool_missing: 本机无 rsync/tar/cp，无法同步代码" >&2
   return 1
+}
+
+_stop_agent_pidfile() {
+  local dir="$1"
+  local pid=""
+  [[ -n "$dir" && -f "$dir/run/agent.pid" ]] || return 0
+  pid="$(tr -d ' \t\n' < "$dir/run/agent.pid" 2>/dev/null || true)"
+  if [[ -n "${pid:-}" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "[cleanup] 停止进程 pid=$pid ($dir)"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$dir/run/agent.pid"
+}
+
+# 覆盖安装前停旧服务/进程：systemd 单元、已知目录 pidfile、python -m agent 孤儿。
+# 不停 monitor-center。不删除 ~/monitor 家目录副本（只停进程，以免误伤配置）。
+stop_previous_agent() {
+  local install_dir="${1:-}"
+  local d
+  echo "[cleanup] 停止旧 Agent，再覆盖安装目录"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop monitor-agent >/dev/null 2>&1 || true
+  fi
+  for d in "$install_dir" \
+           "${HOME}/monitor-agent" \
+           "${HOME}/monitor" \
+           /opt/monitor-agent \
+           /opt/monitor; do
+    [[ -n "${d:-}" && -d "$d" ]] || continue
+    _stop_agent_pidfile "$d"
+  done
+  if [[ -z "${MONITOR_CLEANUP_SKIP_PKILL:-}" ]]; then
+    pkill -f '[Pp]ython[0-9.]* -m agent' >/dev/null 2>&1 || true
+  fi
+}
+
+# 同步后清理旧版本残留。保留 config/agent.json、data/、run/。
+# /opt/monitor（basename=monitor）视为中心树，不删 center/。
+prune_agent_install_dir() {
+  local dst="${1:-}"
+  local base="" name="" bn=""
+  [[ -n "$dst" && -d "$dst" ]] || return 0
+  echo "[cleanup] 清理旧文件（AppleDouble / __pycache__ / 多余顶层目录）"
+  find "$dst" \( -name '._*' -o -name '.DS_Store' \) -type f -exec rm -f {} \; 2>/dev/null || true
+  find "$dst" -type d -name '__pycache__' -prune -exec rm -rf {} \; 2>/dev/null || true
+  base="$(basename "$dst")"
+  for name in "$dst"/*; do
+    [[ -e "$name" ]] || continue
+    bn="$(basename "$name")"
+    case "$bn" in
+      agent|common|scripts|config|run|data|README.md) continue ;;
+      center)
+        if [[ "$base" == "monitor" ]]; then
+          continue
+        fi
+        echo "[cleanup] 删除多余目录: $bn"
+        rm -rf "$name"
+        ;;
+      *)
+        echo "[cleanup] 删除旧版本残留: $bn"
+        rm -rf "$name"
+        ;;
+    esac
+  done
+  for name in "$dst"/.[!.]*; do
+    [[ -e "$name" ]] || continue
+    bn="$(basename "$name")"
+    case "$bn" in
+      .|..) continue ;;
+    esac
+    echo "[cleanup] 删除隐藏残留: $bn"
+    rm -rf "$name"
+  done
 }

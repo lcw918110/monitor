@@ -125,7 +125,7 @@ def _agent_tar_filter(ti: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
     parts = ti.name.replace("\\", "/").split("/")
     if "__pycache__" in parts or ti.name.endswith(".db"):
         return None
-    if parts and parts[-1] in _SKIP_CONFIG_FILES:
+    if parts and (parts[-1] in _SKIP_CONFIG_FILES or parts[-1].startswith("._") or parts[-1] == ".DS_Store"):
         return None
     return ti
 
@@ -503,9 +503,10 @@ def deploy_one_target(
         )
         remote_script = f"""set -euo pipefail
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
+STAGING=/tmp/monitor-agent-src
 echo "REMOTE_DIR=$REMOTE_DIR"
 {helper}
-run_root mkdir -p "$REMOTE_DIR" || {{
+run_root mkdir -p "$REMOTE_DIR" "$STAGING" || {{
   echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
@@ -513,14 +514,16 @@ if ! tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py'; then
   echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心安装目录是否保留 agent 包）"
   exit 1
 fi
-run_root tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
-if ! run_root test -f "$REMOTE_DIR/agent/__init__.py"; then
-  echo "[fail] package_incomplete: 解压后缺少 $REMOTE_DIR/agent/__init__.py"
+# 解到 staging，再由 deploy_agent.sh 带 --delete 同步进安装目录（避免 ROOT==INSTALL_DIR 走 inplace 留下旧文件）
+run_root rm -rf "$STAGING"
+run_root mkdir -p "$STAGING"
+run_root tar -xzf /tmp/monitor-agent.tgz -C "$STAGING"
+if ! run_root test -f "$STAGING/agent/__init__.py"; then
+  echo "[fail] package_incomplete: 解压后缺少 $STAGING/agent/__init__.py"
   exit 1
 fi
-cd "$REMOTE_DIR"
-run_root chmod +x scripts/*.sh || true
-run_root ./scripts/deploy_agent.sh \\
+run_root chmod -R a+x "$STAGING/scripts" || true
+run_root "$STAGING/scripts/deploy_agent.sh" \\
   --center-url {shlex.quote(center)} \\
   --dir "$REMOTE_DIR" \\
   --host-id {shlex.quote(host_id)} \\
@@ -528,6 +531,7 @@ run_root ./scripts/deploy_agent.sh \\
   --host-type {shlex.quote(host_type or "auto")} \\
   --token {shlex.quote(token or "")} \\
   --interval {int(interval or 15)}
+run_root rm -rf "$STAGING"
 rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE
 """

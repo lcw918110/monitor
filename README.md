@@ -60,6 +60,8 @@ chmod +x scripts/*.sh
 
 中心安装树（`/opt/monitor`）**必须保留 `agent/` 包**：网页 SSH / `deploy_fleet.sh` 从该目录打 **Agent 包**（`agent/`、`common/`、`scripts/` 与配置模板），**不会**把 `center/` 当主内容整树拷到 `/opt/monitor-agent`。源树缺 `agent/` 禁止打包；安装后、`--once` 前校验 `agent/__init__.py`，缺包短码 `package_incomplete`。
 
+**覆盖安装清理**：先停 `monitor-agent` 与已知目录里的旧进程（`/opt/monitor-agent`、`~/monitor-agent`、`~/monitor` 的 pidfile，以及 `python -m agent` 残留），再把采集端同步进安装目录（rsync `--delete` 或等价删除后拷贝，包先解到 `/tmp/monitor-agent-src`，避免 inplace 留旧文件）。随后删除 AppleDouble `._*`、`.DS_Store`、`__pycache__`，以及安装目录里多出来的顶层项（如误拷的 `center/`）。**不删除** `config/agent.json` 与 `data/`；本轮仍按中心下发参数写入 `agent.json`。家目录旧副本只停进程，不整目录删掉。
+
 **SSH 端口**：清单、Excel 的 `ssh_port`、网页「SSH 端口」、`deploy_fleet.sh --ssh-port` / `--port`，缺省 **22**。**不扫描端口。**
 
 **密码登录**：必须在 **中心机**（跑 Center / `deploy_fleet.sh` 的那台）安装 `sshpass`，否则失败短码 `sshpass_missing`。没有 sshpass 就改用 SSH 密钥。不要指望笔记本侧的 sshpass 旁路。非 root 往 `/opt/monitor-agent` 装时，产品路径会先 `sudo -n`，不行再用**同一 SSH 密码** `sudo -S`，以保住已有 systemd 单元。
