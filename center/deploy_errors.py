@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 SSH_UNREACHABLE = "ssh_unreachable"
 AUTH_FAIL = "auth_fail"
+SSHPASS_MISSING = "sshpass_missing"
 KEY_MISSING = "key_missing"
 NO_PYTHON = "no_python"
 SYNC_TOOL_MISSING = "sync_tool_missing"
@@ -129,6 +130,17 @@ def classify_deploy_failure(
         return DIR_NOT_WRITABLE, _msg("安装目录不可写")
     if "请先在部署设置" in blob or "public_center_url" in blob:
         return CENTER_URL_MISSING, _msg("请先填写中心对外访问地址")
+    if "sshpass_missing" in blob or (
+        "sshpass" in blob
+        and (
+            "command not found" in blob
+            or "not found" in blob
+            or "未安装" in blob
+        )
+    ):
+        return SSHPASS_MISSING, _msg(
+            "密码部署需要中心机安装 sshpass，或改用 SSH 密钥"
+        )
     if any(
         n in blob
         for n in (

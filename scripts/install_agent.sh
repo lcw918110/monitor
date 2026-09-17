@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 兼容旧入口：转发到一键部署脚本
+# 兼容旧入口：转发到产品路径 deploy_agent.sh（不是第二条安装方式）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ $# -eq 0 ]]; then

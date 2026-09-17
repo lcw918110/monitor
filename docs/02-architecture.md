@@ -56,7 +56,7 @@
 | 加速卡采集 | `agent/metrics/accelerators.py` | 多厂商加速卡 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
-| 脚本 | `scripts/*` | 安装、本地守护、批量部署；`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/deploy_ssh.sh` 端口/重试 |
+| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/deploy_ssh.sh` 端口/重试 |
 
 ---
 

@@ -14,7 +14,7 @@
 - 采集：系统资源 + 加速卡（英伟达 / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
 - 主机类型：`auto` | `cpu` | `gpu`
 - 异常阈值着色；主机详情 **时间段统计**（1h/2h/6h/24h/7d）+ 趋势图
-- 部署：Excel/CSV 导入、SSH（密码/私钥）、配置地址自动探查、安装目录 `REMOTE_DIR` / 非 root `~/monitor`
+- 部署：Excel/CSV 导入、SSH（密码需中心机 `sshpass`，或私钥）、配置地址自动探查；Agent 默认目录 `/opt/monitor-agent`（Center 仍为 `/opt/monitor`）
 - 本地守护：`scripts/local_up.sh` / `local_down.sh`
 
 ---
@@ -34,7 +34,7 @@
 
 **验收要点**：跨机上报、SSH 部署成功/失败信息可读、进程重启后自启（systemd 或守护）、Token（若启用）生效。
 
-**依赖**：目标机 SSH 可达；防火墙放行中心端口；非 root 勿用 `/opt/monitor`。
+**依赖**：只走中心「客户端部署」或中心机 `deploy_fleet.sh`；目标机 SSH 可达；防火墙放行中心端口；密码登录需中心机 `sshpass`；非 root 勿用 `/opt/monitor-agent`。
 
 ---
 

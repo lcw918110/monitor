@@ -25,7 +25,9 @@ class ExcelTests(unittest.TestCase):
         self.assertGreaterEqual(len(items), 3)
         self.assertEqual(items[0]["ip"], "10.0.0.11")
         self.assertEqual(items[0]["host_type"], "gpu")
+        self.assertEqual(items[0]["remote_dir"], "/opt/monitor-agent")
         self.assertEqual(items[2]["host_type"], "cpu")
+        self.assertEqual(items[2]["remote_dir"], "/opt/monitor")
         self.assertIn("10.0.0.1", items[0].get("peer_hosts") or "")
 
     def test_import_api(self) -> None:

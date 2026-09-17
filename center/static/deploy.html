@@ -37,8 +37,8 @@
         <label>默认 SSH 端口
           <input id="sshPort" type="number" value="22" min="1" max="65535" placeholder="22" />
         </label>
-        <label>远端安装目录（root 默认 /opt/monitor；普通用户自动用 ~/monitor）
-          <input id="remoteDir" placeholder="/opt/monitor 或 ~/monitor" />
+        <label>远端安装目录（Agent 默认 /opt/monitor-agent，避免覆盖同机 Center 的 /opt/monitor；普通用户自动用 ~/monitor-agent）
+          <input id="remoteDir" placeholder="/opt/monitor-agent" />
         </label>
         <label>全局 SSH 私钥路径（可选）
           <input id="sshKey" placeholder="~/.ssh/id_rsa —— 所有未单独指定密钥的客户端共用" />
@@ -49,7 +49,7 @@
       </div>
       <div class="form-actions">
         <button type="button" id="btnSaveSettings" class="btn primary">保存设置</button>
-        <span class="muted" id="settingsHint">「对外地址」= 远端 Agent 上报用的中心地址，默认本机局域网 IP，一般不要填 127.0.0.1。认证：优先客户端密码/私钥，否则全局默认。</span>
+        <span class="muted" id="settingsHint">「对外地址」= 远端 Agent 上报用的中心地址，默认本机局域网 IP，一般不要填 127.0.0.1。密码部署请在<strong>中心机</strong>安装 sshpass，或改用密钥。不要从笔记本 scp/sshpass 旁路安装。</span>
       </div>
     </section>
 
@@ -91,7 +91,7 @@
           <input id="tKey" placeholder="空则用全局私钥/本机默认钥" />
         </label>
         <label>此客户端安装目录（可选）
-          <input id="tRemoteDir" placeholder="空则用上方默认；普通用户勿填 /opt/monitor" />
+          <input id="tRemoteDir" placeholder="空则用上方默认；新产品默认 /opt/monitor-agent" />
         </label>
         <label style="grid-column: 1 / -1;">指定机器（配置后自动探查连通性）
           <input id="tPeers" placeholder="网关=10.0.0.1;存储=10.0.0.50 或 10.0.0.1,10.0.0.2" />
@@ -109,8 +109,8 @@
       <div class="pad">
         <div class="form-actions" style="padding-left:0;">
           <a class="link" href="/api/v1/deploy/template.xlsx">Excel 导入模板</a>
-          <a class="link" href="/api/v1/deploy/install-script">通用安装脚本（install-agent.sh）</a>
-          <span class="muted">批量导入与手动安装资源统一从此下载</span>
+          <a class="link" href="/api/v1/deploy/install-script">目标机补跑脚本（deploy_agent.sh 包装）</a>
+          <span class="muted">Excel 模板用于清单导入。补跑脚本不是第二条安装路径，仅在产品部署已同步代码后使用。</span>
         </div>
       </div>
       <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
@@ -167,7 +167,7 @@
   </main>
 
   <footer class="foot">
-    <span>支持用户名密码或私钥；全局私钥多机共用，单机可覆盖。SSH 端口默认 22（清单可写 ssh_port，不扫端口）。无 rsync 时自动 tar/cp。失败消息带短码（如 ssh_unreachable）。</span>
+    <span>唯一部署方式：本页 SSH 部署，或在中心机跑 deploy_fleet.sh / deploy_agent.sh。密码登录需中心机已装 sshpass（否则短码 sshpass_missing），或改用密钥。Agent 默认 /opt/monitor-agent。SSH 端口默认 22（不扫端口）。失败消息带短码。</span>
   </footer>
   <script src="/deploy.js"></script>
 </body>

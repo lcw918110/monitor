@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from center.deploy_runner import DeployRunner, build_install_script
-from center.deploy_store import DeployStore
+from center.deploy_store import DEFAULT_AGENT_REMOTE_DIR, DeployStore
 
 
 def _bad(msg: str, code: int = 400) -> Tuple[int, Dict[str, Any]]:
@@ -268,7 +268,7 @@ def handle_install_script(
     token: str,
     query: str,
 ) -> Tuple[int, str, str]:
-    """通用安装脚本（下载资源区使用，host_id 可后续在目标机自行修改）。"""
+    """产品路径同步代码后，目标机补跑 deploy_agent.sh 用；不是第二条安装方式。"""
     qs = parse_qs(query)
     host_id = (qs.get("host_id") or ["CHANGE_ME"])[0].strip() or "CHANGE_ME"
     hostname = (qs.get("hostname") or [host_id])[0].strip()
@@ -281,7 +281,7 @@ def handle_install_script(
 
     remote_dir = resolve_remote_dir(
         "root",
-        str(settings.get("default_remote_dir") or "/opt/monitor"),
+        str(settings.get("default_remote_dir") or DEFAULT_AGENT_REMOTE_DIR),
     )
     script = build_install_script(
         public_center_url=public_url,
@@ -333,7 +333,7 @@ def handle_test_ssh(store: DeployStore, body: bytes) -> Tuple[int, Dict[str, Any
             "ssh_key_path": data.get("ssh_key_path") or settings.get("ssh_key_path") or "",
             "remote_dir": data.get("remote_dir")
             or settings.get("default_remote_dir")
-            or "/opt/monitor",
+            or DEFAULT_AGENT_REMOTE_DIR,
         }
     from center.deploy_runner import test_ssh_ready
 

@@ -31,6 +31,10 @@ ssh_classify_fail() {
     return 0
   fi
   case "$blob" in
+    *"sshpass: command not found"*|*"sshpass_missing"*)
+      echo "sshpass_missing"
+      return 0
+      ;;
     *"permission denied"*|*"authentication failed"*|*"too many authentication"*|*"publickey"*)
       echo "auth_fail"
       return 0

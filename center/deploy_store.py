@@ -8,6 +8,12 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+# Agent 产品默认目录：与同机 Center（/opt/monitor）分开，避免互相覆盖。
+# 已有库若已写入 /opt/monitor 或用户显式填写，不自动改写。
+DEFAULT_AGENT_REMOTE_DIR = "/opt/monitor-agent"
+LEGACY_AGENT_REMOTE_DIR = "/opt/monitor"
+DEFAULT_CENTER_INSTALL_DIR = "/opt/monitor"
+
 
 class DeployStore:
     def __init__(self, db_path: str) -> None:
@@ -42,7 +48,7 @@ class DeployStore:
                         host_type TEXT NOT NULL DEFAULT 'auto',
                         ssh_user TEXT NOT NULL DEFAULT 'root',
                         ssh_port INTEGER NOT NULL DEFAULT 22,
-                        remote_dir TEXT NOT NULL DEFAULT '/opt/monitor',
+                        remote_dir TEXT NOT NULL DEFAULT '/opt/monitor-agent',
                         status TEXT NOT NULL DEFAULT 'pending',
                         last_message TEXT,
                         last_error_code TEXT DEFAULT '',
@@ -125,7 +131,7 @@ class DeployStore:
             "public_center_url": "",
             "default_ssh_user": "root",
             "default_ssh_port": 22,
-            "default_remote_dir": "/opt/monitor",
+            "default_remote_dir": DEFAULT_AGENT_REMOTE_DIR,
             "ssh_key_path": "",
             "default_ssh_password": "",
             "interval_seconds": 15,
@@ -346,7 +352,7 @@ class DeployStore:
                         host_type,
                         data.get("ssh_user") or "root",
                         int(data.get("ssh_port") or 22),
-                        data.get("remote_dir") or "/opt/monitor",
+                        data.get("remote_dir") or DEFAULT_AGENT_REMOTE_DIR,
                         now,
                         peers_json,
                         ssh_password,
@@ -446,7 +452,7 @@ class DeployStore:
                     "host_type": defaults.get("host_type") or "auto",
                     "ssh_user": defaults.get("ssh_user") or "root",
                     "ssh_port": parsed["ssh_port"],
-                    "remote_dir": defaults.get("remote_dir") or "/opt/monitor",
+                    "remote_dir": defaults.get("remote_dir") or DEFAULT_AGENT_REMOTE_DIR,
                 }
             )
             count += 1
@@ -719,7 +725,7 @@ class DeployStore:
                 or 22,
                 "remote_dir": item.get("remote_dir")
                 or defaults.get("remote_dir")
-                or "/opt/monitor",
+                or DEFAULT_AGENT_REMOTE_DIR,
                 "peer_hosts": item.get("peer_hosts") or item.get("peers") or "",
                 "ssh_password": item.get("ssh_password")
                 or defaults.get("ssh_password")
