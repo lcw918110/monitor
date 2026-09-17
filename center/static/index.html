@@ -38,7 +38,7 @@
         <div class="panel-head">
           <h2>主机资源</h2>
           <div class="filters">
-            <input id="filterQ" type="search" placeholder="搜索主机..." />
+            <input id="filterQ" type="search" placeholder="搜索主机 / 地址..." />
             <select id="filterType">
               <option value="">全部类型</option>
               <option value="cpu">CPU</option>
@@ -52,21 +52,37 @@
               <option value="normal">正常</option>
               <option value="unknown">未知</option>
             </select>
+            <select id="filterGroup">
+              <option value="">全部资源组</option>
+              <option value="__none__">未分组</option>
+            </select>
+            <button type="button" id="btnGroups" class="btn btn-sm">管理分组</button>
             <span class="muted" id="hostCount"></span>
           </div>
         </div>
+        <div class="group-panel" id="groupPanel" hidden>
+          <div class="group-panel-row">
+            <input id="newGroupName" type="text" maxlength="40" placeholder="新资源组名称" />
+            <button type="button" id="btnAddGroup" class="btn btn-sm">添加</button>
+            <span class="muted">分组只存在中心端，Agent 无需升级</span>
+          </div>
+          <div class="group-chip-list" id="groupList"></div>
+        </div>
         <div class="table-wrap">
-          <table>
+          <table id="hostTable">
             <thead>
               <tr>
-                <th>在线</th>
-                <th>资源判定</th>
-                <th>主机</th>
-                <th>类型</th>
-                <th>CPU 实时/额定</th>
-                <th>NPU</th>
-                <th>磁盘</th>
-                <th>最近上报</th>
+                <th class="sortable" data-sort="online">在线</th>
+                <th class="sortable" data-sort="status">资源判定</th>
+                <th class="sortable" data-sort="host">主机 / 地址</th>
+                <th class="sortable" data-sort="group">资源组</th>
+                <th class="sortable" data-sort="type">类型</th>
+                <th class="sortable" data-sort="cpu_percent">CPU%</th>
+                <th class="sortable" data-sort="mem_percent">内存%</th>
+                <th class="sortable" data-sort="disk_percent">磁盘%</th>
+                <th class="sortable" data-sort="accel">加速卡%</th>
+                <th class="sortable" data-sort="load1">负载</th>
+                <th class="sortable" data-sort="last_seen">最近上报</th>
               </tr>
             </thead>
             <tbody id="hostBody"></tbody>

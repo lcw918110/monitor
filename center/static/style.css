@@ -204,7 +204,7 @@ html, body {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
   gap: 16px;
   padding: 12px 28px 28px;
 }
@@ -255,6 +255,96 @@ html, body {
 .muted { color: var(--muted); font-size: 12px; }
 
 .table-wrap { overflow: auto; max-height: 560px; }
+
+#hostTable th,
+#hostTable td {
+  padding: 8px 8px;
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th.sortable:hover { color: var(--text); }
+
+th.sortable.sort-asc::after,
+th.sortable.sort-desc::after {
+  font-size: 10px;
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+th.sortable.sort-asc::after { content: "▲"; }
+th.sortable.sort-desc::after { content: "▼"; }
+
+.host-addr {
+  font-family: var(--mono);
+}
+
+.host-group-select {
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  max-width: 120px;
+}
+
+.group-panel {
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(15, 20, 25, 0.35);
+}
+
+.group-panel-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.group-panel-row input {
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  min-width: 180px;
+}
+
+.group-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: rgba(23, 30, 38, 0.9);
+}
+
+.group-chip button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+
+.group-chip button:hover { color: var(--bad); }
 
 table {
   width: 100%;
@@ -421,7 +511,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .period-layout {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
   gap: 16px;
   padding: 12px 28px 28px;
 }

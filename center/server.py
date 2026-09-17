@@ -153,6 +153,11 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
+            if path == "/api/v1/groups":
+                code, payload = api_mod.handle_groups_list(storage)
+                self._send_json(code, payload)
+                return
+
             if path.startswith("/api/v1/hosts/"):
                 rest = path[len("/api/v1/hosts/") :].strip("/")
                 parts = rest.split("/") if rest else []
@@ -348,8 +353,41 @@ def make_handler(
             body = self._read_body()
 
             if path == "/api/v1/metrics":
+                remote_ip = ""
+                try:
+                    remote_ip = (self.client_address or ("", 0))[0]
+                except (TypeError, IndexError):
+                    remote_ip = ""
                 code, payload = api_mod.handle_metrics_post(
-                    storage, body, expected_token=token
+                    storage, body, expected_token=token, remote_ip=remote_ip
+                )
+                self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/groups":
+                code, payload = api_mod.handle_group_create(storage, body)
+                self._send_json(code, payload)
+                return
+
+            if path.startswith("/api/v1/groups/"):
+                raw_id = path[len("/api/v1/groups/") :].strip("/")
+                try:
+                    gid = int(raw_id)
+                except ValueError:
+                    self._send_json(400, {"ok": False, "error": "非法 group id"})
+                    return
+                code, payload = api_mod.handle_group_rename(storage, gid, body)
+                self._send_json(code, payload)
+                return
+
+            if path.startswith("/api/v1/hosts/") and path.endswith("/group"):
+                rest = path[len("/api/v1/hosts/") :].strip("/")
+                parts = rest.split("/") if rest else []
+                if len(parts) != 2 or parts[1] != "group" or not parts[0]:
+                    self._send_json(400, {"ok": False, "error": "非法 host_id"})
+                    return
+                code, payload = api_mod.handle_host_assign_group(
+                    storage, parts[0], body
                 )
                 self._send_json(code, payload)
                 return
@@ -432,6 +470,16 @@ def make_handler(
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path.startswith("/api/v1/groups/"):
+                raw_id = path[len("/api/v1/groups/") :].strip("/")
+                try:
+                    gid = int(raw_id)
+                except ValueError:
+                    self._send_json(400, {"ok": False, "error": "非法 group id"})
+                    return
+                code, payload = api_mod.handle_group_delete(storage, gid)
+                self._send_json(code, payload)
+                return
             if path.startswith("/api/v1/deploy/targets/"):
                 if not self._require_deploy():
                     return
