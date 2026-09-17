@@ -135,3 +135,26 @@ sync_tree() {
   echo "[fail] sync_tool_missing: 本机无 rsync/tar/cp，无法同步代码" >&2
   return 1
 }
+
+# 产品打包从中心安装树读取 agent/。源不完整时 rsync --delete 会把目标机上的 agent 删掉。
+assert_package_tree() {
+  local root="${1:-}"
+  local label="${2:-tree}"
+  if [[ -z "$root" ]]; then
+    echo "[fail] package_incomplete: 未提供目录" >&2
+    return 1
+  fi
+  if [[ ! -f "$root/agent/__init__.py" ]]; then
+    echo "[fail] package_incomplete: ${label} 缺少 agent/__init__.py（中心安装目录必须保留 agent 包）" >&2
+    return 1
+  fi
+  if [[ ! -d "$root/common" ]]; then
+    echo "[fail] package_incomplete: ${label} 缺少 common/" >&2
+    return 1
+  fi
+  if [[ ! -d "$root/scripts" ]]; then
+    echo "[fail] package_incomplete: ${label} 缺少 scripts/" >&2
+    return 1
+  fi
+  return 0
+}

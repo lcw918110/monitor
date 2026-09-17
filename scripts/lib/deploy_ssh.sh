@@ -63,6 +63,10 @@ ssh_classify_fail() {
       echo "agent_start_fail"
       return 0
       ;;
+    *"package_incomplete"*|*"缺少 agent"*)
+      echo "package_incomplete"
+      return 0
+      ;;
     *"sync_tool_missing"*|*"rsync: command not found"*)
       echo "sync_tool_missing"
       return 0

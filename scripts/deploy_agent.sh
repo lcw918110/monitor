@@ -99,8 +99,14 @@ HOSTNAME_CFG="${HOSTNAME_CFG:-$DETECT_HOST}"
 
 echo "==> 同步代码到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" || fail_deploy dir_not_writable "无法创建安装目录: $INSTALL_DIR"
+if ! assert_package_tree "$ROOT" "源码 $ROOT"; then
+  fail_deploy package_incomplete "源树缺少 agent 包"
+fi
 if ! sync_tree "$ROOT" "$INSTALL_DIR"; then
   fail_deploy sync_tool_missing "无法同步代码（rsync 优先，缺失则 tar/cp）"
+fi
+if ! assert_package_tree "$INSTALL_DIR" "安装目录 $INSTALL_DIR"; then
+  fail_deploy package_incomplete "同步后缺少 agent 包"
 fi
 
 mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/run"

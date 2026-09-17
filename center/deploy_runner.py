@@ -27,6 +27,7 @@ from center.deploy_errors import (
     DIR_NOT_WRITABLE,
     KEY_MISSING,
     NO_PYTHON,
+    PACKAGE_INCOMPLETE,
     REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
@@ -101,14 +102,47 @@ chmod +x scripts/*.sh 2>/dev/null || true
 """
 
 
+REQUIRED_PACKAGE_PARTS = ("agent", "common", "scripts")
+OPTIONAL_PACKAGE_PARTS = ("center", "config", "README.md")
+
+
+def missing_package_parts(root: str) -> List[str]:
+    """中心安装树里产品打包必需的部分。缺 agent/ 时绝不能静默省略。"""
+    missing: List[str] = []
+    for name in REQUIRED_PACKAGE_PARTS:
+        full = os.path.join(root, name)
+        if name == "agent":
+            if not os.path.isfile(os.path.join(full, "__init__.py")):
+                missing.append("agent/__init__.py")
+        elif not os.path.isdir(full):
+            missing.append(name + "/")
+    return missing
+
+
 def _make_package_tgz(root: str) -> str:
+    missing = missing_package_parts(root)
+    if missing:
+        raise DeployError(
+            PACKAGE_INCOMPLETE,
+            "中心安装树缺少 %s；网页/SSH 打包从该目录读取，必须保留 agent 包"
+            % ", ".join(missing),
+        )
     fd, path = tempfile.mkstemp(prefix="monitor-agent-", suffix=".tgz")
     os.close(fd)
-    with tarfile.open(path, "w:gz") as tar:
-        for name in ("agent", "center", "common", "config", "scripts", "README.md"):
-            full = os.path.join(root, name)
-            if os.path.exists(full):
-                tar.add(full, arcname=name)
+    try:
+        with tarfile.open(path, "w:gz") as tar:
+            for name in REQUIRED_PACKAGE_PARTS + OPTIONAL_PACKAGE_PARTS:
+                full = os.path.join(root, name)
+                if name in REQUIRED_PACKAGE_PARTS:
+                    tar.add(full, arcname=name)
+                elif os.path.exists(full):
+                    tar.add(full, arcname=name)
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
     return path
 
 
@@ -451,7 +485,15 @@ run_root mkdir -p "$REMOTE_DIR" || {{
   echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
+if ! tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py'; then
+  echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心安装目录是否保留 agent 包）"
+  exit 1
+fi
 run_root tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
+if ! run_root test -f "$REMOTE_DIR/agent/__init__.py"; then
+  echo "[fail] package_incomplete: 解压后缺少 $REMOTE_DIR/agent/__init__.py"
+  exit 1
+fi
 cd "$REMOTE_DIR"
 run_root chmod +x scripts/*.sh || true
 run_root ./scripts/deploy_agent.sh \\
@@ -498,6 +540,11 @@ echo DEPLOY_DONE
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
+            elif "package_incomplete" in out or "No module named agent" in out:
+                code, human = (
+                    PACKAGE_INCOMPLETE,
+                    "安装包缺少 agent/（中心树必须保留 agent 包后再部署）",
+                )
             elif (
                 "sudo_required" in out
                 or "not in the sudoers" in out.lower()

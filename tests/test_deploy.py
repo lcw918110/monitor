@@ -20,7 +20,9 @@ from center.deploy_api import handle_add_target, handle_import_targets, handle_s
 from center.deploy_errors import (
     AGENT_START_FAIL,
     AUTH_FAIL,
+    DeployError,
     NO_PYTHON,
+    PACKAGE_INCOMPLETE,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
     SUDO_REQUIRED,
@@ -32,8 +34,10 @@ from center.deploy_errors import (
     run_ssh_with_retry,
 )
 from center.deploy_runner import (
+    _make_package_tgz,
     build_remote_root_helper,
     build_ssh_scp_cmds,
+    missing_package_parts,
     needs_remote_sudo,
     require_sshpass_for_password,
     resolve_remote_dir,
@@ -156,6 +160,8 @@ class ClassifyTests(unittest.TestCase):
             ("[fail] sudo_required: 非 root 无法写入 /opt", SUDO_REQUIRED),
             ("sudo: a password is required", SUDO_REQUIRED),
             ("jykj is not in the sudoers file", SUDO_REQUIRED),
+            ("[fail] package_incomplete: 安装包不含 agent/", PACKAGE_INCOMPLETE),
+            ("/usr/bin/python3.10: No module named agent", PACKAGE_INCOMPLETE),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -325,6 +331,16 @@ class FleetScriptTests(unittest.TestCase):
         self.assertIn("/opt/monitor-agent", asrc)
         self.assertNotIn("rsync -a --delete", asrc)
         self.assertIn("REMOTE_DIR=\"/opt/monitor-agent\"", src)
+        self.assertIn("package_incomplete", src)
+        self.assertNotIn("README.md 2>/dev/null", src)
+        self.assertIn("package_incomplete", asrc)
+        self.assertIn("assert_package_tree", asrc)
+        center = os.path.join(ROOT, "scripts", "deploy_center.sh")
+        with open(center, encoding="utf-8") as f:
+            csrc = f.read()
+        self.assertIn("assert_package_tree", csrc)
+        self.assertIn('assert_package_tree "$ROOT"', csrc)
+        self.assertIn('assert_package_tree "$INSTALL_DIR"', csrc)
 
     def test_bash_inventory_parse(self) -> None:
         script = textwrap.dedent(
@@ -442,6 +458,96 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         self.assertIn("2222", ssh_cmd)
         self.assertEqual(scp_cmd[0], "sshpass")
         self.assertIsNone(cleanup)
+
+
+class PackageTreeTests(unittest.TestCase):
+    def test_repo_root_complete(self) -> None:
+        self.assertEqual(missing_package_parts(ROOT), [])
+
+    def test_make_package_fails_hard_without_agent(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="pkg-miss-")
+        try:
+            os.makedirs(os.path.join(tmp, "common"))
+            os.makedirs(os.path.join(tmp, "scripts"))
+            with open(os.path.join(tmp, "README.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with self.assertRaises(DeployError) as ctx:
+                _make_package_tgz(tmp)
+            self.assertEqual(ctx.exception.code, PACKAGE_INCOMPLETE)
+            self.assertIn("agent", str(ctx.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_make_package_fails_hard_without_common(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="pkg-miss-")
+        try:
+            os.makedirs(os.path.join(tmp, "agent"))
+            os.makedirs(os.path.join(tmp, "scripts"))
+            with open(os.path.join(tmp, "agent", "__init__.py"), "w", encoding="utf-8") as f:
+                f.write("")
+            with self.assertRaises(DeployError) as ctx:
+                _make_package_tgz(tmp)
+            self.assertEqual(ctx.exception.code, PACKAGE_INCOMPLETE)
+            self.assertIn("common", str(ctx.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_make_package_tgz_contains_agent_init(self) -> None:
+        import tarfile
+
+        path = _make_package_tgz(ROOT)
+        try:
+            with tarfile.open(path, "r:gz") as tar:
+                names = set(tar.getnames())
+            self.assertIn("agent/__init__.py", names)
+            self.assertTrue(any(n == "common" or n.startswith("common/") for n in names))
+            self.assertTrue(any(n == "scripts" or n.startswith("scripts/") for n in names))
+        finally:
+            os.remove(path)
+
+    def test_assert_package_tree_bash(self) -> None:
+        script = textwrap.dedent(
+            """
+            set -euo pipefail
+            . "{root}/scripts/lib/sync_tree.sh"
+            assert_package_tree "{root}" "repo"
+            echo SOURCE_OK
+            tmp="$(mktemp -d)"
+            trap 'rm -rf "$tmp"' EXIT
+            if assert_package_tree "$tmp" "empty"; then
+              echo SHOULD_NOT
+              exit 1
+            fi
+            echo EMPTY_CAUGHT
+            """
+        ).format(root=ROOT)
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SOURCE_OK", proc.stdout)
+        self.assertIn("EMPTY_CAUGHT", proc.stdout)
+        self.assertIn("package_incomplete", proc.stdout)
+
+    def test_runner_extract_asserts_before_deploy_agent(self) -> None:
+        path = os.path.join(ROOT, "center", "deploy_runner.py")
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        extract_at = src.find("tar -xzf /tmp/monitor-agent.tgz")
+        self.assertGreater(extract_at, 0)
+        deploy_at = src.find("./scripts/deploy_agent.sh", extract_at)
+        self.assertGreater(deploy_at, extract_at)
+        between = src[extract_at:deploy_at]
+        self.assertIn("agent/__init__.py", between)
+        self.assertIn("package_incomplete", between)
+        self.assertIn("tar -tzf /tmp/monitor-agent.tgz", src)
+        self.assertNotIn(
+            "if os.path.exists(full):\n                tar.add(full, arcname=name)",
+            src,
+        )
 
 
 if __name__ == "__main__":

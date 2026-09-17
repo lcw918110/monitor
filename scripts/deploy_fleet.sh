@@ -64,14 +64,17 @@ cleanup() { rm -f "$TMP_TGZ"; }
 trap cleanup EXIT
 
 echo "==> 打包代码"
+if [[ ! -f "$ROOT/agent/__init__.py" || ! -d "$ROOT/common" || ! -d "$ROOT/scripts" ]]; then
+  echo "[fail] package_incomplete: 中心树缺少 agent/common/scripts，拒绝打包（网页部署从中心安装目录读取）"
+  exit 1
+fi
 tar -C "$ROOT" -czf "$TMP_TGZ" \
   --exclude '.git' \
   --exclude 'data' \
   --exclude '.deploy-*' \
   --exclude '__pycache__' \
   --exclude '*.db' \
-  agent center common config scripts tests README.md 2>/dev/null \
-  || tar -C "$ROOT" -czf "$TMP_TGZ" agent center common config scripts
+  agent center common config scripts tests README.md
 
 fail_one() {
   local ip="$1"
@@ -147,10 +150,16 @@ deploy_one() {
   out="$(ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" bash -s <<EOF
 set -euo pipefail
 sudo mkdir -p '$REMOTE_DIR'
-if [[ ! -f /tmp/monitor-agent.tgz ]]; then
-  true
-else
+if [[ -f /tmp/monitor-agent.tgz ]]; then
+  tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py' || {
+    echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心树）"
+    exit 1
+  }
   sudo tar -xzf /tmp/monitor-agent.tgz -C '$REMOTE_DIR'
+fi
+if ! sudo test -f '$REMOTE_DIR/agent/__init__.py'; then
+  echo "[fail] package_incomplete: $REMOTE_DIR 缺少 agent/__init__.py"
+  exit 1
 fi
 cd '$REMOTE_DIR'
 sudo chmod +x scripts/*.sh || true
