@@ -141,6 +141,17 @@ class ClassifyTests(unittest.TestCase):
         self.assertTrue(is_retryable_ssh_error("Connection timed out"))
         self.assertFalse(is_retryable_ssh_error("Permission denied"))
         self.assertFalse(is_retryable_ssh_error("Connection refused"))
+        scp_refused = (
+            "ssh: connect to host 127.0.0.1 port 2222: Connection refused\n"
+            "scp: Connection closed\n"
+        )
+        self.assertFalse(is_retryable_ssh_error(scp_refused))
+        code, msg = classify_deploy_failure(
+            scp_refused, default_message="SCP 失败 exit=255"
+        )
+        self.assertEqual(code, SSH_UNREACHABLE)
+        self.assertIn("不可达", msg)
+        self.assertNotIn("SCP 失败", msg)
 
     def test_ssh_retry_then_success(self) -> None:
         calls = {"n": 0}
@@ -297,6 +308,14 @@ class FleetScriptTests(unittest.TestCase):
             echo "$HOST_IP $HOST_ID $LINE_SSH_PORT"
             parse_inventory_line "10.1.2.4:2200 hid"
             echo "$HOST_IP $HOST_ID $LINE_SSH_PORT"
+            if ssh_is_retryable $'ssh: connect to host x port 2222: Connection refused\\nscp: Connection closed\\n'; then
+              echo RETRY_BAD
+              exit 1
+            fi
+            echo REFUSED_NO_RETRY
+            if ssh_is_retryable "Connection timed out"; then
+              echo TIMEOUT_RETRY
+            fi
             """
         ).format(root=ROOT)
         proc = subprocess.run(
@@ -309,6 +328,8 @@ class FleetScriptTests(unittest.TestCase):
         lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
         self.assertEqual(lines[0].split(), ["10.1.2.3", "gpu-x", "2222"])
         self.assertEqual(lines[1].split(), ["10.1.2.4", "hid", "2200"])
+        self.assertIn("REFUSED_NO_RETRY", proc.stdout)
+        self.assertIn("TIMEOUT_RETRY", proc.stdout)
 
 
 if __name__ == "__main__":

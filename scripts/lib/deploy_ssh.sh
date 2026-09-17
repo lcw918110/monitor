@@ -9,6 +9,11 @@ SSH_RETRY_ATTEMPTS="${SSH_RETRY_ATTEMPTS:-3}"
 ssh_is_retryable() {
   local blob
   blob="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  # scp 在 Connection refused 时也会附带 "connection closed"
+  case "$blob" in
+    *"permission denied"*|*"authentication failed"*|*"connection refused"*) return 1 ;;
+    *"no route to host"*|*"network is unreachable"*|*"could not resolve"*) return 1 ;;
+  esac
   case "$blob" in
     *"connection timed out"*|*"connection timeout"*|*"operation timed out"*) return 0 ;;
     *"connection closed"*|*"connection reset"*|*"broken pipe"*) return 0 ;;

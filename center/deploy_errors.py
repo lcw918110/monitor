@@ -63,6 +63,21 @@ def is_retryable_ssh_error(
         # 整段部署超时（如 600s）不重试；短连接超时由输出判断
         return False
     blob = (text or "").lower()
+    # scp 在 Connection refused 时也会附带 "scp: Connection closed"，不能当瞬时失败
+    hard = (
+        "permission denied",
+        "authentication failed",
+        "too many authentication",
+        "connection refused",
+        "no route to host",
+        "network is unreachable",
+        "could not resolve",
+        "name or service not known",
+        "no address associated",
+        "host key verification failed",
+    )
+    if any(n in blob for n in hard):
+        return False
     needles = (
         "connection timed out",
         "connection timeout",
@@ -99,12 +114,8 @@ def classify_deploy_failure(
         blob = (blob + "\n" + str(exc)).lower()
 
     def _msg(fallback: str) -> str:
-        if default_message:
-            return default_message
-        # 取最后几行非空输出，避免整段日志当消息
-        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-        tail = " | ".join(lines[-3:]) if lines else ""
-        return tail or fallback
+        # 已命中类别时用该类说明；default_message 只用于未命中时
+        return fallback
 
     if "ssh 私钥不存在" in blob:
         return KEY_MISSING, _msg("SSH 私钥不存在")
