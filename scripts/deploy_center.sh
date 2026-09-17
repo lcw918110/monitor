@@ -53,6 +53,8 @@ fi
 # 先复用本机已有 Python >= 3.8（中心端），没有再用 apt/yum/dnf 安装
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
+# shellcheck source=lib/sync_tree.sh
+. "$ROOT/scripts/lib/sync_tree.sh"
 MONITOR_INSTALL_PYTHON=1
 ensure_python 3 8 || exit 1
 log_python_choice
@@ -61,15 +63,10 @@ apply_python_ld_library_path
 echo "==> 同步代码到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 # 同步核心目录，保留已有 data/config
-rsync -a --delete \
-  --exclude 'data/' \
-  --exclude 'config/center.json' \
-  --exclude 'config/agent.json' \
-  --exclude '.git/' \
-  --exclude '.deploy-*/' \
-  --exclude '__pycache__/' \
-  --exclude '*.db' \
-  "$ROOT/" "$INSTALL_DIR/"
+if ! sync_tree "$ROOT" "$INSTALL_DIR"; then
+  echo "[fail] sync_tool_missing: 无法同步代码（rsync 优先，缺失则 tar/cp）"
+  exit 1
+fi
 
 mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/config" "$INSTALL_DIR/run"
 

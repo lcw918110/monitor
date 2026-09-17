@@ -350,6 +350,7 @@ class ResolvePythonScriptTests(unittest.TestCase):
         self.assertIn("resolve_python.sh", src)
         self.assertIn("ensure_python 3 6", src)
         self.assertIn("MONITOR_INSTALL_PYTHON=1", src)
+        self.assertIn("sync_tree.sh", src)
         self.assertNotIn('command -v python3 >/dev/null || { echo "需要 python3"', src)
 
 

@@ -21,6 +21,22 @@ import tempfile
 import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from center.deploy_errors import (
+    AGENT_START_FAIL,
+    AUTH_FAIL,
+    CENTER_URL_MISSING,
+    DIR_NOT_WRITABLE,
+    KEY_MISSING,
+    NO_PYTHON,
+    REMOTE_FAIL,
+    SSH_UNREACHABLE,
+    TIMEOUT,
+    UNKNOWN,
+    DeployError,
+    classify_deploy_failure,
+    format_fail,
+    run_ssh_with_retry,
+)
 from center.deploy_store import DeployStore
 
 
@@ -209,7 +225,8 @@ def test_ssh_ready(
             "ok": False,
             "ssh_ok": False,
             "writable": False,
-            "message": "SSH 私钥不存在: %s" % auth["key_path"],
+            "error_code": KEY_MISSING,
+            "message": format_fail(KEY_MISSING, "SSH 私钥不存在: %s" % auth["key_path"]),
             "remote_dir": remote_dir,
         }
     ssh_base, _, env, askpass_path = build_ssh_scp_cmds(ssh_port=ssh_port, auth=auth)
@@ -225,12 +242,9 @@ echo WRITE_OK
 echo REMOTE_DIR=$REMOTE_DIR
 """
     try:
-        proc = subprocess.run(
+        proc = run_ssh_with_retry(
             ssh_base + [remote, "bash", "-s"],
-            input=script,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            input_text=script,
             timeout=20,
             env=env,
         )
@@ -246,22 +260,30 @@ echo REMOTE_DIR=$REMOTE_DIR
                 "ok": True,
                 "ssh_ok": True,
                 "writable": True,
+                "error_code": "",
                 "message": "连通正常，具备部署条件（目录 %s 可写）" % resolved,
                 "remote_dir": resolved,
                 "detail": out,
             }
-        msg = "SSH 或写权限失败"
         if not ssh_ok:
-            msg = "SSH 登录失败（检查用户名/密码/私钥/网络）"
-        elif not writable:
-            msg = "SSH 已通，但安装目录不可写：%s（可改为 ~/monitor）" % remote_dir
-        if out:
-            msg = msg + "；输出: " + " | ".join(out.splitlines()[-5:])
+            code, human = classify_deploy_failure(
+                out,
+                default_code=SSH_UNREACHABLE,
+                default_message="SSH 登录失败（检查用户名/密码/私钥/网络/端口）",
+            )
+            if code in (REMOTE_FAIL, UNKNOWN) and "permission denied" in out.lower():
+                code = AUTH_FAIL
+        else:
+            code = DIR_NOT_WRITABLE
+            human = "SSH 已通，但安装目录不可写：%s（可改为 ~/monitor）" % remote_dir
+        if out and "输出:" not in human:
+            human = human + "；输出: " + " | ".join(out.splitlines()[-5:])
         return {
             "ok": False,
             "ssh_ok": ssh_ok,
             "writable": writable,
-            "message": msg,
+            "error_code": code,
+            "message": format_fail(code, human),
             "remote_dir": resolved,
             "detail": out,
         }
@@ -270,15 +292,18 @@ echo REMOTE_DIR=$REMOTE_DIR
             "ok": False,
             "ssh_ok": False,
             "writable": False,
-            "message": "连接超时（20s）",
+            "error_code": TIMEOUT,
+            "message": format_fail(TIMEOUT, "连接超时（20s）"),
             "remote_dir": remote_dir,
         }
     except Exception as exc:  # noqa: BLE001
+        code, human = classify_deploy_failure(str(exc), exc=exc)
         return {
             "ok": False,
             "ssh_ok": False,
             "writable": False,
-            "message": "探测异常: %s" % exc,
+            "error_code": code,
+            "message": format_fail(code, "探测异常: %s" % human),
             "remote_dir": remote_dir,
         }
     finally:
@@ -298,7 +323,7 @@ def deploy_one_target(
     root = _project_root()
     public_url = (settings.get("public_center_url") or "").strip()
     if not public_url:
-        raise RuntimeError("请先在部署设置中填写「中心对外访问地址」public_center_url")
+        raise DeployError(CENTER_URL_MISSING, "请先在部署设置中填写「中心对外访问地址」public_center_url")
 
     ip = target["ip"]
     ssh_user = target.get("ssh_user") or settings.get("default_ssh_user") or "root"
@@ -314,7 +339,7 @@ def deploy_one_target(
 
     auth = resolve_ssh_auth(target, settings)
     if auth["mode"] == "key" and auth["key_path"] and not os.path.isfile(auth["key_path"]):
-        raise RuntimeError("SSH 私钥不存在: %s（客户端 %s）" % (auth["key_path"], ip))
+        raise DeployError(KEY_MISSING, "SSH 私钥不存在: %s（客户端 %s）" % (auth["key_path"], ip))
 
     ssh_base, scp_base, env, askpass_path = build_ssh_scp_cmds(
         ssh_port=ssh_port, auth=auth
@@ -335,16 +360,23 @@ def deploy_one_target(
     try:
         log("[%s] 上传安装包..." % ip)
         try:
-            subprocess.check_call(
+            proc = run_ssh_with_retry(
                 scp_base + [tgz, "%s:/tmp/monitor-agent.tgz" % remote],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                timeout=60,
                 env=env,
+                log=log,
+                label="[%s]" % ip,
             )
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                "SCP 失败（请检查用户名/密码/私钥/网络）。exit=%s" % exc.returncode
-            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise DeployError(TIMEOUT, "SCP 超时") from exc
+        if proc.returncode != 0:
+            code, human = classify_deploy_failure(
+                proc.stdout or "",
+                default_code=SSH_UNREACHABLE,
+                default_message="SCP 失败（请检查用户名/密码/私钥/网络/端口）。exit=%s"
+                % proc.returncode,
+            )
+            raise DeployError(code, human)
         # 远端展开 ~ 后直接安装，避免嵌套 heredoc 在 set -u 下误展开变量
         center = public_url.rstrip("/")
         remote_script = f"""set -euo pipefail
@@ -370,25 +402,39 @@ rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE
 """
         log("[%s] 远端安装中..." % ip)
-        proc = subprocess.run(
-            ssh_base + [remote, "bash", "-s"],
-            input=remote_script,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=600,
-            env=env,
-        )
+        try:
+            proc = run_ssh_with_retry(
+                ssh_base + [remote, "bash", "-s"],
+                input_text=remote_script,
+                timeout=600,
+                env=env,
+                log=log,
+                label="[%s]" % ip,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DeployError(TIMEOUT, "远端安装超时（600s）") from exc
         out = proc.stdout or ""
         for line in out.splitlines()[-40:]:
             log("[%s] %s" % (ip, line))
+        if "DEPLOY_DONE" in out:
+            log("[%s] 部署成功" % ip)
+            return
         if proc.returncode != 0:
             hint = ""
             if "Permission denied" in out:
                 hint = "（权限不足：非 root 已自动改用 ~/monitor，若仍失败请检查家目录权限）"
             elif "unbound variable" in out:
                 hint = "（远端脚本变量错误，请更新中心端后重试）"
-            raise RuntimeError("远端安装失败，exit=%s%s" % (proc.returncode, hint))
+            code, human = classify_deploy_failure(
+                out,
+                default_code=REMOTE_FAIL,
+                default_message="远端安装失败，exit=%s%s" % (proc.returncode, hint),
+            )
+            if "未找到可用的 Python" in out:
+                code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
+            elif "上报自检失败" in out:
+                code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
+            raise DeployError(code, human)
         log("[%s] 部署成功" % ip)
     finally:
         try:
@@ -445,11 +491,18 @@ class DeployRunner:
             self.store.update_target_status(tid, "deploying", "部署中")
             try:
                 deploy_one_target(t, settings, self.token, log)
-                self.store.update_target_status(tid, "success", "部署成功")
+                self.store.update_target_status(tid, "success", "部署成功", error_code="")
+            except DeployError as exc:
+                ok_all = False
+                log("[%s] 失败: %s" % (t.get("ip"), str(exc)))
+                self.store.update_target_status(
+                    tid, "failed", str(exc), error_code=exc.code
+                )
             except Exception as exc:  # noqa: BLE001
                 ok_all = False
-                msg = str(exc)
+                code, human = classify_deploy_failure(str(exc), exc=exc)
+                msg = format_fail(code, human)
                 log("[%s] 失败: %s" % (t.get("ip"), msg))
-                self.store.update_target_status(tid, "failed", msg)
+                self.store.update_target_status(tid, "failed", msg, error_code=code)
         self.store.finish_job(job_id, "success" if ok_all else "failed")
         log("任务结束: %s" % ("全部成功" if ok_all else "存在失败"))

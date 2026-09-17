@@ -45,6 +45,7 @@ class DeployStore:
                         remote_dir TEXT NOT NULL DEFAULT '/opt/monitor',
                         status TEXT NOT NULL DEFAULT 'pending',
                         last_message TEXT,
+                        last_error_code TEXT DEFAULT '',
                         last_deploy_at INTEGER,
                         created_at INTEGER NOT NULL,
                         peer_hosts TEXT DEFAULT '[]',
@@ -108,6 +109,10 @@ class DeployStore:
                 if "ssh_key_path" not in cols:
                     alters.append(
                         "ALTER TABLE deploy_targets ADD COLUMN ssh_key_path TEXT DEFAULT ''"
+                    )
+                if "last_error_code" not in cols:
+                    alters.append(
+                        "ALTER TABLE deploy_targets ADD COLUMN last_error_code TEXT DEFAULT ''"
                     )
                 for sql in alters:
                     conn.execute(sql)
@@ -280,6 +285,7 @@ class DeployStore:
         )
         item.setdefault("ssh_password", "")
         item.setdefault("ssh_key_path", "")
+        item.setdefault("last_error_code", "")
         pwd_set = bool(str(item.get("ssh_password") or "").strip())
         key_set = bool(str(item.get("ssh_key_path") or "").strip())
         if pwd_set:
@@ -423,23 +429,23 @@ class DeployStore:
                 conn.close()
 
     def import_targets(self, text: str, defaults: Optional[Dict[str, Any]] = None) -> int:
+        from center.deploy_errors import parse_inventory_line
+
         defaults = defaults or {}
+        default_port = int(defaults.get("ssh_port") or 22)
         count = 0
         for raw in text.splitlines():
-            line = raw.split("#", 1)[0].strip()
-            if not line:
+            parsed = parse_inventory_line(raw, default_port=default_port)
+            if not parsed:
                 continue
-            parts = line.split()
-            ip = parts[0]
-            host_id = parts[1] if len(parts) > 1 else ip
             self.add_target(
                 {
-                    "ip": ip,
-                    "host_id": host_id,
-                    "hostname": host_id,
+                    "ip": parsed["ip"],
+                    "host_id": parsed["host_id"],
+                    "hostname": parsed["host_id"],
                     "host_type": defaults.get("host_type") or "auto",
                     "ssh_user": defaults.get("ssh_user") or "root",
-                    "ssh_port": defaults.get("ssh_port") or 22,
+                    "ssh_port": parsed["ssh_port"],
                     "remote_dir": defaults.get("remote_dir") or "/opt/monitor",
                 }
             )
@@ -447,18 +453,30 @@ class DeployStore:
         return count
 
     def update_target_status(
-        self, target_id: int, status: str, message: str = ""
+        self,
+        target_id: int,
+        status: str,
+        message: str = "",
+        error_code: str = "",
     ) -> None:
+        if status == "success":
+            error_code = ""
         with self._lock:
             conn = self._connect()
             try:
                 conn.execute(
                     """
                     UPDATE deploy_targets
-                    SET status=?, last_message=?, last_deploy_at=?
+                    SET status=?, last_message=?, last_deploy_at=?, last_error_code=?
                     WHERE id=?
                     """,
-                    (status, message[:2000], int(time.time()), target_id),
+                    (
+                        status,
+                        message[:2000],
+                        int(time.time()),
+                        error_code or "",
+                        target_id,
+                    ),
                 )
                 conn.commit()
             finally:
