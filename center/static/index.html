@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · 时段利用 · v1.4.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.4.0</p>
       </div>
     </div>
     <div class="top-meta">
@@ -24,72 +24,93 @@
     </div>
   </header>
 
-  <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
-  <section class="stats" id="stats" aria-label="集群统计"></section>
+  <nav class="tabs" role="tablist" aria-label="监测台页签">
+    <button type="button" class="tab-btn active" role="tab" id="tabBtnRealtime" data-tab="realtime" aria-selected="true" aria-controls="viewRealtime">实时监控</button>
+    <button type="button" class="tab-btn" role="tab" id="tabBtnPeriod" data-tab="period" aria-selected="false" aria-controls="viewPeriod">时段统计</button>
+  </nav>
 
-  <section class="period-util-wrap" aria-label="时段利用">
-    <section class="panel period-util-panel">
-      <div class="panel-head">
-        <h2>时段利用</h2>
-        <div class="filters period-util-controls" id="periodUtilControls"></div>
-      </div>
-      <div class="period-util-body" id="periodUtilBody">
-        <p class="muted">加载时段统计…</p>
-      </div>
-    </section>
-  </section>
+  <div id="viewRealtime" class="tab-view" role="tabpanel" aria-labelledby="tabBtnRealtime">
+    <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
+    <section class="stats" id="stats" aria-label="集群统计"></section>
 
-  <main class="layout">
-    <section class="panel">
-      <div class="panel-head">
-        <h2>主机资源</h2>
-        <div class="filters">
-          <input id="filterQ" type="search" placeholder="搜索主机..." />
-          <select id="filterType">
-            <option value="">全部类型</option>
-            <option value="cpu">CPU</option>
-            <option value="gpu">GPU（加速卡）</option>
-            <option value="auto">auto</option>
-          </select>
-          <select id="filterStatus">
-            <option value="">全部判定</option>
-            <option value="critical">异常</option>
-            <option value="warn">偏高</option>
-            <option value="normal">正常</option>
-            <option value="unknown">未知</option>
-          </select>
-          <span class="muted" id="hostCount"></span>
+    <main class="layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>主机资源</h2>
+          <div class="filters">
+            <input id="filterQ" type="search" placeholder="搜索主机..." />
+            <select id="filterType">
+              <option value="">全部类型</option>
+              <option value="cpu">CPU</option>
+              <option value="gpu">GPU（加速卡）</option>
+              <option value="auto">auto</option>
+            </select>
+            <select id="filterStatus">
+              <option value="">全部判定</option>
+              <option value="critical">异常</option>
+              <option value="warn">偏高</option>
+              <option value="normal">正常</option>
+              <option value="unknown">未知</option>
+            </select>
+            <span class="muted" id="hostCount"></span>
+          </div>
         </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>在线</th>
-              <th>资源判定</th>
-              <th>主机</th>
-              <th>类型</th>
-              <th>CPU 实时/额定</th>
-              <th>NPU</th>
-              <th>磁盘</th>
-              <th>最近上报</th>
-            </tr>
-          </thead>
-          <tbody id="hostBody"></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>在线</th>
+                <th>资源判定</th>
+                <th>主机</th>
+                <th>类型</th>
+                <th>CPU 实时/额定</th>
+                <th>NPU</th>
+                <th>磁盘</th>
+                <th>最近上报</th>
+              </tr>
+            </thead>
+            <tbody id="hostBody"></tbody>
+          </table>
+        </div>
+      </section>
 
-    <section class="panel detail">
-      <div class="panel-head">
-        <h2>主机详情</h2>
-        <span class="muted" id="detailTitle">请选择左侧主机</span>
-      </div>
-      <div id="detailBody" class="detail-body">
-        <p class="empty">暂无选中主机</p>
-      </div>
+      <section class="panel detail">
+        <div class="panel-head">
+          <h2>主机详情</h2>
+          <span class="muted" id="detailTitle">请选择左侧主机</span>
+        </div>
+        <div id="detailBody" class="detail-body">
+          <p class="empty">暂无选中主机</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="viewPeriod" class="tab-view" role="tabpanel" aria-labelledby="tabBtnPeriod" hidden>
+    <section class="period-toolbar" aria-label="时段统计筛选">
+      <h2>时段统计</h2>
+      <div class="filters period-util-controls" id="periodUtilControls"></div>
     </section>
-  </main>
+    <div class="period-layout">
+      <section class="panel period-util-panel">
+        <div class="panel-head">
+          <h2>集群与主机</h2>
+        </div>
+        <div class="period-util-body" id="periodUtilBody">
+          <p class="muted">加载时段统计…</p>
+        </div>
+      </section>
+      <section class="panel period-detail">
+        <div class="panel-head">
+          <h2>主机时段</h2>
+          <span class="muted" id="periodDetailTitle">请选择主机</span>
+        </div>
+        <div id="periodDetailBody" class="detail-body">
+          <p class="empty">点选左侧主机，查看该机时段指标与趋势</p>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <footer class="foot">
     <span>聚焦 CPU / NPU 监测与统计 · 异常仅判定展示 · 不引入外部监控软件</span>

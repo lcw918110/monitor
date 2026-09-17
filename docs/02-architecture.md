@@ -27,7 +27,7 @@
 ┌────────────────────────────▼─────────────────────────────┐
 │                     Center（中心端）                        │
 │  HTTP Router → API / Deploy API → Storage (SQLite)       │
-│  Static Web：监测台 · 主机详情(时段统计) · 部署页           │
+│  Static Web：监测台（实时监控 / 时段统计页签）· 部署页      │
 └────────────────────────────▲─────────────────────────────┘
                              │ POST /api/v1/metrics
         ┌────────────────────┼────────────────────┐
@@ -49,7 +49,7 @@
 | 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
 | 异常判定 | `center/anomaly.py` | 阈值着色判定 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
-| Web UI | `center/static/*` | 监测台、部署页 |
+| Web UI | `center/static/*` | 监测台（实时监控 / 时段统计页签）、部署页 |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
 | 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
