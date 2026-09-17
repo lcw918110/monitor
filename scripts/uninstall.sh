@@ -11,7 +11,7 @@ usage() {
 用法: $0 --role center|agent [--dir DIR] [--purge-data]
 
   --role          center 或 agent
-  --dir           安装目录（默认 /opt/monitor 或 ~/monitor）
+  --dir           安装目录（center 默认 /opt/monitor；agent 默认 /opt/monitor-agent）
   --purge-data    同时删除 data 与配置
 EOF
 }
@@ -30,9 +30,17 @@ done
 
 if [[ -z "$INSTALL_DIR" ]]; then
   if [[ "$(id -u)" -eq 0 ]]; then
-    INSTALL_DIR=/opt/monitor
+    if [[ "$ROLE" == "center" ]]; then
+      INSTALL_DIR=/opt/monitor
+    else
+      INSTALL_DIR=/opt/monitor-agent
+    fi
   else
-    INSTALL_DIR="${HOME}/monitor"
+    if [[ "$ROLE" == "center" ]]; then
+      INSTALL_DIR="${HOME}/monitor"
+    else
+      INSTALL_DIR="${HOME}/monitor-agent"
+    fi
   fi
 fi
 

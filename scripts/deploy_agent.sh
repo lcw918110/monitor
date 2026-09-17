@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 客户端（Agent）一键部署：安装、写配置、systemd、启动、上报自检
+# 客户端（Agent）一键部署：由中心产品路径在目标机调用（网页 SSH / deploy_fleet.sh）。
+# 也可在目标机本机执行；不要从笔记本 scp 一套旁路脚本。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INSTALL_DIR="${INSTALL_DIR:-/opt/monitor}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/monitor-agent}"
 CENTER_URL=""
 HOST_ID=""
 HOSTNAME_CFG=""
@@ -22,7 +23,7 @@ usage() {
                       （可写根地址，脚本自动补 /api/v1/metrics）
 
 选项:
-  --dir DIR           安装目录（默认 /opt/monitor）
+  --dir DIR           安装目录（默认 /opt/monitor-agent；与 Center 的 /opt/monitor 分开）
   --host-id ID        主机唯一 ID（默认 hostname）
   --hostname NAME     显示主机名
   --host-type TYPE    auto|npu|gpu|app（默认 auto）
@@ -65,8 +66,8 @@ if [[ "$CENTER_URL" != */api/v1/metrics ]]; then
 fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  if [[ "$INSTALL_DIR" == "/opt/monitor" ]]; then
-    INSTALL_DIR="${HOME}/monitor"
+  if [[ "$INSTALL_DIR" == "/opt/monitor-agent" || "$INSTALL_DIR" == "/opt/monitor" ]]; then
+    INSTALL_DIR="${HOME}/monitor-agent"
     echo "[info] 非 root，安装目录改为: $INSTALL_DIR"
   fi
   NO_SYSTEMD=1

@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -29,7 +28,9 @@ from center.deploy_errors import (
     KEY_MISSING,
     NO_PYTHON,
     REMOTE_FAIL,
+    SSHPASS_MISSING,
     SSH_UNREACHABLE,
+    SUDO_REQUIRED,
     TIMEOUT,
     UNKNOWN,
     DeployError,
@@ -37,7 +38,10 @@ from center.deploy_errors import (
     format_fail,
     run_ssh_with_retry,
 )
-from center.deploy_store import DeployStore
+from center.deploy_store import (
+    DEFAULT_AGENT_REMOTE_DIR,
+    DeployStore,
+)
 
 
 LogFn = Callable[[str], None]
@@ -63,14 +67,14 @@ def build_install_script(
     在线 SSH 部署路径见 deploy_one_target（使用 REMOTE_DIR，不经过本函数）。
     """
     center = public_center_url.rstrip("/")
-    rd = (remote_dir or "/opt/monitor").strip() or "/opt/monitor"
+    rd = (remote_dir or DEFAULT_AGENT_REMOTE_DIR).strip() or DEFAULT_AGENT_REMOTE_DIR
     if rd.startswith("~"):
         install_assign = 'INSTALL_DIR="$HOME%s"' % rd[1:]
     else:
         install_assign = "INSTALL_DIR=%s" % shlex.quote(rd)
     return f"""#!/usr/bin/env bash
 set -euo pipefail
-# 由中心端页面生成的客户端安装脚本
+# 由中心端产品部署路径生成：仅在代码已同步到目标机后补跑 deploy_agent.sh
 CENTER_URL={shlex.quote(center)}
 HOST_ID={shlex.quote(host_id)}
 HOSTNAME_CFG={shlex.quote(hostname or host_id)}
@@ -81,7 +85,7 @@ INTERVAL={int(interval_seconds or 15)}
 
 if [[ ! -d "$INSTALL_DIR/agent" ]]; then
   echo "未找到监控代码目录: $INSTALL_DIR"
-  echo "请先由中心端 SSH 自动部署，或手动把代码同步到该目录后再执行。"
+  echo "请走中心「客户端部署」或在中心机执行 deploy_fleet.sh / deploy_agent.sh，不要从笔记本 scp。"
   exit 1
 fi
 cd "$INSTALL_DIR"
@@ -131,15 +135,18 @@ def resolve_ssh_auth(
     return {"mode": "default_key", "password": "", "key_path": ""}
 
 
-def _build_askpass(password: str) -> str:
-    fd, path = tempfile.mkstemp(prefix="monitor-askpass-", suffix=".sh")
-    os.close(fd)
-    # 用 printf 避免 echo 对 -n 等参数误判
-    body = "#!/bin/sh\nprintf '%%s\\n' %s\n" % shlex.quote(password)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(body)
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-    return path
+def require_sshpass_for_password(auth: Dict[str, Any]) -> None:
+    """密码登录必须在中心机安装 sshpass；缺了就给出短码，避免 ASKPASS opaque 失败。"""
+    if (auth.get("mode") or "") != "password":
+        return
+    if not str(auth.get("password") or "").strip():
+        return
+    if shutil.which("sshpass"):
+        return
+    raise DeployError(
+        SSHPASS_MISSING,
+        "密码部署需要中心机安装 sshpass（apt/yum/dnf install sshpass），或改用 SSH 密钥",
+    )
 
 
 def build_ssh_scp_cmds(
@@ -147,7 +154,11 @@ def build_ssh_scp_cmds(
     ssh_port: int,
     auth: Dict[str, Any],
 ) -> Tuple[List[str], List[str], Dict[str, str], Optional[str]]:
-    """构造 ssh/scp 命令与环境变量；返回 (ssh_cmd, scp_cmd, env, askpass_path_to_cleanup)。"""
+    """构造 ssh/scp 命令与环境变量；返回 (ssh_cmd, scp_cmd, env, unused_cleanup)。
+
+    密码模式依赖中心机 ``sshpass``（见 require_sshpass_for_password），不再静默走 ASKPASS。
+    """
+    require_sshpass_for_password(auth)
     common = [
         "-o",
         "StrictHostKeyChecking=accept-new",
@@ -157,7 +168,6 @@ def build_ssh_scp_cmds(
     mode = auth.get("mode") or "default_key"
     key_path = auth.get("key_path") or ""
     password = auth.get("password") or ""
-    cleanup: Optional[str] = None
     env = dict(os.environ)
 
     if mode == "password" and password:
@@ -171,20 +181,9 @@ def build_ssh_scp_cmds(
                 "NumberOfPasswordPrompts=1",
             ]
         )
-        ssh_cmd = ["ssh", "-p", str(ssh_port)] + common
-        scp_cmd = ["scp", "-P", str(ssh_port)] + common
-        if shutil.which("sshpass"):
-            ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
-            scp_cmd = ["sshpass", "-p", password] + scp_cmd
-        else:
-            cleanup = _build_askpass(password)
-            env["SSH_ASKPASS"] = cleanup
-            env["SSH_ASKPASS_REQUIRE"] = "force"
-            env["DISPLAY"] = env.get("DISPLAY") or ":0"
-            # 无 TTY 时才会走 ASKPASS
-            ssh_cmd = ["ssh", "-p", str(ssh_port)] + common
-            scp_cmd = ["scp", "-P", str(ssh_port)] + common
-        return ssh_cmd, scp_cmd, env, cleanup
+        ssh_cmd = ["sshpass", "-p", password, "ssh", "-p", str(ssh_port)] + common
+        scp_cmd = ["sshpass", "-p", password, "scp", "-P", str(ssh_port)] + common
+        return ssh_cmd, scp_cmd, env, None
 
     # 密钥 / 默认密钥：禁止交互卡住
     common.extend(["-o", "BatchMode=yes"])
@@ -193,15 +192,56 @@ def build_ssh_scp_cmds(
     if mode == "key" and key_path:
         ssh_cmd.extend(["-i", key_path, "-o", "IdentitiesOnly=yes"])
         scp_cmd.extend(["-i", key_path, "-o", "IdentitiesOnly=yes"])
-    return ssh_cmd, scp_cmd, env, cleanup
+    return ssh_cmd, scp_cmd, env, None
+
+
+def needs_remote_sudo(ssh_user: str, remote_dir: str) -> bool:
+    """非 root 往 /opt 装 Agent 时走 sudo，保住已有 systemd 路径。"""
+    user = (ssh_user or "root").strip() or "root"
+    if user == "root":
+        return False
+    rd = (remote_dir or "").strip()
+    if not rd or rd.startswith("~") or rd.startswith("$HOME"):
+        return False
+    return rd.startswith("/opt/") or rd.startswith("/usr/local/")
+
+
+def build_remote_root_helper(auth: Dict[str, Any], *, use_sudo: bool) -> str:
+    """远端 run_root：先 sudo -n，不行再用同一 SSH 密码 sudo -S。"""
+    password = str(auth.get("password") or "").strip() if use_sudo else ""
+    pw_assign = "MONITOR_SUDO_PW=%s" % shlex.quote(password) if password else 'MONITOR_SUDO_PW=""'
+    need = "1" if use_sudo else "0"
+    return f"""
+NEED_SUDO={need}
+{pw_assign}
+run_root() {{
+  if [[ "$(id -u)" -eq 0 || "$NEED_SUDO" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  if sudo -n true >/dev/null 2>&1; then
+    sudo -n "$@" </dev/null
+    return
+  fi
+  if [[ -n "${{MONITOR_SUDO_PW:-}}" ]]; then
+    if printf '%s\\n' "$MONITOR_SUDO_PW" | sudo -S -p '' "$@"; then
+      return 0
+    fi
+  fi
+  echo "[fail] sudo_required: 非 root 无法写入 /opt（请配置免密 sudo，或把远端目录改为 ~/monitor-agent）"
+  exit 1
+}}
+"""
 
 
 def resolve_remote_dir(ssh_user: str, remote_dir: str) -> str:
-    """非 root 默认不要用 /opt/monitor（通常无写权限），改为 ~/monitor。"""
-    user = (ssh_user or "root").strip() or "root"
-    rd = (remote_dir or "").strip() or "/opt/monitor"
-    if user != "root" and rd.rstrip("/") == "/opt/monitor":
-        return "~/monitor"
+    """返回清单中的远端目录；空则新产品默认 /opt/monitor-agent。
+
+    非 root 写 /opt 不再改写成家目录（否则会拆掉已有 monitor-agent.service）。
+    由 build_remote_root_helper 在远端 sudo。
+    """
+    _ = ssh_user
+    rd = (remote_dir or "").strip() or DEFAULT_AGENT_REMOTE_DIR
     return rd
 
 
@@ -217,7 +257,7 @@ def test_ssh_ready(
     ssh_port = int(target.get("ssh_port") or settings.get("default_ssh_port") or 22)
     remote_dir = resolve_remote_dir(
         ssh_user,
-        target.get("remote_dir") or settings.get("default_remote_dir") or "/opt/monitor",
+        target.get("remote_dir") or settings.get("default_remote_dir") or DEFAULT_AGENT_REMOTE_DIR,
     )
     auth = resolve_ssh_auth(target, settings)
     if auth["mode"] == "key" and auth["key_path"] and not os.path.isfile(auth["key_path"]):
@@ -229,15 +269,28 @@ def test_ssh_ready(
             "message": format_fail(KEY_MISSING, "SSH 私钥不存在: %s" % auth["key_path"]),
             "remote_dir": remote_dir,
         }
-    ssh_base, _, env, askpass_path = build_ssh_scp_cmds(ssh_port=ssh_port, auth=auth)
+    try:
+        ssh_base, _, env, _unused = build_ssh_scp_cmds(ssh_port=ssh_port, auth=auth)
+    except DeployError as exc:
+        return {
+            "ok": False,
+            "ssh_ok": False,
+            "writable": False,
+            "error_code": exc.code,
+            "message": str(exc),
+            "remote_dir": remote_dir,
+        }
     remote = "%s@%s" % (ssh_user, ip)
+    helper = build_remote_root_helper(
+        auth, use_sudo=needs_remote_sudo(ssh_user, remote_dir)
+    )
     script = f"""set -euo pipefail
 echo SSH_OK
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
-mkdir -p "$REMOTE_DIR"
-TESTFILE="$REMOTE_DIR/.monitor_write_test.$$"
-echo ok > "$TESTFILE"
-rm -f "$TESTFILE"
+{helper}
+run_root mkdir -p "$REMOTE_DIR"
+run_root touch "$REMOTE_DIR/.monitor_write_test.$$"
+run_root rm -f "$REMOTE_DIR/.monitor_write_test.$$"
 echo WRITE_OK
 echo REMOTE_DIR=$REMOTE_DIR
 """
@@ -274,8 +327,20 @@ echo REMOTE_DIR=$REMOTE_DIR
             if code in (REMOTE_FAIL, UNKNOWN) and "permission denied" in out.lower():
                 code = AUTH_FAIL
         else:
-            code = DIR_NOT_WRITABLE
-            human = "SSH 已通，但安装目录不可写：%s（可改为 ~/monitor）" % remote_dir
+            blob = out.lower()
+            if (
+                "sudo_required" in out
+                or "not in the sudoers" in blob
+                or "a password is required" in blob
+            ):
+                code = SUDO_REQUIRED
+                human = "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
+            else:
+                code = DIR_NOT_WRITABLE
+                human = (
+                    "SSH 已通，但安装目录不可写：%s（非 root 写 /opt 需 sudo，或改为 ~/monitor-agent）"
+                    % remote_dir
+                )
         if out and "输出:" not in human:
             human = human + "；输出: " + " | ".join(out.splitlines()[-5:])
         return {
@@ -306,12 +371,6 @@ echo REMOTE_DIR=$REMOTE_DIR
             "message": format_fail(code, "探测异常: %s" % human),
             "remote_dir": remote_dir,
         }
-    finally:
-        if askpass_path:
-            try:
-                os.remove(askpass_path)
-            except OSError:
-                pass
 
 
 def deploy_one_target(
@@ -330,7 +389,7 @@ def deploy_one_target(
     ssh_port = int(target.get("ssh_port") or settings.get("default_ssh_port") or 22)
     remote_dir = resolve_remote_dir(
         ssh_user,
-        target.get("remote_dir") or settings.get("default_remote_dir") or "/opt/monitor",
+        target.get("remote_dir") or settings.get("default_remote_dir") or DEFAULT_AGENT_REMOTE_DIR,
     )
     host_id = target.get("host_id") or ip
     hostname = target.get("hostname") or host_id
@@ -341,7 +400,7 @@ def deploy_one_target(
     if auth["mode"] == "key" and auth["key_path"] and not os.path.isfile(auth["key_path"]):
         raise DeployError(KEY_MISSING, "SSH 私钥不存在: %s（客户端 %s）" % (auth["key_path"], ip))
 
-    ssh_base, scp_base, env, askpass_path = build_ssh_scp_cmds(
+    ssh_base, scp_base, env, _unused = build_ssh_scp_cmds(
         ssh_port=ssh_port, auth=auth
     )
     mode_label = {
@@ -351,6 +410,8 @@ def deploy_one_target(
     }.get(auth["mode"], auth["mode"])
     log("[%s] 认证方式: %s  用户=%s 端口=%s" % (ip, mode_label, ssh_user, ssh_port))
     log("[%s] 安装目录: %s" % (ip, remote_dir))
+    if needs_remote_sudo(ssh_user, remote_dir):
+        log("[%s] 非 root 写 /opt：远端将 sudo -n，失败则用同一密码 sudo -S" % ip)
     if auth["mode"] == "key":
         log("[%s] 私钥: %s" % (ip, auth["key_path"]))
 
@@ -379,18 +440,21 @@ def deploy_one_target(
             raise DeployError(code, human)
         # 远端展开 ~ 后直接安装，避免嵌套 heredoc 在 set -u 下误展开变量
         center = public_url.rstrip("/")
+        helper = build_remote_root_helper(
+            auth, use_sudo=needs_remote_sudo(ssh_user, remote_dir)
+        )
         remote_script = f"""set -euo pipefail
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
 echo "REMOTE_DIR=$REMOTE_DIR"
-mkdir -p "$REMOTE_DIR" || {{
-  echo "无法创建安装目录: $REMOTE_DIR"
-  echo "非 root 用户请使用 ~/monitor，或在清单中修改「远端安装目录」"
+{helper}
+run_root mkdir -p "$REMOTE_DIR" || {{
+  echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
-tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
+run_root tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
 cd "$REMOTE_DIR"
-chmod +x scripts/*.sh 2>/dev/null || true
-./scripts/deploy_agent.sh \\
+run_root chmod +x scripts/*.sh || true
+run_root ./scripts/deploy_agent.sh \\
   --center-url {shlex.quote(center)} \\
   --dir "$REMOTE_DIR" \\
   --host-id {shlex.quote(host_id)} \\
@@ -422,7 +486,7 @@ echo DEPLOY_DONE
         if proc.returncode != 0:
             hint = ""
             if "Permission denied" in out:
-                hint = "（权限不足：非 root 已自动改用 ~/monitor，若仍失败请检查家目录权限）"
+                hint = "（非 root 写 /opt 需 sudo；或把远端目录改为 ~/monitor-agent）"
             elif "unbound variable" in out:
                 hint = "（远端脚本变量错误，请更新中心端后重试）"
             code, human = classify_deploy_failure(
@@ -434,6 +498,12 @@ echo DEPLOY_DONE
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
+            elif (
+                "sudo_required" in out
+                or "not in the sudoers" in out.lower()
+                or "a password is required" in out.lower()
+            ):
+                code, human = SUDO_REQUIRED, "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码）"
             raise DeployError(code, human)
         log("[%s] 部署成功" % ip)
     finally:
@@ -441,11 +511,6 @@ echo DEPLOY_DONE
             os.remove(tgz)
         except OSError:
             pass
-        if askpass_path:
-            try:
-                os.remove(askpass_path)
-            except OSError:
-                pass
 
 
 class DeployRunner:

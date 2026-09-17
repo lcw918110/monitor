@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 批量部署客户端：按 hosts 清单在多台机器上安装 Agent（需 SSH）
+# 批量部署客户端：在**中心机**上按 hosts 清单 SSH 安装 Agent。
+# 这是产品部署路径的 CLI（与 /deploy.html 同一套脚本），不要从笔记本 sshpass+scp 旁路。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,7 +12,7 @@ CENTER_URL=""
 TOKEN=""
 SSH_USER="${USER}"
 SSH_PORT=22
-REMOTE_DIR="/opt/monitor"
+REMOTE_DIR="/opt/monitor-agent"
 PARALLEL=4
 
 usage() {
@@ -33,7 +34,7 @@ hosts 文件每行一台（# 开头为注释）：
   --ssh-user USER     SSH 用户（默认当前用户）
   --ssh-port PORT     默认 SSH 端口（默认 22）
   --port PORT         同 --ssh-port
-  --remote-dir DIR    远端安装目录（默认 /opt/monitor）
+  --remote-dir DIR    远端安装目录（默认 /opt/monitor-agent；Center 仍用 /opt/monitor）
   --parallel N        并发数（默认 4）
 EOF
 }

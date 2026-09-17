@@ -3,6 +3,8 @@
   let pollTimer = null;
   let editingId = null;
 
+  const DEFAULT_AGENT_DIR = "/opt/monitor-agent";
+
   const $ = (id) => document.getElementById(id);
 
   function escapeHtml(s) {
@@ -72,7 +74,7 @@
     $("publicUrl").value = publicUrl;
     $("sshUser").value = s.default_ssh_user || "root";
     $("sshPort").value = s.default_ssh_port || 22;
-    $("remoteDir").value = s.default_remote_dir || "/opt/monitor";
+    $("remoteDir").value = s.default_remote_dir || DEFAULT_AGENT_DIR;
     $("sshKey").value = s.ssh_key_path || "";
     $("interval").value = s.interval_seconds || 15;
     $("sshPassword").value = "";
@@ -97,7 +99,7 @@
       public_center_url: publicUrl,
       default_ssh_user: $("sshUser").value.trim() || "root",
       default_ssh_port: Number($("sshPort").value || 22),
-      default_remote_dir: $("remoteDir").value.trim() || "/opt/monitor",
+      default_remote_dir: $("remoteDir").value.trim() || DEFAULT_AGENT_DIR,
       ssh_key_path: $("sshKey").value.trim(),
       interval_seconds: Number($("interval").value || 15),
     };
@@ -309,7 +311,7 @@
       remote_dir:
         $("tRemoteDir").value.trim() ||
         $("remoteDir").value.trim() ||
-        "/opt/monitor",
+        DEFAULT_AGENT_DIR,
       peer_hosts: $("tPeers").value.trim(),
     };
     const pwd = $("tPassword").value;
@@ -349,7 +351,7 @@
       remote_dir:
         $("tRemoteDir").value.trim() ||
         $("remoteDir").value.trim() ||
-        "/opt/monitor",
+        DEFAULT_AGENT_DIR,
     };
     const pwd = $("tPassword").value || $("sshPassword").value;
     if (pwd) body.ssh_password = pwd;

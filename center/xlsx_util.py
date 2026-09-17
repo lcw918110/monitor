@@ -202,7 +202,7 @@ def build_import_template() -> bytes:
             "22",
             "",
             "",
-            "/opt/monitor",
+            "/opt/monitor-agent",
             "网关=10.0.0.1;存储=10.0.0.50",
         ],
         [
@@ -214,7 +214,7 @@ def build_import_template() -> bytes:
             "22",
             "your-password",
             "",
-            "/opt/monitor",
+            "~/monitor-agent",
             "网关=10.0.0.1;业务机=10.0.0.21",
         ],
         [

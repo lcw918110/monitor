@@ -21,7 +21,9 @@ from center.deploy_errors import (
     AGENT_START_FAIL,
     AUTH_FAIL,
     NO_PYTHON,
+    SSHPASS_MISSING,
     SSH_UNREACHABLE,
+    SUDO_REQUIRED,
     SYNC_TOOL_MISSING,
     classify_deploy_failure,
     is_retryable_ssh_error,
@@ -29,7 +31,15 @@ from center.deploy_errors import (
     parse_inventory_line,
     run_ssh_with_retry,
 )
-from center.deploy_store import DeployStore
+from center.deploy_runner import (
+    build_remote_root_helper,
+    build_ssh_scp_cmds,
+    needs_remote_sudo,
+    require_sshpass_for_password,
+    resolve_remote_dir,
+    test_ssh_ready,
+)
+from center.deploy_store import DEFAULT_AGENT_REMOTE_DIR, DeployStore
 
 
 class DeployStoreTests(unittest.TestCase):
@@ -56,6 +66,7 @@ class DeployStoreTests(unittest.TestCase):
         self.assertEqual(resp["target"]["host_id"], "npu-21")
         self.assertEqual(resp["target"]["host_type"], "gpu")  # 旧 npu → gpu
         self.assertEqual(int(resp["target"]["ssh_port"]), 22)
+        self.assertEqual(resp["target"]["remote_dir"], DEFAULT_AGENT_REMOTE_DIR)
 
         code, resp = handle_import_targets(
             self.store,
@@ -77,6 +88,15 @@ class DeployStoreTests(unittest.TestCase):
         self.assertEqual(by_ip["10.0.0.24"]["host_id"], "gpu-24")
         self.assertEqual(int(by_ip["10.0.0.25"]["ssh_port"]), 2200)
         self.assertEqual(int(by_ip["10.0.0.26"]["ssh_port"]), 22)
+
+    def test_saved_legacy_remote_dir_not_migrated(self) -> None:
+        self.store.update_settings({"default_remote_dir": "/opt/monitor"})
+        settings = self.store.get_settings()
+        self.assertEqual(settings["default_remote_dir"], "/opt/monitor")
+        t = self.store.add_target(
+            {"ip": "10.0.0.31", "host_id": "legacy", "remote_dir": "/opt/monitor"}
+        )
+        self.assertEqual(t["remote_dir"], "/opt/monitor")
 
     def test_last_error_code_cleared_on_success(self) -> None:
         t = self.store.add_target({"ip": "10.0.0.9", "host_id": "h9"})
@@ -131,6 +151,11 @@ class ClassifyTests(unittest.TestCase):
             ("kex_exchange_identification: Connection closed by remote host", SSH_UNREACHABLE),
             ("上报自检失败：请检查中心地址/Token/网络", AGENT_START_FAIL),
             ("[fail] sync_tool_missing: 无法同步代码", SYNC_TOOL_MISSING),
+            ("sshpass: command not found", SSHPASS_MISSING),
+            ("[sshpass_missing] 密码部署需要中心机安装 sshpass", SSHPASS_MISSING),
+            ("[fail] sudo_required: 非 root 无法写入 /opt", SUDO_REQUIRED),
+            ("sudo: a password is required", SUDO_REQUIRED),
+            ("jykj is not in the sudoers file", SUDO_REQUIRED),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -297,7 +322,9 @@ class FleetScriptTests(unittest.TestCase):
             asrc = f.read()
         self.assertIn("sync_tree.sh", asrc)
         self.assertIn("fail_deploy", asrc)
+        self.assertIn("/opt/monitor-agent", asrc)
         self.assertNotIn("rsync -a --delete", asrc)
+        self.assertIn("REMOTE_DIR=\"/opt/monitor-agent\"", src)
 
     def test_bash_inventory_parse(self) -> None:
         script = textwrap.dedent(
@@ -330,6 +357,91 @@ class FleetScriptTests(unittest.TestCase):
         self.assertEqual(lines[1].split(), ["10.1.2.4", "hid", "2200"])
         self.assertIn("REFUSED_NO_RETRY", proc.stdout)
         self.assertIn("TIMEOUT_RETRY", proc.stdout)
+
+
+class RemoteDirAndSshpassTests(unittest.TestCase):
+    def test_resolve_remote_dir(self) -> None:
+        self.assertEqual(resolve_remote_dir("root", ""), DEFAULT_AGENT_REMOTE_DIR)
+        self.assertEqual(resolve_remote_dir("root", "/opt/monitor"), "/opt/monitor")
+        self.assertEqual(
+            resolve_remote_dir("jykj", "/opt/monitor-agent"), "/opt/monitor-agent"
+        )
+        self.assertEqual(resolve_remote_dir("ubuntu", "/opt/monitor"), "/opt/monitor")
+        self.assertEqual(resolve_remote_dir("ubuntu", "~/monitor-agent"), "~/monitor-agent")
+        self.assertEqual(resolve_remote_dir("ubuntu", "/data/agent"), "/data/agent")
+
+    def test_nonroot_opt_uses_sudo_helper(self) -> None:
+        self.assertTrue(needs_remote_sudo("jykj", "/opt/monitor-agent"))
+        self.assertTrue(needs_remote_sudo("ubuntu", "/opt/monitor"))
+        self.assertFalse(needs_remote_sudo("root", "/opt/monitor-agent"))
+        self.assertFalse(needs_remote_sudo("jykj", "~/monitor-agent"))
+        auth = {"mode": "password", "password": "pw-of-jykj", "key_path": ""}
+        helper = build_remote_root_helper(auth, use_sudo=True)
+        self.assertIn("sudo -n", helper)
+        self.assertIn("sudo -S", helper)
+        self.assertIn("sudo_required", helper)
+        self.assertIn("pw-of-jykj", helper)
+        nosudo = build_remote_root_helper(auth, use_sudo=False)
+        self.assertIn('MONITOR_SUDO_PW=""', nosudo)
+        self.assertNotIn("pw-of-jykj", nosudo)
+
+    def test_run_root_prints_sudo_required_when_sudo_fails(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root 下 run_root 不会走 sudo")
+        helper = build_remote_root_helper(
+            {"mode": "password", "password": "bad-pass"}, use_sudo=True
+        )
+        script = (
+            "set -euo pipefail\n"
+            + helper
+            + textwrap.dedent(
+                """
+                sudo() { echo "sudo: a password is required" >&2; return 1; }
+                run_root true
+                echo SHOULD_NOT_REACH
+                """
+            )
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("sudo_required", proc.stdout)
+        self.assertNotIn("SHOULD_NOT_REACH", proc.stdout)
+
+    def test_password_without_sshpass_is_sshpass_missing(self) -> None:
+        auth = {"mode": "password", "password": "secret", "key_path": ""}
+        with mock.patch("center.deploy_runner.shutil.which", return_value=None):
+            with self.assertRaises(Exception) as ctx:
+                require_sshpass_for_password(auth)
+            self.assertEqual(ctx.exception.code, SSHPASS_MISSING)
+            with self.assertRaises(Exception):
+                build_ssh_scp_cmds(ssh_port=22, auth=auth)
+            result = test_ssh_ready(
+                {
+                    "ip": "10.0.0.9",
+                    "ssh_user": "root",
+                    "ssh_password": "secret",
+                    "remote_dir": DEFAULT_AGENT_REMOTE_DIR,
+                },
+                {"default_ssh_user": "root", "default_ssh_port": 22},
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], SSHPASS_MISSING)
+        self.assertIn("sshpass", result["message"])
+
+    def test_password_with_sshpass_builds_cmd(self) -> None:
+        auth = {"mode": "password", "password": "secret", "key_path": ""}
+        with mock.patch("center.deploy_runner.shutil.which", return_value="/usr/bin/sshpass"):
+            ssh_cmd, scp_cmd, _env, cleanup = build_ssh_scp_cmds(ssh_port=2222, auth=auth)
+        self.assertEqual(ssh_cmd[0], "sshpass")
+        self.assertIn("-p", ssh_cmd)
+        self.assertIn("2222", ssh_cmd)
+        self.assertEqual(scp_cmd[0], "sshpass")
+        self.assertIsNone(cleanup)
 
 
 if __name__ == "__main__":
