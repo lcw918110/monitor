@@ -1221,9 +1221,7 @@
         const cardCount = (h.npu_count || 0) + (h.gpu_count || 0);
         const accelVal = h.npu_util_avg != null ? h.npu_util_avg : h.gpu_util_avg;
         const cardText =
-          cardCount > 0
-            ? cardCount + " 卡 / " + fmtPct(accelVal)
-            : "-";
+          cardCount > 0 ? fmtPct(accelVal) : "-";
         const cpuLevel = levelHi(
           h.cpu_percent,
           thresholds.cpu_warn_percent,
@@ -1253,11 +1251,7 @@
           typeTag(h.host_type) +
           "</td>" +
           "<td>" +
-          metricSpan(
-            fmtPct(h.cpu_percent) +
-              (h.cpu_count ? " / " + h.cpu_count + "核" : ""),
-            cpuLevel
-          ) +
+          metricSpan(fmtPct(h.cpu_percent), cpuLevel) +
           "</td>" +
           "<td>" +
           metricPct(

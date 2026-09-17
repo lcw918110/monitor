@@ -204,7 +204,7 @@ html, body {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
   gap: 16px;
   padding: 12px 28px 28px;
 }
@@ -255,6 +255,11 @@ html, body {
 .muted { color: var(--muted); font-size: 12px; }
 
 .table-wrap { overflow: auto; max-height: 560px; }
+
+#hostTable th,
+#hostTable td {
+  padding: 8px 8px;
+}
 
 th.sortable {
   cursor: pointer;
@@ -506,7 +511,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .period-layout {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
   gap: 16px;
   padding: 12px 28px 28px;
 }
