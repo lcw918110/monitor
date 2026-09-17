@@ -210,25 +210,48 @@ def run_ssh_with_retry(
     timeout: Optional[float] = None,
     env: Optional[Dict[str, str]] = None,
     input_text: Optional[str] = None,
+    stdin_path: Optional[str] = None,
     attempts: int = SSH_ATTEMPTS,
     log: Optional[LogFn] = None,
     label: str = "",
 ) -> "subprocess.CompletedProcess[str]":
-    """跑 ssh/scp；连接关闭/超时时短退避重试。"""
+    """跑 ssh；连接关闭/超时时短退避重试。
+
+    stdin_path：把本地文件以二进制送到远端 stdin（SSH 管道上传）。
+    上传不走 scp，精简目标机无 openssh-clients 也能收包。
+    """
+    if input_text is not None and stdin_path:
+        raise ValueError("input_text 与 stdin_path 不能同时使用")
     last_proc: Optional[subprocess.CompletedProcess[str]] = None
     last_out = ""
     tries = max(1, int(attempts or 1))
     for i in range(tries):
         try:
-            proc = subprocess.run(
-                list(cmd),
-                input=input_text,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                env=env,
-            )
+            if stdin_path:
+                with open(stdin_path, "rb") as fh:
+                    raw = subprocess.run(
+                        list(cmd),
+                        stdin=fh,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        timeout=timeout,
+                        env=env,
+                    )
+                proc = subprocess.CompletedProcess(
+                    args=list(cmd),
+                    returncode=raw.returncode,
+                    stdout=(raw.stdout or b"").decode("utf-8", errors="replace"),
+                )
+            else:
+                proc = subprocess.run(
+                    list(cmd),
+                    input=input_text,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout,
+                    env=env,
+                )
         except subprocess.TimeoutExpired:
             raise
         last_proc = proc

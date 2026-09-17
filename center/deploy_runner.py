@@ -215,6 +215,7 @@ def build_ssh_scp_cmds(
     """构造 ssh/scp 命令与环境变量；返回 (ssh_cmd, scp_cmd, env, unused_cleanup)。
 
     密码模式依赖中心机 ``sshpass``（见 require_sshpass_for_password），不再静默走 ASKPASS。
+    安装包上传走 ``upload_file_via_ssh``（SSH 管道），不使用 scp_cmd；远端无需 scp。
     """
     require_sshpass_for_password(auth)
     common = [
@@ -251,6 +252,47 @@ def build_ssh_scp_cmds(
         ssh_cmd.extend(["-i", key_path, "-o", "IdentitiesOnly=yes"])
         scp_cmd.extend(["-i", key_path, "-o", "IdentitiesOnly=yes"])
     return ssh_cmd, scp_cmd, env, None
+
+
+REMOTE_PACKAGE_PATH = "/tmp/monitor-agent.tgz"
+
+
+def build_ssh_upload_cmd(
+    ssh_base: List[str],
+    remote: str,
+    remote_path: str = REMOTE_PACKAGE_PATH,
+) -> List[str]:
+    """经 SSH stdin 写入远端文件；不要求远端（或本机）有 scp。"""
+    return list(ssh_base) + [
+        "-T",
+        remote,
+        "cat > %s" % shlex.quote(remote_path),
+    ]
+
+
+def upload_file_via_ssh(
+    ssh_base: List[str],
+    remote: str,
+    local_path: str,
+    *,
+    remote_path: str = REMOTE_PACKAGE_PATH,
+    env: Optional[Dict[str, str]] = None,
+    timeout: float = 60,
+    log: Optional[LogFn] = None,
+    label: str = "",
+) -> "subprocess.CompletedProcess[str]":
+    """把本地文件经 SSH 管道写到远端（``ssh ... 'cat > dest'``，本地文件作 stdin）。
+
+    精简系统常无 openssh-clients，远端没有 ``scp`` 二进制；此路径只需 ssh + cat。
+    """
+    return run_ssh_with_retry(
+        build_ssh_upload_cmd(ssh_base, remote, remote_path),
+        timeout=timeout,
+        env=env,
+        stdin_path=local_path,
+        log=log,
+        label=label,
+    )
 
 
 def needs_remote_sudo(ssh_user: str, remote_dir: str) -> bool:
@@ -458,7 +500,7 @@ def deploy_one_target(
     if auth["mode"] == "key" and auth["key_path"] and not os.path.isfile(auth["key_path"]):
         raise DeployError(KEY_MISSING, "SSH 私钥不存在: %s（客户端 %s）" % (auth["key_path"], ip))
 
-    ssh_base, scp_base, env, _unused = build_ssh_scp_cmds(
+    ssh_base, _scp_unused, env, _unused = build_ssh_scp_cmds(
         ssh_port=ssh_port, auth=auth
     )
     mode_label = {
@@ -477,22 +519,25 @@ def deploy_one_target(
     tgz = _make_package_tgz(root)
     remote = "%s@%s" % (ssh_user, ip)
     try:
-        log("[%s] 上传安装包..." % ip)
+        log("[%s] 上传安装包（SSH 管道，不依赖远端 scp）..." % ip)
         try:
-            proc = run_ssh_with_retry(
-                scp_base + [tgz, "%s:/tmp/monitor-agent.tgz" % remote],
-                timeout=60,
+            proc = upload_file_via_ssh(
+                ssh_base,
+                remote,
+                tgz,
                 env=env,
+                timeout=60,
                 log=log,
                 label="[%s]" % ip,
             )
         except subprocess.TimeoutExpired as exc:
-            raise DeployError(TIMEOUT, "SCP 超时") from exc
+            raise DeployError(TIMEOUT, "上传安装包超时") from exc
         if proc.returncode != 0:
+            # 默认 remote_fail，避免把远端无 scp 之类误判成 ssh_unreachable
             code, human = classify_deploy_failure(
                 proc.stdout or "",
-                default_code=SSH_UNREACHABLE,
-                default_message="SCP 失败（请检查用户名/密码/私钥/网络/端口）。exit=%s"
+                default_code=REMOTE_FAIL,
+                default_message="上传安装包失败（SSH 管道，不依赖远端 scp）。exit=%s"
                 % proc.returncode,
             )
             raise DeployError(code, human)

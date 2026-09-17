@@ -144,18 +144,15 @@ deploy_one() {
   fi
 
   if [[ "$method" != "rsync" ]]; then
-    if ! command -v scp >/dev/null 2>&1; then
-      fail_one "$ip" sync_tool_missing "本机无 scp，且 rsync 不可用"
-      return 1
-    fi
+    # 经 SSH stdin 写入，不要求本机或远端有 scp（精简系统常无 openssh-clients）
     set +e
-    out="$(ssh_run_retry "$ip" scp "${ssh_opts[@]}" "$TMP_TGZ" "${SSH_USER}@${ip}:/tmp/monitor-agent.tgz")"
+    out="$(ssh_run_retry "$ip" ssh "${ssh_opts[@]}" -T "${SSH_USER}@${ip}" "cat > /tmp/monitor-agent.tgz" < "$TMP_TGZ")"
     rc=$?
     set -e
     if [[ "$rc" -ne 0 ]]; then
       local code
       code="$(ssh_classify_fail "$out")"
-      fail_one "$ip" "$code" "scp 失败"
+      fail_one "$ip" "$code" "上传安装包失败（SSH 管道，不依赖远端 scp）"
       printf '%s\n' "$out"
       return 1
     fi

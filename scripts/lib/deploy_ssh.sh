@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SSH/SCP 轻量重试 + 失败短码。供 deploy_fleet.sh 使用。
+# SSH 轻量重试 + 失败短码。供 deploy_fleet.sh 使用。
 # 只对连接超时 / connection closed 等瞬时错误重试 2～3 次，不扫端口、不喷密码。
+# 安装包上传经 SSH stdin（cat > dest），不要求远端 scp。
 #
 # shellcheck shell=bash
 
