@@ -27,6 +27,7 @@ from center.deploy_errors import (
     DIR_NOT_WRITABLE,
     KEY_MISSING,
     NO_PYTHON,
+    PACKAGE_INCOMPLETE,
     REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
@@ -83,8 +84,8 @@ TOKEN={shlex.quote(token or '')}
 INTERVAL={int(interval_seconds or 15)}
 {install_assign}
 
-if [[ ! -d "$INSTALL_DIR/agent" ]]; then
-  echo "未找到监控代码目录: $INSTALL_DIR"
+if [[ ! -f "$INSTALL_DIR/agent/__init__.py" ]]; then
+  echo "[fail] package_incomplete: 未找到 $INSTALL_DIR/agent/__init__.py"
   echo "请走中心「客户端部署」或在中心机执行 deploy_fleet.sh / deploy_agent.sh，不要从笔记本 scp。"
   exit 1
 fi
@@ -101,14 +102,71 @@ chmod +x scripts/*.sh 2>/dev/null || true
 """
 
 
+# Agent 安装包只含采集端，不以 center/ 为主内容（center 树留给 /opt/monitor）。
+REQUIRED_PACKAGE_PARTS = ("agent", "common", "scripts")
+OPTIONAL_PACKAGE_PARTS = ("config", "README.md")
+_SKIP_CONFIG_FILES = frozenset(("agent.json", "center.json"))
+
+
+def missing_package_parts(root: str) -> List[str]:
+    """中心安装树里 Agent 打包必需的部分。缺 agent/ 时绝不能静默省略。"""
+    missing: List[str] = []
+    for name in REQUIRED_PACKAGE_PARTS:
+        full = os.path.join(root, name)
+        if name == "agent":
+            if not os.path.isfile(os.path.join(full, "__init__.py")):
+                missing.append("agent/__init__.py")
+        elif not os.path.isdir(full):
+            missing.append(name + "/")
+    return missing
+
+
+def _agent_tar_filter(ti: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
+    parts = ti.name.replace("\\", "/").split("/")
+    if "__pycache__" in parts or ti.name.endswith(".db"):
+        return None
+    if parts and (parts[-1] in _SKIP_CONFIG_FILES or parts[-1].startswith("._") or parts[-1] == ".DS_Store"):
+        return None
+    return ti
+
+
 def _make_package_tgz(root: str) -> str:
+    missing = missing_package_parts(root)
+    if missing:
+        raise DeployError(
+            PACKAGE_INCOMPLETE,
+            "中心安装树缺少 %s；Agent 打包需要 agent/common/scripts，必须保留 agent 包"
+            % ", ".join(missing),
+        )
     fd, path = tempfile.mkstemp(prefix="monitor-agent-", suffix=".tgz")
     os.close(fd)
-    with tarfile.open(path, "w:gz") as tar:
-        for name in ("agent", "center", "common", "config", "scripts", "README.md"):
-            full = os.path.join(root, name)
-            if os.path.exists(full):
-                tar.add(full, arcname=name)
+    try:
+        with tarfile.open(path, "w:gz") as tar:
+            for name in REQUIRED_PACKAGE_PARTS:
+                tar.add(
+                    os.path.join(root, name),
+                    arcname=name,
+                    filter=_agent_tar_filter,
+                )
+            cfg = os.path.join(root, "config")
+            if os.path.isdir(cfg):
+                for fn in sorted(os.listdir(cfg)):
+                    if fn in _SKIP_CONFIG_FILES or fn.endswith(".db"):
+                        continue
+                    tar.add(
+                        os.path.join(cfg, fn),
+                        arcname="config/" + fn,
+                        filter=_agent_tar_filter,
+                    )
+            readme = os.path.join(root, "README.md")
+            if os.path.isfile(readme):
+                tar.add(readme, arcname="README.md")
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
     return path
 
 
@@ -445,16 +503,27 @@ def deploy_one_target(
         )
         remote_script = f"""set -euo pipefail
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
+STAGING=/tmp/monitor-agent-src
 echo "REMOTE_DIR=$REMOTE_DIR"
 {helper}
-run_root mkdir -p "$REMOTE_DIR" || {{
+run_root mkdir -p "$REMOTE_DIR" "$STAGING" || {{
   echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
-run_root tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
-cd "$REMOTE_DIR"
-run_root chmod +x scripts/*.sh || true
-run_root ./scripts/deploy_agent.sh \\
+if ! tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py'; then
+  echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心安装目录是否保留 agent 包）"
+  exit 1
+fi
+# 解到 staging，再由 deploy_agent.sh 带 --delete 同步进安装目录（避免 ROOT==INSTALL_DIR 走 inplace 留下旧文件）
+run_root rm -rf "$STAGING"
+run_root mkdir -p "$STAGING"
+run_root tar -xzf /tmp/monitor-agent.tgz -C "$STAGING"
+if ! run_root test -f "$STAGING/agent/__init__.py"; then
+  echo "[fail] package_incomplete: 解压后缺少 $STAGING/agent/__init__.py"
+  exit 1
+fi
+run_root chmod -R a+x "$STAGING/scripts" || true
+run_root "$STAGING/scripts/deploy_agent.sh" \\
   --center-url {shlex.quote(center)} \\
   --dir "$REMOTE_DIR" \\
   --host-id {shlex.quote(host_id)} \\
@@ -462,6 +531,7 @@ run_root ./scripts/deploy_agent.sh \\
   --host-type {shlex.quote(host_type or "auto")} \\
   --token {shlex.quote(token or "")} \\
   --interval {int(interval or 15)}
+run_root rm -rf "$STAGING"
 rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE
 """
@@ -498,6 +568,11 @@ echo DEPLOY_DONE
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
+            elif "package_incomplete" in out or "No module named agent" in out:
+                code, human = (
+                    PACKAGE_INCOMPLETE,
+                    "安装包缺少 agent/（中心树必须保留 agent 包后再部署）",
+                )
             elif (
                 "sudo_required" in out
                 or "not in the sudoers" in out.lower()

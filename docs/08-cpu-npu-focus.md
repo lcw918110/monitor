@@ -60,19 +60,21 @@
 3. root + systemd → 安装 `monitor-center.service` 并 enable  
 4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）  
 5. 轮询 `/api/v1/health` 直至成功  
+6. 同步后校验 `$INSTALL_DIR/agent/__init__.py`（中心树必须带 agent 包，供后续打包下发）  
 
 ### 客户端与网页部署（唯一产品路径）
 
 - **不要**从笔记本用 sshpass+scp 旁路安装；Agent 由中心 UI `/deploy.html` 或中心机上的 `deploy_fleet.sh` 下发。
+- 中心安装目录必须保留 **`agent/`** 包：产品从这里打 **采集端包**（`agent/` `common/` `scripts/`），不以 `center/` 为主内容。缺包会 `package_incomplete`，不会静默省略。
 - Agent 默认目录 **`/opt/monitor-agent`**（避免覆盖同机 Center 的 `/opt/monitor`）。已有库/清单里的 `/opt/monitor` 不自动改写。
 - `deploy_agent.sh`：本机变量 `INSTALL_DIR`；**无 sudo 的非 root** 若目录是 `/opt/monitor-agent` 或 `/opt/monitor` 会改到 `~/monitor-agent`。中心 SSH 部署对 `/opt` 会 `sudo` 再跑该脚本，从而保住 systemd。  
   - **Python**：先复用已有解释器（`PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`），要求 **≥ 3.6**；都没有且为 root 时再 apt/yum/dnf 安装 `python3`  
   - `/usr/local/python3.x` 若 libpython 不在默认链接路径，自动设置 `LD_LIBRARY_PATH`  
-  - **同步**：优先 `rsync`；目标机/本机没有则静默回退 `tar` 管道或 `cp -a`（`scripts/lib/sync_tree.sh`），不捆绑离线 Python  
+  - **同步**：只同步 `agent/` `common/` `scripts/`（及配置模板）；优先 `rsync --delete`，否则先删再 `tar` / `cp`（`sync_agent_tree`）。覆盖安装会先停旧 `monitor-agent`/pidfile/`python -m agent`，再清 AppleDouble `._*`、`__pycache__` 与多余顶层目录（如误拷的 `center/`）。**保留** `config/agent.json` 与 `data/`。包先解到 `/tmp/monitor-agent-src` 再同步进安装目录，避免 inplace 留旧文件。 
 - SSH 在线部署：远端使用 `REMOTE_DIR`（勿再嵌套未赋值的 `INSTALL_DIR`）  
   - 清单/Excel/`deploy_fleet.sh` 支持可选 **ssh_port**（默认 22；CLI `--ssh-port` / `--port`）；**不扫描端口**  
   - 连接超时 / connection closed 自动重试 2～3 次（1s、2s 退避）  
-  - 失败归一为短码 + 说明（`ssh_unreachable`、`auth_fail`、`sshpass_missing`、`sudo_required`、`no_python`、`sync_tool_missing`、`agent_start_fail` 等，见 README）  
+  - 失败归一为短码 + 说明（`ssh_unreachable`、`auth_fail`、`sshpass_missing`、`sudo_required`、`package_incomplete`、`no_python`、`sync_tool_missing`、`agent_start_fail` 等，见 README）  
   - **密码部署**需要中心机已安装 `sshpass`，否则短码 `sshpass_missing`（或改用 SSH 密钥）  
   - 非 root 安装到 `/opt/...` 时远端 `sudo -n`，失败则用同一 SSH 密码 `sudo -S`（短码 `sudo_required`）  
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  

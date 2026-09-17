@@ -19,6 +19,7 @@ NO_PYTHON = "no_python"
 SYNC_TOOL_MISSING = "sync_tool_missing"
 DIR_NOT_WRITABLE = "dir_not_writable"
 SUDO_REQUIRED = "sudo_required"
+PACKAGE_INCOMPLETE = "package_incomplete"
 AGENT_START_FAIL = "agent_start_fail"
 CENTER_URL_MISSING = "center_url_missing"
 TIMEOUT = "timeout"
@@ -125,6 +126,14 @@ def classify_deploy_failure(
         return NO_PYTHON, _msg("目标机没有可用的 Python >= 3.6")
     if "sync_tool_missing" in blob or "rsync: command not found" in blob:
         return SYNC_TOOL_MISSING, _msg("无法同步代码（rsync/tar/cp 均不可用）")
+    if (
+        "package_incomplete" in blob
+        or "缺少 agent" in blob
+        or "no module named agent" in blob
+    ):
+        return PACKAGE_INCOMPLETE, _msg(
+            "安装树缺少 agent 包（中心目录必须保留 agent/，勿静默漏打包）"
+        )
     if "上报自检失败" in blob or "agent_start_fail" in blob:
         return AGENT_START_FAIL, _msg("Agent 上报自检或启动失败")
     if "无法创建安装目录" in blob or "安装目录不可写" in blob:

@@ -20,7 +20,9 @@ from center.deploy_api import handle_add_target, handle_import_targets, handle_s
 from center.deploy_errors import (
     AGENT_START_FAIL,
     AUTH_FAIL,
+    DeployError,
     NO_PYTHON,
+    PACKAGE_INCOMPLETE,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
     SUDO_REQUIRED,
@@ -32,8 +34,12 @@ from center.deploy_errors import (
     run_ssh_with_retry,
 )
 from center.deploy_runner import (
+    OPTIONAL_PACKAGE_PARTS,
+    REQUIRED_PACKAGE_PARTS,
+    _make_package_tgz,
     build_remote_root_helper,
     build_ssh_scp_cmds,
+    missing_package_parts,
     needs_remote_sudo,
     require_sshpass_for_password,
     resolve_remote_dir,
@@ -156,6 +162,8 @@ class ClassifyTests(unittest.TestCase):
             ("[fail] sudo_required: 非 root 无法写入 /opt", SUDO_REQUIRED),
             ("sudo: a password is required", SUDO_REQUIRED),
             ("jykj is not in the sudoers file", SUDO_REQUIRED),
+            ("[fail] package_incomplete: 安装包不含 agent/", PACKAGE_INCOMPLETE),
+            ("/usr/bin/python3.10: No module named agent", PACKAGE_INCOMPLETE),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -325,6 +333,27 @@ class FleetScriptTests(unittest.TestCase):
         self.assertIn("/opt/monitor-agent", asrc)
         self.assertNotIn("rsync -a --delete", asrc)
         self.assertIn("REMOTE_DIR=\"/opt/monitor-agent\"", src)
+        self.assertIn("package_incomplete", src)
+        self.assertNotIn("README.md 2>/dev/null", src)
+        self.assertNotIn("agent center common", src)
+        self.assertNotIn('"$ROOT/" "${SSH_USER}', src)
+        self.assertIn('"$ROOT/$part/"', src)
+        self.assertIn("package_incomplete", asrc)
+        self.assertIn("sync_agent_tree", asrc)
+        self.assertIn("assert_package_tree", asrc)
+        self.assertIn("stop_previous_agent", asrc)
+        self.assertLess(asrc.find("stop_previous_agent"), asrc.find("sync_agent_tree"))
+        once_at = asrc.find("--once")
+        self.assertGreater(once_at, 0)
+        self.assertIn("agent/__init__.py", asrc[:once_at])
+        self.assertIn("/tmp/monitor-agent-src", src)
+        self.assertNotIn("tar -xzf /tmp/monitor-agent.tgz -C '$REMOTE_DIR'", src)
+        center = os.path.join(ROOT, "scripts", "deploy_center.sh")
+        with open(center, encoding="utf-8") as f:
+            csrc = f.read()
+        self.assertIn("assert_package_tree", csrc)
+        self.assertIn('assert_package_tree "$ROOT"', csrc)
+        self.assertIn('assert_package_tree "$INSTALL_DIR"', csrc)
 
     def test_bash_inventory_parse(self) -> None:
         script = textwrap.dedent(
@@ -442,6 +471,276 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         self.assertIn("2222", ssh_cmd)
         self.assertEqual(scp_cmd[0], "sshpass")
         self.assertIsNone(cleanup)
+
+
+class PackageTreeTests(unittest.TestCase):
+    def test_repo_root_complete(self) -> None:
+        self.assertEqual(missing_package_parts(ROOT), [])
+        self.assertEqual(REQUIRED_PACKAGE_PARTS, ("agent", "common", "scripts"))
+        self.assertNotIn("center", OPTIONAL_PACKAGE_PARTS)
+
+    def test_make_package_fails_hard_without_agent(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="pkg-miss-")
+        try:
+            os.makedirs(os.path.join(tmp, "common"))
+            os.makedirs(os.path.join(tmp, "scripts"))
+            with open(os.path.join(tmp, "README.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with self.assertRaises(DeployError) as ctx:
+                _make_package_tgz(tmp)
+            self.assertEqual(ctx.exception.code, PACKAGE_INCOMPLETE)
+            self.assertIn("agent", str(ctx.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_make_package_fails_hard_without_common(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="pkg-miss-")
+        try:
+            os.makedirs(os.path.join(tmp, "agent"))
+            os.makedirs(os.path.join(tmp, "scripts"))
+            with open(os.path.join(tmp, "agent", "__init__.py"), "w", encoding="utf-8") as f:
+                f.write("")
+            with self.assertRaises(DeployError) as ctx:
+                _make_package_tgz(tmp)
+            self.assertEqual(ctx.exception.code, PACKAGE_INCOMPLETE)
+            self.assertIn("common", str(ctx.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_make_package_tgz_contains_agent_init(self) -> None:
+        import tarfile
+
+        path = _make_package_tgz(ROOT)
+        try:
+            with tarfile.open(path, "r:gz") as tar:
+                names = set(tar.getnames())
+            self.assertIn("agent/__init__.py", names)
+            self.assertTrue(any(n == "common" or n.startswith("common/") for n in names))
+            self.assertTrue(any(n == "scripts" or n.startswith("scripts/") for n in names))
+            self.assertFalse(any(n == "center" or n.startswith("center/") for n in names))
+        finally:
+            os.remove(path)
+
+    def test_assert_package_tree_bash(self) -> None:
+        script = textwrap.dedent(
+            """
+            set -euo pipefail
+            . "{root}/scripts/lib/sync_tree.sh"
+            assert_package_tree "{root}" "repo"
+            echo SOURCE_OK
+            tmp="$(mktemp -d)"
+            trap 'rm -rf "$tmp"' EXIT
+            if assert_package_tree "$tmp" "empty"; then
+              echo SHOULD_NOT
+              exit 1
+            fi
+            echo EMPTY_CAUGHT
+            """
+        ).format(root=ROOT)
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SOURCE_OK", proc.stdout)
+        self.assertIn("EMPTY_CAUGHT", proc.stdout)
+        self.assertIn("package_incomplete", proc.stdout)
+
+    def test_sync_agent_tree_skips_center(self) -> None:
+        src = tempfile.mkdtemp(prefix="agent-src-")
+        dst = tempfile.mkdtemp(prefix="agent-dst-")
+        try:
+            for name in ("agent", "common", "scripts", "center"):
+                os.makedirs(os.path.join(src, name))
+            with open(os.path.join(src, "agent", "__init__.py"), "w", encoding="utf-8") as f:
+                f.write("")
+            with open(os.path.join(src, "center", "server.py"), "w", encoding="utf-8") as f:
+                f.write("nope")
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                sync_agent_tree "{src}" "{dst}"
+                """
+            ).format(root=ROOT, src=src, dst=dst)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(dst, "agent", "__init__.py")))
+            self.assertTrue(os.path.isdir(os.path.join(dst, "common")))
+            self.assertTrue(os.path.isdir(os.path.join(dst, "scripts")))
+            self.assertFalse(os.path.isdir(os.path.join(dst, "center")))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dst, ignore_errors=True)
+
+    def test_sync_cleans_leftovers_keeps_agent_json_and_data(self) -> None:
+        src = tempfile.mkdtemp(prefix="agent-src-")
+        dst = tempfile.mkdtemp(prefix="agent-dst-")
+        try:
+            for name in ("agent", "common", "scripts"):
+                os.makedirs(os.path.join(src, name))
+            with open(os.path.join(src, "agent", "__init__.py"), "w", encoding="utf-8") as f:
+                f.write("new")
+            os.makedirs(os.path.join(dst, "agent", "__pycache__"))
+            os.makedirs(os.path.join(dst, "center"))
+            os.makedirs(os.path.join(dst, "config"))
+            os.makedirs(os.path.join(dst, "data"))
+            with open(os.path.join(dst, "agent", "__init__.py"), "w", encoding="utf-8") as f:
+                f.write("old")
+            with open(os.path.join(dst, "agent", "gone.py"), "w", encoding="utf-8") as f:
+                f.write("stale")
+            with open(os.path.join(dst, "agent", "._secret"), "w", encoding="utf-8") as f:
+                f.write("appledouble")
+            with open(os.path.join(dst, "agent", "__pycache__", "x.pyc"), "w", encoding="utf-8") as f:
+                f.write("pyc")
+            with open(os.path.join(dst, "center", "server.py"), "w", encoding="utf-8") as f:
+                f.write("accidental")
+            with open(os.path.join(dst, "config", "agent.json"), "w", encoding="utf-8") as f:
+                f.write('{"keep":true}')
+            with open(os.path.join(dst, "data", "metrics.db"), "w", encoding="utf-8") as f:
+                f.write("db")
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                sync_agent_tree "{src}" "{dst}"
+                """
+            ).format(root=ROOT, src=src, dst=dst)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(dst, "agent", "__init__.py")))
+            self.assertFalse(os.path.isfile(os.path.join(dst, "agent", "gone.py")))
+            self.assertFalse(os.path.isfile(os.path.join(dst, "agent", "._secret")))
+            self.assertFalse(os.path.isdir(os.path.join(dst, "agent", "__pycache__")))
+            self.assertFalse(os.path.isdir(os.path.join(dst, "center")))
+            with open(os.path.join(dst, "config", "agent.json"), encoding="utf-8") as f:
+                self.assertIn("keep", f.read())
+            self.assertTrue(os.path.isfile(os.path.join(dst, "data", "metrics.db")))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dst, ignore_errors=True)
+
+    def test_prune_keeps_center_on_monitor_basename(self) -> None:
+        parent = tempfile.mkdtemp(prefix="monitor-parent-")
+        dst = os.path.join(parent, "monitor")
+        try:
+            os.makedirs(os.path.join(dst, "center"))
+            os.makedirs(os.path.join(dst, "agent"))
+            with open(os.path.join(dst, "center", "server.py"), "w", encoding="utf-8") as f:
+                f.write("keep")
+            with open(os.path.join(dst, "agent", "._x"), "w", encoding="utf-8") as f:
+                f.write("junk")
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                prune_agent_install_dir "{dst}"
+                """
+            ).format(root=ROOT, dst=dst)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(dst, "center", "server.py")))
+            self.assertFalse(os.path.isfile(os.path.join(dst, "agent", "._x")))
+        finally:
+            shutil.rmtree(parent, ignore_errors=True)
+
+    def test_stop_previous_agent_kills_pidfile(self) -> None:
+        dst = tempfile.mkdtemp(prefix="agent-run-")
+        proc = None
+        try:
+            os.makedirs(os.path.join(dst, "run"))
+            proc = subprocess.Popen(["sleep", "30"])
+            with open(os.path.join(dst, "run", "agent.pid"), "w", encoding="utf-8") as f:
+                f.write(str(proc.pid))
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                export MONITOR_CLEANUP_SKIP_PKILL=1
+                . "{root}/scripts/lib/sync_tree.sh"
+                stop_previous_agent "{dst}"
+                """
+            ).format(root=ROOT, dst=dst)
+            out = subprocess.run(
+                ["bash", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(out.returncode, 0, out.stdout)
+            proc.wait(timeout=5)
+            self.assertNotEqual(proc.returncode, None)
+            self.assertFalse(os.path.isfile(os.path.join(dst, "run", "agent.pid")))
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+            shutil.rmtree(dst, ignore_errors=True)
+
+    def test_sync_agent_tree_fails_without_agent(self) -> None:
+        src = tempfile.mkdtemp(prefix="agent-miss-")
+        dst = tempfile.mkdtemp(prefix="agent-dst-")
+        try:
+            os.makedirs(os.path.join(src, "common"))
+            os.makedirs(os.path.join(src, "scripts"))
+            os.makedirs(os.path.join(src, "center"))
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                sync_agent_tree "{src}" "{dst}"
+                """
+            ).format(root=ROOT, src=src, dst=dst)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("package_incomplete", proc.stdout)
+            self.assertFalse(os.path.isfile(os.path.join(dst, "agent", "__init__.py")))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dst, ignore_errors=True)
+
+    def test_runner_extract_asserts_before_deploy_agent(self) -> None:
+        path = os.path.join(ROOT, "center", "deploy_runner.py")
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        extract_at = src.find("tar -xzf /tmp/monitor-agent.tgz")
+        self.assertGreater(extract_at, 0)
+        self.assertIn("/tmp/monitor-agent-src", src)
+        self.assertNotIn(
+            'tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"',
+            src,
+        )
+        deploy_at = src.find("deploy_agent.sh", extract_at)
+        self.assertGreater(deploy_at, extract_at)
+        between = src[extract_at:deploy_at]
+        self.assertIn("agent/__init__.py", between)
+        self.assertIn("package_incomplete", between)
+        self.assertIn("tar -tzf /tmp/monitor-agent.tgz", src)
+        self.assertNotIn(
+            "if os.path.exists(full):\n                tar.add(full, arcname=name)",
+            src,
+        )
+        self.assertNotIn('OPTIONAL_PACKAGE_PARTS = ("center"', src)
 
 
 if __name__ == "__main__":

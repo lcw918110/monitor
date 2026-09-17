@@ -61,10 +61,17 @@ log_python_choice
 apply_python_ld_library_path
 
 echo "==> 同步代码到 $INSTALL_DIR"
+# 源树不完整时禁止 rsync --delete，否则会把已有 agent/ 删掉
+if ! assert_package_tree "$ROOT" "源码 $ROOT"; then
+  exit 1
+fi
 mkdir -p "$INSTALL_DIR"
 # 同步核心目录，保留已有 data/config
 if ! sync_tree "$ROOT" "$INSTALL_DIR"; then
   echo "[fail] sync_tool_missing: 无法同步代码（rsync 优先，缺失则 tar/cp）"
+  exit 1
+fi
+if ! assert_package_tree "$INSTALL_DIR" "安装目录 $INSTALL_DIR"; then
   exit 1
 fi
 
