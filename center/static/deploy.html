@@ -122,7 +122,7 @@
             选择 Excel/CSV 导入
             <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
           </label>
-          <span class="muted" id="excelHint">表头：ip、ssh_user、ssh_password、ssh_key_path、host_type、peer_hosts 等</span>
+          <span class="muted" id="excelHint">表头：ip、ssh_port、ssh_user、ssh_password、ssh_key_path、host_type、peer_hosts 等；端口默认 22</span>
         </div>
       </div>
     </section>
@@ -141,6 +141,7 @@
             <tr>
               <th><input type="checkbox" id="chkAll" /></th>
               <th>IP</th>
+              <th>端口</th>
               <th>host_id</th>
               <th>类型</th>
               <th>SSH认证</th>
@@ -166,7 +167,7 @@
   </main>
 
   <footer class="foot">
-    <span>支持用户名密码或私钥；全局私钥多机共用，单机可覆盖。端口默认 22。失败时可下载单机安装脚本手动执行。</span>
+    <span>支持用户名密码或私钥；全局私钥多机共用，单机可覆盖。SSH 端口默认 22（清单可写 ssh_port，不扫端口）。无 rsync 时自动 tar/cp。失败消息带短码（如 ssh_unreachable）。</span>
   </footer>
   <script src="/deploy.js"></script>
 </body>

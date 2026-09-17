@@ -1,5 +1,7 @@
 # 批量 Agent 部署清单示例
-# 格式: IP [host_id]
+# 格式: IP[:port] [host_id] [ssh_port]
+# 端口可选，默认 22（或 deploy_fleet.sh --ssh-port / --port）；不会扫描端口
 # 10.0.0.11 npu-01
-# 10.0.0.12 npu-02
+# 10.0.0.12 npu-02 2222
+# 10.0.0.13:2222 gpu-13
 # 10.0.0.21 app-01

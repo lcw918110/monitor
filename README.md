@@ -64,9 +64,10 @@ chmod +x scripts/*.sh
 
 1. 打开 **客户端部署** 页  
 2. 「中心对外访问地址」**默认自动填本机局域网 IP**（如 `http://192.168.x.x:8080`），供远端 Agent 上报；**一般不要用 127.0.0.1**  
-3. **SSH**：支持用户名密码或私钥。填法：用户 + 密码；或用户 + 私钥。端口默认 **22**  
+3. **SSH**：支持用户名密码或私钥。填法：用户 + 密码；或用户 + 私钥。端口默认 **22**（清单/Excel 的 `ssh_port` 或网页「SSH 端口」；**不会扫描端口**）  
    - 全局「私钥路径」= 多台客户端**共用**一把钥匙（不是按 IP 一对一）  
    - 某台要用不同密码/私钥：在添加该客户端（或 Excel 的 `ssh_password` / `ssh_key_path` 列）单独填  
+   - 失败时清单「最近消息」带短码，例如 `ssh_unreachable` / `auth_fail`（见下表）  
 4. 中心机需能 SSH 到目标机（密码或密钥任一通即可）  
 5. 添加 / 编辑 / 导入目标机时，会对已配置的 IP、指定机器、中心对外地址 **自动探查**；清单「网络」列展示结果  
 6. 部署前可用「测试连通/部署条件」（SSH + 安装目录可写）；再点「部署勾选 / 全部部署」  
@@ -84,7 +85,7 @@ chmod +x scripts/*.sh
 # 可选: --host-id gpu01 --token 'your-secret' --interval 15 --dir ~/monitor
 ```
 
-脚本会：解析 Python（先复用本机 `PYTHON_BIN` / `python3.x` / `/usr/local/python3.*`，均需 ≥3.6；都没有且为 root 时再 apt/yum/dnf 安装 python3）→ 同步文件 → 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。
+脚本会：解析 Python（先复用本机 `PYTHON_BIN` / `python3.x` / `/usr/local/python3.*`，均需 ≥3.6；都没有且为 root 时再 apt/yum/dnf 安装 python3）→ 同步文件（**优先 rsync**，没有则 **tar 管道** 或 **cp -a**，海康等精简系统也能装）→ 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。
 
 内网常见情况：只有 3.6、PATH 里的 `python3` 过旧但 `/usr/local/python3.12` 可用、或完全没有 python3——脚本按「先复用、再安装」处理。自定义前缀若缺 libpython，会自动加上 `LD_LIBRARY_PATH`。
 
@@ -92,9 +93,29 @@ chmod +x scripts/*.sh
 
 ```bash
 cp config/hosts.example.txt config/hosts.txt
-# 编辑 IP / host_id
+# 编辑 IP / host_id / 可选 ssh_port（默认 22）
 ./scripts/deploy_fleet.sh --hosts-file config/hosts.txt --center-url http://<中心IP>:8080
+# 非 22 端口：--ssh-port 2222  或  --port 2222；也可写在清单第三列 / IP:port
 ```
+
+清单格式：`IP[:port] [host_id] [ssh_port]`。行内端口覆盖 `--ssh-port`。SSH 连接超时 / connection closed 会自动重试 2～3 次（短退避），不会无限重试。
+
+### 部署失败短码
+
+成功仍只显示「部署成功」。失败为 `[短码] 说明`（网页清单与脚本日志相同）：
+
+| 短码 | 含义 |
+| --- | --- |
+| `ssh_unreachable` | 连不上（超时、拒绝、无路由、DNS、连接被关闭）；先核对 IP 与 **ssh_port（默认 22）** |
+| `auth_fail` | 用户名 / 密码 / 私钥认证失败 |
+| `key_missing` | 填写的私钥文件在中心机上不存在 |
+| `no_python` | 目标机没有可用 Python ≥ 3.6 |
+| `sync_tool_missing` | 同步文件失败（rsync 优先，缺失则 tar / cp 仍都不可用） |
+| `dir_not_writable` | SSH 已通但安装目录不可写（非 root 用 `~/monitor`） |
+| `agent_start_fail` | 上报自检或 Agent 启动失败（中心地址 / Token / 网络） |
+| `center_url_missing` | 未配置「中心对外访问地址」 |
+| `timeout` | 探测或整段部署超时 |
+| `remote_fail` | 远端安装失败（未归入上面几类） |
 
 ### 4. 卸载
 
@@ -122,7 +143,7 @@ cp config/hosts.example.txt config/hosts.txt
 | `Address already in use` / 健康检查失败 | 端口占用：`lsof -iTCP:8080 -sTCP:LISTEN`，必要时 `kill -9 <pid>` 后再 `local_up.sh` |
 | 监测台一直空、无主机 | 中心已起但 Agent 未起或未上报；看 `.deploy-agent/run/agent.log`，确认 `center_url` 指向 `http://127.0.0.1:8080/api/v1/metrics` |
 | 主机一会在线一会离线 | Agent 进程在重启或崩溃；看 agent 日志。离线判定默认约 90 秒无上报 |
-| 部署页无法 SSH 安装 | 检查用户名/密码或私钥；全局私钥多机共用，单机可单独覆盖；端口默认 22；非 root 安装目录用 `~/monitor` |
+| 部署页无法 SSH 安装 | 检查用户名/密码或私钥；全局私钥多机共用，单机可单独覆盖；端口默认 22（设 `ssh_port`，不扫端口）；非 root 安装目录用 `~/monitor`；看失败短码 |
 | `INSTALL_DIR: unbound variable` | 已修复：在线部署只用 `REMOTE_DIR`；请更新中心代码后重试 |
 | 清演示数据重来 | `./scripts/local_down.sh` 后删除 `.deploy-center/data/monitor.db*`（及 wal/shm），再 `local_up.sh`；不要跑 `demo_seed.py` |
 | 配置报错退出 | 看终端 `[配置错误]`；从 `config/*.example.json` 复制为 `center.json` / `agent.json` |
@@ -183,5 +204,5 @@ tail -n 50 .deploy-agent/run/agent.log
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy
 ```

@@ -76,8 +76,20 @@ fi
 # 先复用本机已有 Python >= 3.6，没有再用 apt/yum/dnf 安装
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
+# shellcheck source=lib/sync_tree.sh
+. "$ROOT/scripts/lib/sync_tree.sh"
+
+fail_deploy() {
+  local code="$1"
+  shift
+  echo "[fail] ${code}: $*"
+  exit 1
+}
+
 MONITOR_INSTALL_PYTHON=1
-ensure_python 3 6 || exit 1
+if ! ensure_python 3 6; then
+  fail_deploy no_python "未找到可用的 Python >= 3.6"
+fi
 log_python_choice
 apply_python_ld_library_path
 DETECT_HOST="$(hostname 2>/dev/null || echo agent-host)"
@@ -85,16 +97,10 @@ HOST_ID="${HOST_ID:-$DETECT_HOST}"
 HOSTNAME_CFG="${HOSTNAME_CFG:-$DETECT_HOST}"
 
 echo "==> 同步代码到 $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-rsync -a --delete \
-  --exclude 'data/' \
-  --exclude 'config/center.json' \
-  --exclude 'config/agent.json' \
-  --exclude '.git/' \
-  --exclude '.deploy-*/' \
-  --exclude '__pycache__/' \
-  --exclude '*.db' \
-  "$ROOT/" "$INSTALL_DIR/"
+mkdir -p "$INSTALL_DIR" || fail_deploy dir_not_writable "无法创建安装目录: $INSTALL_DIR"
+if ! sync_tree "$ROOT" "$INSTALL_DIR"; then
+  fail_deploy sync_tool_missing "无法同步代码（rsync 优先，缺失则 tar/cp）"
+fi
 
 mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/run"
 
@@ -171,14 +177,13 @@ echo "==> 单次上报自检"
 cd "$INSTALL_DIR"
 export PYTHONPATH="$INSTALL_DIR"
 if ! "$PY" -m agent --config "$CFG" --once; then
-  echo "上报自检失败：请检查中心地址/Token/网络"
-  exit 1
+  fail_deploy agent_start_fail "上报自检失败：请检查中心地址/Token/网络"
 fi
 
 if [[ "$START" -eq 1 ]]; then
   echo "==> 启动常驻 Agent"
   if [[ "$UNIT_INSTALLED" -eq 1 ]]; then
-    systemctl restart monitor-agent
+    systemctl restart monitor-agent || fail_deploy agent_start_fail "systemd 启动失败"
     systemctl --no-pager --full status monitor-agent | head -n 15 || true
   else
     if [[ -f "$INSTALL_DIR/run/agent.pid" ]]; then
@@ -197,7 +202,8 @@ if [[ "$START" -eq 1 ]]; then
       --logfile "$INSTALL_DIR/run/agent.log" \
       --cwd "$INSTALL_DIR" \
       "${DAEMON_ENV[@]}" \
-      -- "$PY" -m agent --config "$CFG"
+      -- "$PY" -m agent --config "$CFG" \
+      || fail_deploy agent_start_fail "守护进程启动失败"
     echo "Agent PID=$(cat "$INSTALL_DIR/run/agent.pid" 2>/dev/null || echo '?') 日志: $INSTALL_DIR/run/agent.log"
   fi
 fi

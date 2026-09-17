@@ -134,7 +134,7 @@
     const targets = data.targets || [];
     if (!targets.length) {
       $("targetBody").innerHTML =
-        '<tr><td colspan="10" class="muted">暂无目标，请先添加或导入 Excel（含指定机器列）</td></tr>';
+        '<tr><td colspan="11" class="muted">暂无目标，请先添加或导入 Excel（含指定机器列）</td></tr>';
       return;
     }
     $("targetBody").innerHTML = targets
@@ -146,6 +146,9 @@
           '" /></td>' +
           "<td>" +
           escapeHtml(t.ip) +
+          "</td>" +
+          "<td>" +
+          escapeHtml(String(t.ssh_port || 22)) +
           "</td>" +
           "<td>" +
           escapeHtml(t.host_id) +
@@ -178,8 +181,18 @@
           '">' +
           statusText(t.status) +
           "</span></td>" +
-          '<td class="muted">' +
-          escapeHtml(t.last_message || "") +
+          "<td class=\"muted\">" +
+          (function () {
+            const code = t.last_error_code || "";
+            let msg = t.last_message || "";
+            if (code && msg.indexOf("[" + code + "]") === 0) {
+              msg = msg.slice(code.length + 2).replace(/^\s+/, "");
+            }
+            return (
+              (code ? "<code>" + escapeHtml(code) + "</code> " : "") +
+              escapeHtml(msg)
+            );
+          })() +
           "</td>" +
           "<td>" +
           '<button type="button" class="btn btn-sm" data-edit="' +
