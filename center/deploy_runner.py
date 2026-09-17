@@ -510,7 +510,8 @@ run_root mkdir -p "$REMOTE_DIR" "$STAGING" || {{
   echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
-if ! tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py'; then
+# 不可用 tar|grep -q：pipefail 下 grep -q 命中即退出，tar 收到 SIGPIPE(141)，好包装会被误判 package_incomplete
+if ! tar -tzf /tmp/monitor-agent.tgz agent/__init__.py >/dev/null 2>&1; then
   echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心安装目录是否保留 agent 包）"
   exit 1
 fi

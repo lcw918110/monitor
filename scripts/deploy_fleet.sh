@@ -169,7 +169,8 @@ set -euo pipefail
 STAGING=/tmp/monitor-agent-src
 sudo mkdir -p '$REMOTE_DIR' "\$STAGING"
 if [[ '$method' == tar && -f /tmp/monitor-agent.tgz ]]; then
-  tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py' || {
+  # 不可用 tar|grep -q：pipefail 下 grep -q 命中即退出，tar 收到 SIGPIPE(141)，好包装会被误判 package_incomplete
+  tar -tzf /tmp/monitor-agent.tgz agent/__init__.py >/dev/null 2>&1 || {
     echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心树）"
     exit 1
   }

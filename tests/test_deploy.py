@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import io
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import unittest
@@ -348,6 +351,8 @@ class FleetScriptTests(unittest.TestCase):
         self.assertIn("agent/__init__.py", asrc[:once_at])
         self.assertIn("/tmp/monitor-agent-src", src)
         self.assertNotIn("tar -xzf /tmp/monitor-agent.tgz -C '$REMOTE_DIR'", src)
+        self.assertNotIn("| grep -q 'agent/__init__.py'", src)
+        self.assertIn("tar -tzf /tmp/monitor-agent.tgz agent/__init__.py", src)
         center = os.path.join(ROOT, "scripts", "deploy_center.sh")
         with open(center, encoding="utf-8") as f:
             csrc = f.read()
@@ -735,12 +740,105 @@ class PackageTreeTests(unittest.TestCase):
         between = src[extract_at:deploy_at]
         self.assertIn("agent/__init__.py", between)
         self.assertIn("package_incomplete", between)
-        self.assertIn("tar -tzf /tmp/monitor-agent.tgz", src)
+        self.assertIn("tar -tzf /tmp/monitor-agent.tgz agent/__init__.py", src)
+        self.assertNotIn("| grep -q 'agent/__init__.py'", src)
         self.assertNotIn(
             "if os.path.exists(full):\n                tar.add(full, arcname=name)",
             src,
         )
         self.assertNotIn('OPTIONAL_PACKAGE_PARTS = ("center"', src)
+
+    def _run_bash(self, script: str) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    def test_pipefail_tar_grep_q_false_positive_on_complete_package(self) -> None:
+        """pipefail + tar|grep -q：grep 命中后 tar 得 SIGPIPE(141)，好包装被判 package_incomplete。"""
+        fd, path = tempfile.mkstemp(prefix="pkg-sigpipe-", suffix=".tgz")
+        os.close(fd)
+        try:
+            with tarfile.open(path, "w:gz") as tar:
+                payload = b"ok\n"
+                info = tarfile.TarInfo(name="agent/__init__.py")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+                blob = b"x" * 256
+                for i in range(400):
+                    extra = tarfile.TarInfo(name="padding/%04d.bin" % i)
+                    extra.size = len(blob)
+                    tar.addfile(extra, io.BytesIO(blob))
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                TGZ={tgz}
+                tar -tzf "$TGZ" >/dev/null
+                echo TAR_LIST_OK
+                if ! tar -tzf "$TGZ" | grep -q 'agent/__init__.py'; then
+                  echo "[fail] package_incomplete: 安装包不含 agent/"
+                  exit 1
+                fi
+                echo CHECK_OK
+                """
+            ).format(tgz=shlex.quote(path))
+            proc = self._run_bash(script)
+            self.assertIn("TAR_LIST_OK", proc.stdout)
+            self.assertNotEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("package_incomplete", proc.stdout)
+            self.assertNotIn("CHECK_OK", proc.stdout)
+        finally:
+            os.remove(path)
+
+    def test_explicit_member_check_accepts_complete_package_under_pipefail(self) -> None:
+        tgz = _make_package_tgz(ROOT)
+        try:
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                TGZ={tgz}
+                if ! tar -tzf "$TGZ" agent/__init__.py >/dev/null 2>&1; then
+                  echo "[fail] package_incomplete: 安装包不含 agent/"
+                  exit 1
+                fi
+                echo CHECK_OK
+                """
+            ).format(tgz=shlex.quote(tgz))
+            proc = self._run_bash(script)
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("CHECK_OK", proc.stdout)
+            self.assertNotIn("package_incomplete", proc.stdout)
+        finally:
+            os.remove(tgz)
+
+    def test_explicit_member_check_hard_fails_without_agent(self) -> None:
+        fd, path = tempfile.mkstemp(prefix="pkg-empty-", suffix=".tgz")
+        os.close(fd)
+        try:
+            with tarfile.open(path, "w:gz") as tar:
+                payload = b"not-agent"
+                info = tarfile.TarInfo(name="common/placeholder.txt")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                TGZ={tgz}
+                if ! tar -tzf "$TGZ" agent/__init__.py >/dev/null 2>&1; then
+                  echo "[fail] package_incomplete: 安装包不含 agent/"
+                  exit 1
+                fi
+                echo CHECK_OK
+                """
+            ).format(tgz=shlex.quote(path))
+            proc = self._run_bash(script)
+            self.assertNotEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("package_incomplete", proc.stdout)
+            self.assertNotIn("CHECK_OK", proc.stdout)
+        finally:
+            os.remove(path)
 
 
 if __name__ == "__main__":
