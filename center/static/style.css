@@ -494,15 +494,14 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .chart-card svg { width: 100%; height: 56px; display: block; }
 
-.gpu-table, .proc-table, .disk-table {
+.gpu-table, .proc-table {
   width: 100%;
   font-size: 12px;
   table-layout: fixed;
 }
 
 .gpu-table th, .gpu-table td,
-.proc-table th, .proc-table td,
-.disk-table th, .disk-table td {
+.proc-table th, .proc-table td {
   padding: 8px 6px;
   white-space: normal;
   word-break: keep-all;
@@ -510,19 +509,34 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   vertical-align: top;
 }
 
-.disk-wrap {
+.disk-list {
   margin-top: 8px;
-  max-height: none;
+  font-size: 12px;
 }
 
-.disk-table th:nth-child(1),
-.disk-table td:nth-child(1) {
-  width: 42%;
+.disk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
 }
 
-.disk-table th:nth-child(2),
-.disk-table td:nth-child(2) {
-  width: 32%;
+.disk-row:last-child { border-bottom: none; }
+
+.disk-mount {
+  font-family: var(--mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.disk-usage {
+  font-family: var(--mono);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .detail-body .table-wrap {

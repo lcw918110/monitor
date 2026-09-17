@@ -621,17 +621,17 @@
     let extra = "";
     if (count > 1) {
       usageText =
-        "合计 " +
-        fmtNum(sys.disk_used_gb, 2) +
-        " / " +
-        fmtNum(sys.disk_total_gb, 2) +
+        fmtNum(sys.disk_used_gb, 1) +
+        "/" +
+        fmtNum(sys.disk_total_gb, 1) +
         " GB";
       const mnt = maxDisk && maxDisk.mount ? maxDisk.mount : "";
       extra =
-        ' <span class="muted">' +
-        (mnt ? escapeHtml(mnt) + " · " : "") +
+        '<div class="muted">' +
         count +
-        " 挂载</span>";
+        " 挂载" +
+        (mnt ? " · 最满 " + escapeHtml(mnt) : "") +
+        "</div>";
     }
     let html =
       '<div class="k">磁盘</div><div class="v">' +
@@ -642,24 +642,22 @@
         thresholds.disk_warn_percent,
         thresholds.disk_critical_percent
       ) +
-      extra +
       " " +
-      bar(sys.disk_percent);
+      bar(sys.disk_percent) +
+      extra;
     if (count > 1) {
-      html +=
-        '<div class="table-wrap disk-wrap"><table class="disk-table"><thead><tr>' +
-        "<th>挂载</th><th>已用 / 总量</th><th>利用率</th></tr></thead><tbody>";
+      html += '<div class="disk-list">';
       disks.forEach((d) => {
         const sub = [d.device, d.fstype].filter(Boolean).join(" · ");
         html +=
-          "<tr><td>" +
+          '<div class="disk-row"><div class="disk-mount">' +
           escapeHtml(d.mount || "-") +
           (sub ? '<div class="muted">' + escapeHtml(sub) + "</div>" : "") +
-          "</td><td>" +
-          fmtNum(d.used_gb, 2) +
-          " / " +
-          fmtNum(d.total_gb, 2) +
-          " GB</td><td>" +
+          '</div><div class="disk-usage">' +
+          fmtNum(d.used_gb, 1) +
+          "/" +
+          fmtNum(d.total_gb, 1) +
+          " GB " +
           metricPct(
             d.percent,
             thresholds.disk_warn_percent,
@@ -667,9 +665,9 @@
           ) +
           " " +
           bar(d.percent) +
-          "</td></tr>";
+          "</div></div>";
       });
-      html += "</tbody></table></div>";
+      html += "</div>";
     }
     html += "</div>";
     return html;
