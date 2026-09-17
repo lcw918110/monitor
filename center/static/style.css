@@ -509,6 +509,36 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   vertical-align: top;
 }
 
+.disk-list {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.disk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+
+.disk-row:last-child { border-bottom: none; }
+
+.disk-mount {
+  font-family: var(--mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.disk-usage {
+  font-family: var(--mono);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .detail-body .table-wrap {
   overflow-x: auto;
 }

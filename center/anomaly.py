@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from center.storage import Storage
 
@@ -40,6 +40,29 @@ def _num(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _disk_alert(system: Dict[str, Any]) -> Tuple[Optional[float], str]:
+    """告警用磁盘利用率：优先 disks[] 中的最大值（带挂载路径），否则 top-level disk_percent。"""
+    worst: Optional[float] = None
+    mount = ""
+    disks = system.get("disks")
+    if isinstance(disks, list):
+        for item in disks:
+            if not isinstance(item, dict):
+                continue
+            pct = _num(item.get("percent"))
+            if pct is None:
+                continue
+            if worst is None or pct > worst:
+                worst = pct
+                mount = str(item.get("mount") or "").strip()
+    top = _num(system.get("disk_percent"))
+    if worst is None:
+        return top, ""
+    if top is not None and top > worst:
+        return top, mount
+    return worst, mount
 
 
 def _level(score: int) -> str:
@@ -189,10 +212,11 @@ def judge_host_payload(
                 }
             )
 
-    disk = _num(system.get("disk_percent"))
+    disk, disk_mount = _disk_alert(system)
     if disk is not None:
         d_crit = _num(th["disk_critical_percent"]) or 95
         d_warn = _num(th["disk_warn_percent"]) or 85
+        prefix = ("磁盘 %s " % disk_mount) if disk_mount else "磁盘"
         if disk >= d_crit:
             sys_score = max(sys_score, 2)
             findings.append(
@@ -200,8 +224,10 @@ def judge_host_payload(
                     "resource": "disk",
                     "level": "critical",
                     "code": "disk_critical",
-                    "message": "磁盘使用异常高：%.1f%%（阈值 ≥%.0f%%）" % (disk, d_crit),
+                    "message": "%s使用异常高：%.1f%%（阈值 ≥%.0f%%）"
+                    % (prefix, disk, d_crit),
                     "value": disk,
+                    "mount": disk_mount or None,
                 }
             )
         elif disk >= d_warn:
@@ -211,8 +237,10 @@ def judge_host_payload(
                     "resource": "disk",
                     "level": "warn",
                     "code": "disk_warn",
-                    "message": "磁盘使用偏高：%.1f%%（阈值 ≥%.0f%%）" % (disk, d_warn),
+                    "message": "%s使用偏高：%.1f%%（阈值 ≥%.0f%%）"
+                    % (prefix, disk, d_warn),
                     "value": disk,
+                    "mount": disk_mount or None,
                 }
             )
 

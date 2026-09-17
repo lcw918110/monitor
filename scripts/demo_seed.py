@@ -118,8 +118,31 @@ def main() -> None:
                     "mem_used_mb": 120000,
                     "mem_percent": 46.8,
                     "disk_total_gb": 3600,
-                    "disk_used_gb": 1200,
-                    "disk_percent": 33.3,
+                    "disk_used_gb": (1920 if h["host_id"] == "app-cpu-01" and i == args.points - 1 else 500) + 700,
+                    "disk_percent": (
+                        96.0
+                        if h["host_id"] == "app-cpu-01" and i == args.points - 1
+                        else 43.8
+                    ),
+                    "disk_count": 2,
+                    "disks": [
+                        {
+                            "mount": "/data",
+                            "device": "/dev/sdb1",
+                            "fstype": "xfs",
+                            "total_gb": 2000,
+                            "used_gb": 1920 if h["host_id"] == "app-cpu-01" and i == args.points - 1 else 500,
+                            "percent": 96.0 if h["host_id"] == "app-cpu-01" and i == args.points - 1 else 25.0,
+                        },
+                        {
+                            "mount": "/",
+                            "device": "/dev/sda1",
+                            "fstype": "ext4",
+                            "total_gb": 1600,
+                            "used_gb": 700,
+                            "percent": 43.8,
+                        },
+                    ],
                     "load1": round(h["cpu_count"] * 0.4 + i * 0.05, 2),
                     "uptime_sec": 200000 + i,
                     "net_rx_mbps": round(8 + (i % 5) * 12.5, 2),

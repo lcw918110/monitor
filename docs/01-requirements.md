@@ -158,6 +158,11 @@
     "disk_total_gb": 1800,
     "disk_used_gb": 900,
     "disk_percent": 50.0,
+    "disk_count": 2,
+    "disks": [
+      {"mount": "/data", "device": "/dev/sdb1", "fstype": "xfs", "total_gb": 1600, "used_gb": 800, "percent": 50.0},
+      {"mount": "/", "device": "/dev/sda1", "fstype": "ext4", "total_gb": 200, "used_gb": 100, "percent": 50.0}
+    ],
     "load1": 2.1,
     "uptime_sec": 864000
   },
