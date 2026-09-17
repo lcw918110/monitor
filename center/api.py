@@ -125,6 +125,7 @@ def handle_metrics_post(
     storage: Storage,
     body: bytes,
     expected_token: str = "",
+    remote_ip: str = "",
 ) -> Tuple[int, Dict[str, Any]]:
     try:
         payload = json.loads(body.decode("utf-8"))
@@ -166,7 +167,7 @@ def handle_metrics_post(
         host_type = resolve_auto_host_type(has_cards)
     payload["host_type"] = host_type
 
-    storage.upsert_metric(payload)
+    storage.upsert_metric(payload, remote_ip=remote_ip)
     return 200, {"ok": True}
 
 
@@ -388,6 +389,8 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
     fields = [
         "host_id",
         "hostname",
+        "address",
+        "group_name",
         "host_type",
         "online",
         "last_seen",
@@ -398,6 +401,7 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         "disk_used_gb",
         "disk_total_gb",
         "disk_count",
+        "load1",
         "npu_count",
         "npu_util_avg",
         "gpu_count",
@@ -411,3 +415,69 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
     for row in rows:
         writer.writerow(row)
     return 200, buf.getvalue()
+
+
+def handle_groups_list(storage: Storage) -> Tuple[int, Dict[str, Any]]:
+    return 200, {"groups": storage.list_groups()}
+
+
+def handle_group_create(
+    storage: Storage, body: bytes
+) -> Tuple[int, Dict[str, Any]]:
+    try:
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _bad_request("请求体必须是合法 JSON")
+    if not isinstance(data, dict):
+        return _bad_request("JSON 根节点必须是对象")
+    err, group = storage.create_group(data.get("name"))
+    if err:
+        return _bad_request(err)
+    return 200, {"ok": True, "group": group}
+
+
+def handle_group_rename(
+    storage: Storage, group_id: int, body: bytes
+) -> Tuple[int, Dict[str, Any]]:
+    try:
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _bad_request("请求体必须是合法 JSON")
+    if not isinstance(data, dict):
+        return _bad_request("JSON 根节点必须是对象")
+    err, group = storage.rename_group(group_id, data.get("name"))
+    if err:
+        code = 404 if err == "资源组不存在" else 400
+        return code, {"ok": False, "error": err}
+    return 200, {"ok": True, "group": group}
+
+
+def handle_group_delete(storage: Storage, group_id: int) -> Tuple[int, Dict[str, Any]]:
+    if not storage.delete_group(group_id):
+        return 404, {"ok": False, "error": "资源组不存在"}
+    return 200, {"ok": True}
+
+
+def handle_host_assign_group(
+    storage: Storage, host_id: str, body: bytes
+) -> Tuple[int, Dict[str, Any]]:
+    try:
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _bad_request("请求体必须是合法 JSON")
+    if not isinstance(data, dict):
+        return _bad_request("JSON 根节点必须是对象")
+    raw = data.get("group_id", None)
+    group_id: Optional[int]
+    if raw is None or raw == "" or raw is False:
+        group_id = None
+    else:
+        try:
+            group_id = int(raw)
+        except (TypeError, ValueError):
+            return _bad_request("group_id 必须是整数或空")
+    err, info = storage.assign_host_group(host_id, group_id)
+    if err:
+        code = 404 if err in ("主机不存在", "资源组不存在") else 400
+        return code, {"ok": False, "error": err}
+    return 200, {"ok": True, **(info or {})}

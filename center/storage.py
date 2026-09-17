@@ -10,6 +10,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from center.hostaddr import normalize_ip, resolve_host_address
+
 
 PERIOD_METRIC_KEYS = (
     "cpu_percent",
@@ -136,7 +138,8 @@ class Storage:
                         host_type TEXT NOT NULL,
                         last_seen INTEGER NOT NULL,
                         last_payload TEXT NOT NULL,
-                        created_at INTEGER NOT NULL
+                        created_at INTEGER NOT NULL,
+                        last_remote_ip TEXT
                     );
                     CREATE TABLE IF NOT EXISTS metrics_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,13 +149,34 @@ class Storage:
                     );
                     CREATE INDEX IF NOT EXISTS idx_metrics_host_ts
                         ON metrics_history(host_id, ts);
+                    CREATE TABLE IF NOT EXISTS resource_groups (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        created_at INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS host_group_members (
+                        host_id TEXT PRIMARY KEY,
+                        group_id INTEGER NOT NULL,
+                        FOREIGN KEY(group_id) REFERENCES resource_groups(id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_host_group_members_gid
+                        ON host_group_members(group_id);
                     """
                 )
+                cols = {
+                    r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()
+                }
+                if "last_remote_ip" not in cols:
+                    conn.execute("ALTER TABLE hosts ADD COLUMN last_remote_ip TEXT")
                 conn.commit()
             finally:
                 conn.close()
 
-    def upsert_metric(self, payload: Dict[str, Any]) -> None:
+    def upsert_metric(
+        self,
+        payload: Dict[str, Any],
+        remote_ip: Optional[str] = None,
+    ) -> None:
         host_id = payload["host_id"]
         hostname = payload.get("hostname") or host_id
         host_type = payload.get("host_type") or "cpu"
@@ -160,21 +184,35 @@ class Storage:
         raw = json.dumps(payload, ensure_ascii=False)
         compact = json.dumps(self._compact_history_payload(payload), ensure_ascii=False)
         now = int(time.time())
+        system = payload.get("system") or {}
+        if not isinstance(system, dict):
+            system = {}
+        stored_ip = (
+            normalize_ip(system.get("primary_ip"))
+            or normalize_ip(system.get("ipv4"))
+            or normalize_ip(system.get("ip"))
+            or normalize_ip(remote_ip)
+            or None
+        )
 
         with self._lock:
             conn = self._connect()
             try:
                 conn.execute(
                     """
-                    INSERT INTO hosts (host_id, hostname, host_type, last_seen, last_payload, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO hosts (
+                        host_id, hostname, host_type, last_seen, last_payload,
+                        created_at, last_remote_ip
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(host_id) DO UPDATE SET
                         hostname=excluded.hostname,
                         host_type=excluded.host_type,
                         last_seen=excluded.last_seen,
-                        last_payload=excluded.last_payload
+                        last_payload=excluded.last_payload,
+                        last_remote_ip=COALESCE(excluded.last_remote_ip, hosts.last_remote_ip)
                     """,
-                    (host_id, hostname, host_type, ts, raw, now),
+                    (host_id, hostname, host_type, ts, raw, now, stored_ip),
                 )
                 conn.execute(
                     "INSERT INTO metrics_history (host_id, ts, payload) VALUES (?, ?, ?)",
@@ -254,6 +292,213 @@ class Storage:
         return (now - int(last_seen)) <= self.offline_seconds
 
     @staticmethod
+    def _clean_group_name(name: Any) -> Tuple[Optional[str], Optional[str]]:
+        text = str(name or "").strip()
+        if not text:
+            return None, "资源组名称不能为空"
+        if len(text) > 40:
+            return None, "资源组名称不能超过 40 个字符"
+        return text, None
+
+    def _deploy_ip_map(self, conn: sqlite3.Connection) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        try:
+            rows = conn.execute(
+                "SELECT host_id, hostname, ip FROM deploy_targets"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return out
+        for row in rows:
+            ip = normalize_ip(row["ip"])
+            if not ip:
+                continue
+            hid = str(row["host_id"] or "").strip()
+            hn = str(row["hostname"] or "").strip()
+            if hid and hid not in out:
+                out[hid] = ip
+            if hn and hn not in out:
+                out[hn] = ip
+            out[ip] = ip
+        return out
+
+    def _host_group_map(self, conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            rows = conn.execute(
+                """
+                SELECT m.host_id, m.group_id, g.name
+                FROM host_group_members m
+                JOIN resource_groups g ON g.id = m.group_id
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return out
+        for row in rows:
+            out[str(row["host_id"])] = {
+                "group_id": int(row["group_id"]),
+                "group_name": row["name"],
+            }
+        return out
+
+    def _attach_host_meta(
+        self,
+        item: Dict[str, Any],
+        payload: Optional[Dict[str, Any]],
+        deploy_map: Optional[Dict[str, str]] = None,
+        group_map: Optional[Dict[str, Dict[str, Any]]] = None,
+        remote_ip: Any = "",
+    ) -> Dict[str, Any]:
+        hid = item.get("host_id")
+        item["address"] = resolve_host_address(
+            host_id=hid,
+            hostname=item.get("hostname"),
+            payload=payload,
+            remote_ip=remote_ip or item.get("last_remote_ip"),
+            deploy_map=deploy_map,
+        )
+        meta = (group_map or {}).get(str(hid or "")) or {}
+        item["group_id"] = meta.get("group_id")
+        item["group_name"] = meta.get("group_name")
+        return item
+
+    def list_groups(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT g.id, g.name, g.created_at,
+                           COUNT(m.host_id) AS host_count
+                    FROM resource_groups g
+                    LEFT JOIN host_group_members m ON m.group_id = g.id
+                    GROUP BY g.id
+                    ORDER BY g.name COLLATE NOCASE
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        return [
+            {
+                "id": int(row["id"]),
+                "name": row["name"],
+                "created_at": row["created_at"],
+                "host_count": int(row["host_count"] or 0),
+            }
+            for row in rows
+        ]
+
+    def create_group(self, name: Any) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        cleaned, err = self._clean_group_name(name)
+        if err:
+            return err, None
+        now = int(time.time())
+        with self._lock:
+            conn = self._connect()
+            try:
+                try:
+                    cur = conn.execute(
+                        "INSERT INTO resource_groups (name, created_at) VALUES (?, ?)",
+                        (cleaned, now),
+                    )
+                    conn.commit()
+                    gid = int(cur.lastrowid)
+                except sqlite3.IntegrityError:
+                    return "资源组名称已存在", None
+            finally:
+                conn.close()
+        return None, {
+            "id": gid,
+            "name": cleaned,
+            "created_at": now,
+            "host_count": 0,
+        }
+
+    def rename_group(
+        self, group_id: int, name: Any
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        cleaned, err = self._clean_group_name(name)
+        if err:
+            return err, None
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT id FROM resource_groups WHERE id=?", (int(group_id),)
+                ).fetchone()
+                if not row:
+                    return "资源组不存在", None
+                try:
+                    conn.execute(
+                        "UPDATE resource_groups SET name=? WHERE id=?",
+                        (cleaned, int(group_id)),
+                    )
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    return "资源组名称已存在", None
+            finally:
+                conn.close()
+        groups = {g["id"]: g for g in self.list_groups()}
+        return None, groups.get(int(group_id))
+
+    def delete_group(self, group_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "DELETE FROM host_group_members WHERE group_id=?", (int(group_id),)
+                )
+                cur = conn.execute(
+                    "DELETE FROM resource_groups WHERE id=?", (int(group_id),)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def assign_host_group(
+        self, host_id: str, group_id: Optional[int]
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        hid = str(host_id or "").strip()
+        if not hid:
+            return "host_id 不能为空", None
+        with self._lock:
+            conn = self._connect()
+            try:
+                host = conn.execute(
+                    "SELECT host_id FROM hosts WHERE host_id=?", (hid,)
+                ).fetchone()
+                if not host:
+                    return "主机不存在", None
+                if group_id is None or group_id == "":
+                    conn.execute(
+                        "DELETE FROM host_group_members WHERE host_id=?", (hid,)
+                    )
+                    conn.commit()
+                    return None, {"host_id": hid, "group_id": None, "group_name": None}
+                gid = int(group_id)
+                row = conn.execute(
+                    "SELECT id, name FROM resource_groups WHERE id=?", (gid,)
+                ).fetchone()
+                if not row:
+                    return "资源组不存在", None
+                conn.execute(
+                    """
+                    INSERT INTO host_group_members (host_id, group_id)
+                    VALUES (?, ?)
+                    ON CONFLICT(host_id) DO UPDATE SET group_id=excluded.group_id
+                    """,
+                    (hid, gid),
+                )
+                conn.commit()
+                return None, {
+                    "host_id": hid,
+                    "group_id": gid,
+                    "group_name": row["name"],
+                }
+            finally:
+                conn.close()
+
+    @staticmethod
     def _summary_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         system = payload.get("system") or {}
         npus = payload.get("npus") or []
@@ -300,8 +545,14 @@ class Storage:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT host_id, hostname, host_type, last_seen, last_payload FROM hosts ORDER BY host_id"
+                    """
+                    SELECT host_id, hostname, host_type, last_seen, last_payload,
+                           last_remote_ip
+                    FROM hosts ORDER BY host_id
+                    """
                 ).fetchall()
+                deploy_map = self._deploy_ip_map(conn)
+                group_map = self._host_group_map(conn)
             finally:
                 conn.close()
 
@@ -314,8 +565,16 @@ class Storage:
                 "host_type": row["host_type"],
                 "last_seen": row["last_seen"],
                 "online": self._is_online(row["last_seen"], now),
+                "last_remote_ip": row["last_remote_ip"],
             }
             item.update(self._summary_from_payload(payload))
+            self._attach_host_meta(
+                item,
+                payload,
+                deploy_map=deploy_map,
+                group_map=group_map,
+                remote_ip=row["last_remote_ip"],
+            )
             result.append(item)
         return result
 
@@ -324,23 +583,38 @@ class Storage:
             conn = self._connect()
             try:
                 row = conn.execute(
-                    "SELECT host_id, hostname, host_type, last_seen, last_payload, created_at FROM hosts WHERE host_id=?",
+                    """
+                    SELECT host_id, hostname, host_type, last_seen, last_payload,
+                           created_at, last_remote_ip
+                    FROM hosts WHERE host_id=?
+                    """,
                     (host_id,),
                 ).fetchone()
+                deploy_map = self._deploy_ip_map(conn)
+                group_map = self._host_group_map(conn)
             finally:
                 conn.close()
         if not row:
             return None
         payload = json.loads(row["last_payload"])
-        return {
+        item = {
             "host_id": row["host_id"],
             "hostname": row["hostname"],
             "host_type": row["host_type"],
             "last_seen": row["last_seen"],
             "created_at": row["created_at"],
             "online": self._is_online(row["last_seen"]),
+            "last_remote_ip": row["last_remote_ip"],
             "payload": payload,
         }
+        self._attach_host_meta(
+            item,
+            payload,
+            deploy_map=deploy_map,
+            group_map=group_map,
+            remote_ip=row["last_remote_ip"],
+        )
+        return item
 
     def cluster_stats(self) -> Dict[str, Any]:
         hosts = self.list_hosts()
@@ -803,6 +1077,9 @@ class Storage:
                     "hostname": host.get("hostname") or hid,
                     "host_type": host.get("host_type"),
                     "online": host.get("online"),
+                    "address": host.get("address") or "",
+                    "group_id": host.get("group_id"),
+                    "group_name": host.get("group_name"),
                     "sample_count": stats.get("sample_count") or 0,
                     "from_ts": stats.get("from_ts"),
                     "to_ts": stats.get("to_ts"),

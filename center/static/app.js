@@ -2,7 +2,32 @@
   const REFRESH_MS = 15000;
   let selectedId = null;
   let allHosts = [];
+  let resourceGroups = [];
   let currentTab = "realtime"; // realtime | period
+  let hostSortKey = "";
+  let hostSortDir = "desc";
+  let periodSortKey = "";
+  let periodSortDir = "desc";
+  let periodUtilData = null;
+  const RATE_SORT_KEYS = {
+    cpu_percent: true,
+    mem_percent: true,
+    disk_percent: true,
+    accel: true,
+    load1: true,
+    last_seen: true,
+    samples: true,
+    cpu_avg: true,
+    cpu_p95: true,
+    cpu_busy: true,
+    mem_avg: true,
+    disk_avg: true,
+    accel_avg: true,
+    accel_p95: true,
+    accel_busy: true,
+    rx_pct: true,
+    tx_pct: true,
+  };
   /** 时段统计时间窗（时段页与单机时段详情共用） */
   let detailMinutes = 120;
   let periodMode = "preset"; // preset | custom
@@ -42,6 +67,12 @@
     filterQ: document.getElementById("filterQ"),
     filterType: document.getElementById("filterType"),
     filterStatus: document.getElementById("filterStatus"),
+    filterGroup: document.getElementById("filterGroup"),
+    btnGroups: document.getElementById("btnGroups"),
+    groupPanel: document.getElementById("groupPanel"),
+    groupList: document.getElementById("groupList"),
+    newGroupName: document.getElementById("newGroupName"),
+    btnAddGroup: document.getElementById("btnAddGroup"),
     periodUtilControls: document.getElementById("periodUtilControls"),
     periodUtilBody: document.getElementById("periodUtilBody"),
     periodDetailTitle: document.getElementById("periodDetailTitle"),
@@ -125,6 +156,268 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function numOrNull(v) {
+    if (v === null || v === undefined || v === "") return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  }
+
+  function cmpSort(a, b, dir) {
+    const aNil = a === null || a === undefined || a === "";
+    const bNil = b === null || b === undefined || b === "";
+    if (aNil && bNil) return 0;
+    if (aNil) return 1;
+    if (bNil) return -1;
+    if (typeof a === "number" && typeof b === "number") {
+      return dir === "asc" ? a - b : b - a;
+    }
+    const sa = String(a).toLowerCase();
+    const sb = String(b).toLowerCase();
+    if (sa < sb) return dir === "asc" ? -1 : 1;
+    if (sa > sb) return dir === "asc" ? 1 : -1;
+    return 0;
+  }
+
+  function syncSortHeaders(table, key, dir) {
+    if (!table) return;
+    Array.from(table.querySelectorAll("thead th[data-sort]")).forEach((th) => {
+      th.classList.remove("sort-asc", "sort-desc");
+      if (th.getAttribute("data-sort") === key) {
+        th.classList.add(dir === "asc" ? "sort-asc" : "sort-desc");
+      }
+    });
+  }
+
+  function applyHeaderSort(currentKey, currentDir, nextKey) {
+    if (currentKey === nextKey) {
+      return { key: nextKey, dir: currentDir === "asc" ? "desc" : "asc" };
+    }
+    return { key: nextKey, dir: RATE_SORT_KEYS[nextKey] ? "desc" : "asc" };
+  }
+
+  function hostSortValue(h, key) {
+    if (key === "online") return h.online ? 1 : 0;
+    if (key === "status") {
+      const rank = { critical: 0, warn: 1, unknown: 2, normal: 3 };
+      return rank[(h.anomaly && h.anomaly.overall) || "unknown"];
+    }
+    if (key === "host") {
+      return (h.address || h.hostname || h.host_id || "").toLowerCase();
+    }
+    if (key === "group") return (h.group_name || "").toLowerCase();
+    if (key === "type") return normalizedType(h.host_type);
+    if (key === "cpu_percent") return numOrNull(h.cpu_percent);
+    if (key === "mem_percent") return numOrNull(h.mem_percent);
+    if (key === "disk_percent") return numOrNull(h.disk_percent);
+    if (key === "accel") {
+      return numOrNull(
+        h.npu_util_avg != null ? h.npu_util_avg : h.gpu_util_avg
+      );
+    }
+    if (key === "load1") return numOrNull(h.load1);
+    if (key === "last_seen") return numOrNull(h.last_seen);
+    return null;
+  }
+
+  function sortHostRows(list, key, dir) {
+    if (!key) return list;
+    return list.slice().sort((a, b) => cmpSort(hostSortValue(a, key), hostSortValue(b, key), dir));
+  }
+
+  function periodMetric(h, name, field) {
+    const block = (h.metrics || {})[name] || {};
+    return numOrNull(block[field]);
+  }
+
+  function periodSortValue(h, key) {
+    if (key === "host") return (h.address || h.hostname || h.host_id || "").toLowerCase();
+    if (key === "group") return (h.group_name || "").toLowerCase();
+    if (key === "samples") return numOrNull(h.sample_count);
+    if (key === "cpu_avg") return periodMetric(h, "cpu_percent", "avg");
+    if (key === "cpu_p95") return periodMetric(h, "cpu_percent", "p95");
+    if (key === "cpu_busy") return periodMetric(h, "cpu_percent", "busy_ratio");
+    if (key === "mem_avg") return periodMetric(h, "mem_percent", "avg");
+    if (key === "disk_avg") return periodMetric(h, "disk_percent", "avg");
+    if (key === "accel_avg") return periodMetric(h, "accel_util_avg", "avg");
+    if (key === "accel_p95") return periodMetric(h, "accel_util_avg", "p95");
+    if (key === "accel_busy") return periodMetric(h, "accel_util_avg", "busy_ratio");
+    if (key === "rx_pct") return periodMetric(h, "net_rx_percent", "avg");
+    if (key === "tx_pct") return periodMetric(h, "net_tx_percent", "avg");
+    return null;
+  }
+
+  function hostAddressCell(h) {
+    const addr = String(h.address || "").trim();
+    const name = String(h.hostname || "").trim();
+    const hid = String(h.host_id || "").trim();
+    const primary = addr || name || hid || "-";
+    const extras = [];
+    if (name && name !== primary) extras.push(name);
+    if (hid && hid !== primary && hid !== name) extras.push(hid);
+    let html = '<div class="host-addr">' + escapeHtml(primary) + "</div>";
+    if (extras.length) {
+      html += '<div class="muted">' + escapeHtml(extras.join(" · ")) + "</div>";
+    }
+    return html;
+  }
+
+  function fillGroupFilter() {
+    const sel = el.filterGroup;
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML =
+      '<option value="">全部资源组</option>' +
+      '<option value="__none__">未分组</option>' +
+      resourceGroups
+        .map(
+          (g) =>
+            '<option value="' +
+            g.id +
+            '">' +
+            escapeHtml(g.name) +
+            "</option>"
+        )
+        .join("");
+    if (cur && Array.from(sel.options).some((o) => o.value === cur)) {
+      sel.value = cur;
+    }
+  }
+
+  function groupSelectHtml(h) {
+    const cur = h.group_id == null ? "" : String(h.group_id);
+    let html =
+      '<select class="host-group-select" data-id="' +
+      encodeURIComponent(h.host_id) +
+      '"><option value="">未分组</option>';
+    resourceGroups.forEach((g) => {
+      html +=
+        '<option value="' +
+        g.id +
+        '"' +
+        (String(g.id) === cur ? " selected" : "") +
+        ">" +
+        escapeHtml(g.name) +
+        "</option>";
+    });
+    html += "</select>";
+    return html;
+  }
+
+  function renderGroupPanel() {
+    if (!el.groupList) return;
+    if (!resourceGroups.length) {
+      el.groupList.innerHTML = '<span class="muted">暂无资源组，输入名称后点添加</span>';
+      return;
+    }
+    el.groupList.innerHTML = resourceGroups
+      .map(
+        (g) =>
+          '<span class="group-chip">' +
+          escapeHtml(g.name) +
+          ' <span class="muted">' +
+          (g.host_count || 0) +
+          "</span>" +
+          '<button type="button" data-del-group="' +
+          g.id +
+          '" title="删除">删除</button></span>'
+      )
+      .join("");
+    Array.from(el.groupList.querySelectorAll("[data-del-group]")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.getAttribute("data-del-group"));
+        if (!id) return;
+        deleteGroup(id);
+      });
+    });
+  }
+
+  async function loadGroups() {
+    try {
+      const res = await fetch("/api/v1/groups");
+      const data = await res.json();
+      resourceGroups = data.groups || [];
+    } catch (e) {
+      resourceGroups = [];
+    }
+    fillGroupFilter();
+    renderGroupPanel();
+  }
+
+  async function createGroup() {
+    const name = ((el.newGroupName && el.newGroupName.value) || "").trim();
+    if (!name) return;
+    try {
+      const res = await fetch("/api/v1/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        window.alert((data && data.error) || "添加失败");
+        return;
+      }
+      if (el.newGroupName) el.newGroupName.value = "";
+      await loadGroups();
+      renderHosts(allHosts);
+    } catch (e) {
+      window.alert("添加失败：" + e.message);
+    }
+  }
+
+  async function deleteGroup(groupId) {
+    if (!window.confirm("删除该资源组？主机将变为未分组。")) return;
+    try {
+      const res = await fetch("/api/v1/groups/" + encodeURIComponent(groupId), {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        window.alert((data && data.error) || "删除失败");
+        return;
+      }
+      if (el.filterGroup && el.filterGroup.value === String(groupId)) {
+        el.filterGroup.value = "";
+      }
+      await loadGroups();
+      const hostsRes = await fetch("/api/v1/hosts");
+      const hostsData = await hostsRes.json();
+      renderHosts(hostsData.hosts || []);
+    } catch (e) {
+      window.alert("删除失败：" + e.message);
+    }
+  }
+
+  async function assignHostGroup(hostId, groupId) {
+    try {
+      const res = await fetch(
+        "/api/v1/hosts/" + encodeURIComponent(hostId) + "/group",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            group_id: groupId === "" || groupId == null ? null : Number(groupId),
+          }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        window.alert((data && data.error) || "分组失败");
+        return;
+      }
+      allHosts.forEach((h) => {
+        if (h.host_id === hostId) {
+          h.group_id = data.group_id;
+          h.group_name = data.group_name;
+        }
+      });
+      await loadGroups();
+      renderHosts(allHosts);
+    } catch (e) {
+      window.alert("分组失败：" + e.message);
+    }
   }
 
   function statusLabel(s) {
@@ -502,6 +795,7 @@
   }
 
   function renderPeriodUtil(data) {
+    periodUtilData = data;
     if (!el.periodUtilBody) return;
     updatePeriodExportLink();
     if (!data || data.ok === false) {
@@ -539,13 +833,26 @@
       el.periodUtilBody.innerHTML = html;
       return;
     }
+    const sorted = hosts.slice().sort((a, b) =>
+      cmpSort(periodSortValue(a, periodSortKey), periodSortValue(b, periodSortKey), periodSortDir)
+    );
     html +=
       '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
-      "<th>主机</th><th>样本</th><th>CPU 均</th><th>CPU P95</th><th>CPU 繁忙</th>" +
-      "<th>内存均</th><th>磁盘均</th><th>加速卡均</th><th>加速卡 P95</th><th>加速卡繁忙</th>" +
-      "<th>入向占额定</th><th>出向占额定</th>" +
+      '<th class="sortable" data-sort="host">主机 / 地址</th>' +
+      '<th class="sortable" data-sort="group">资源组</th>' +
+      '<th class="sortable" data-sort="samples">样本</th>' +
+      '<th class="sortable" data-sort="cpu_avg">CPU 均</th>' +
+      '<th class="sortable" data-sort="cpu_p95">CPU P95</th>' +
+      '<th class="sortable" data-sort="cpu_busy">CPU 繁忙</th>' +
+      '<th class="sortable" data-sort="mem_avg">内存均</th>' +
+      '<th class="sortable" data-sort="disk_avg">磁盘均</th>' +
+      '<th class="sortable" data-sort="accel_avg">加速卡均</th>' +
+      '<th class="sortable" data-sort="accel_p95">加速卡 P95</th>' +
+      '<th class="sortable" data-sort="accel_busy">加速卡繁忙</th>' +
+      '<th class="sortable" data-sort="rx_pct">入向占额定</th>' +
+      '<th class="sortable" data-sort="tx_pct">出向占额定</th>' +
       "</tr></thead><tbody>";
-    hosts.forEach((h) => {
+    sorted.forEach((h) => {
       const m = h.metrics || {};
       const cpu = m.cpu_percent || {};
       const mem = m.mem_percent || {};
@@ -553,6 +860,11 @@
       const accel = m.accel_util_avg || {};
       const rxp = m.net_rx_percent || {};
       const txp = m.net_tx_percent || {};
+      const live = hostById(h.host_id) || {};
+      const row = Object.assign({}, h, {
+        address: h.address || live.address,
+        group_name: h.group_name || live.group_name,
+      });
       const active = h.host_id === selectedId ? " active" : "";
       html +=
         '<tr data-id="' +
@@ -560,10 +872,10 @@
         '" class="' +
         active.trim() +
         '"><td>' +
-        escapeHtml(h.hostname || h.host_id) +
-        '<div class="muted">' +
-        escapeHtml(h.host_id) +
-        "</div></td><td>" +
+        hostAddressCell(row) +
+        "</td><td>" +
+        escapeHtml(row.group_name || "未分组") +
+        "</td><td>" +
         (h.sample_count || 0) +
         "</td><td>" +
         fmtStatNum(cpu.avg, "%") +
@@ -589,6 +901,23 @@
     });
     html += "</tbody></table></div>";
     el.periodUtilBody.innerHTML = html;
+    const periodTable = el.periodUtilBody.querySelector(".period-hosts-table");
+    syncSortHeaders(periodTable, periodSortKey, periodSortDir);
+    if (periodTable) {
+      Array.from(periodTable.querySelectorAll("thead th[data-sort]")).forEach((th) => {
+        th.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const next = applyHeaderSort(
+            periodSortKey,
+            periodSortDir,
+            th.getAttribute("data-sort")
+          );
+          periodSortKey = next.key;
+          periodSortDir = next.dir;
+          if (periodUtilData) renderPeriodUtil(periodUtilData);
+        });
+      });
+    }
     Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((tr) => {
       tr.addEventListener("click", () => {
         selectedId = decodeURIComponent(tr.getAttribute("data-id"));
@@ -676,7 +1005,7 @@
     const host = hostById(hostId);
     if (el.periodDetailTitle) {
       el.periodDetailTitle.textContent =
-        (host && (host.hostname || host.host_id)) || hostId;
+        (host && (host.address || host.hostname || host.host_id)) || hostId;
     }
     let hist = { points: [] };
     let periodStats = null;
@@ -846,24 +1175,43 @@
     const q = (el.filterQ.value || "").trim().toLowerCase();
     const t = el.filterType.value;
     const s = el.filterStatus.value;
-    return allHosts.filter((h) => {
-      const nt = normalizedType(h.host_type);
-      if (t && nt !== t && h.host_type !== t) return false;
-      const overall = (h.anomaly && h.anomaly.overall) || "unknown";
-      if (s && overall !== s) return false;
-      if (!q) return true;
-      const hay = ((h.hostname || "") + " " + (h.host_id || "")).toLowerCase();
-      return hay.indexOf(q) >= 0;
-    });
+    const g = el.filterGroup ? el.filterGroup.value : "";
+    return sortHostRows(
+      allHosts.filter((h) => {
+        const nt = normalizedType(h.host_type);
+        if (t && nt !== t && h.host_type !== t) return false;
+        const overall = (h.anomaly && h.anomaly.overall) || "unknown";
+        if (s && overall !== s) return false;
+        if (g === "__none__") {
+          if (h.group_id != null && h.group_id !== "") return false;
+        } else if (g) {
+          if (String(h.group_id) !== String(g)) return false;
+        }
+        if (!q) return true;
+        const hay = [
+          h.hostname,
+          h.host_id,
+          h.address,
+          h.group_name,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return hay.indexOf(q) >= 0;
+      }),
+      hostSortKey,
+      hostSortDir
+    );
   }
 
   function renderHosts(hosts) {
     allHosts = hosts || [];
     const view = filteredHosts();
     el.hostCount.textContent = "显示 " + view.length + " / " + allHosts.length;
+    const hostTable = el.hostBody && el.hostBody.closest("table");
+    syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
       el.hostBody.innerHTML =
-        '<tr><td colspan="8" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="11" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
       return;
     }
     el.hostBody.innerHTML = view
@@ -871,9 +1219,10 @@
         const active = h.host_id === selectedId ? " active" : "";
         const overall = (h.anomaly && h.anomaly.overall) || "unknown";
         const cardCount = (h.npu_count || 0) + (h.gpu_count || 0);
+        const accelVal = h.npu_util_avg != null ? h.npu_util_avg : h.gpu_util_avg;
         const cardText =
           cardCount > 0
-            ? cardCount + " 卡 / " + fmtPct(h.npu_util_avg || h.gpu_util_avg)
+            ? cardCount + " 卡 / " + fmtPct(accelVal)
             : "-";
         const cpuLevel = levelHi(
           h.cpu_percent,
@@ -895,26 +1244,36 @@
           statusBadge(overall) +
           "</td>" +
           "<td>" +
-          escapeHtml(h.hostname || h.host_id) +
-          '<div class="muted">' +
-          escapeHtml(h.host_id) +
-          "</div></td>" +
+          hostAddressCell(h) +
+          "</td>" +
+          "<td>" +
+          groupSelectHtml(h) +
+          "</td>" +
           "<td>" +
           typeTag(h.host_type) +
           "</td>" +
           "<td>" +
           metricSpan(
-            "实时 " +
-              fmtPct(h.cpu_percent) +
-              (h.cpu_count ? " / 额定 " + h.cpu_count + "核" : ""),
+            fmtPct(h.cpu_percent) +
+              (h.cpu_count ? " / " + h.cpu_count + "核" : ""),
             cpuLevel
           ) +
+          "</td>" +
+          "<td>" +
+          metricPct(
+            h.mem_percent,
+            thresholds.mem_warn_percent,
+            thresholds.mem_critical_percent
+          ) +
+          "</td>" +
+          "<td>" +
+          hostDiskCell(h) +
           "</td>" +
           "<td>" +
           cardText +
           "</td>" +
           "<td>" +
-          hostDiskCell(h) +
+          fmtNum(h.load1, 2) +
           "</td>" +
           "<td>" +
           fmtTime(h.last_seen) +
@@ -932,6 +1291,14 @@
           r.classList.remove("active")
         );
         tr.classList.add("active");
+      });
+    });
+    Array.from(el.hostBody.querySelectorAll(".host-group-select")).forEach((sel) => {
+      sel.addEventListener("click", (ev) => ev.stopPropagation());
+      sel.addEventListener("change", (ev) => {
+        ev.stopPropagation();
+        const hostId = decodeURIComponent(sel.getAttribute("data-id"));
+        assignHostGroup(hostId, sel.value);
       });
     });
   }
@@ -953,7 +1320,7 @@
       thresholds = Object.assign({}, thresholds, anomaly.thresholds);
     }
     el.detailTitle.textContent =
-      (data.hostname || data.host_id) +
+      (data.address || data.hostname || data.host_id) +
       " · " +
       (data.online ? "在线" : "离线") +
       " · " +
@@ -996,6 +1363,18 @@
 
     html += '<div class="section-title">CPU / 基础资源（实时用量 + 额定/总量）</div>';
     html += '<div class="kv">';
+    html +=
+      '<div class="k">地址</div><div class="v">' +
+      escapeHtml(data.address || data.hostname || data.host_id || "-") +
+      "</div>";
+    html +=
+      '<div class="k">主机名</div><div class="v">' +
+      escapeHtml(data.hostname || "-") +
+      "</div>";
+    html +=
+      '<div class="k">资源组</div><div class="v">' +
+      escapeHtml(data.group_name || "未分组") +
+      "</div>";
     const cpuFreqRt =
       sys.cpu_freq_mhz != null
         ? " · " + fmtNum(sys.cpu_freq_mhz, 0) + " MHz"
@@ -1257,6 +1636,7 @@
         fetch("/api/v1/stats"),
         fetch("/api/v1/hosts"),
         fetch("/api/v1/anomaly"),
+        loadGroups(),
       ]);
       renderStats(await statsRes.json());
       renderAnomalySummary(await anomalyRes.json());
@@ -1281,6 +1661,37 @@
   el.filterQ.addEventListener("input", () => renderHosts(allHosts));
   el.filterType.addEventListener("change", () => renderHosts(allHosts));
   el.filterStatus.addEventListener("change", () => renderHosts(allHosts));
+  if (el.filterGroup) {
+    el.filterGroup.addEventListener("change", () => renderHosts(allHosts));
+  }
+  if (el.btnGroups && el.groupPanel) {
+    el.btnGroups.addEventListener("click", () => {
+      el.groupPanel.hidden = !el.groupPanel.hidden;
+    });
+  }
+  if (el.btnAddGroup) {
+    el.btnAddGroup.addEventListener("click", createGroup);
+  }
+  if (el.newGroupName) {
+    el.newGroupName.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") createGroup();
+    });
+  }
+  const hostTable = document.getElementById("hostTable");
+  if (hostTable) {
+    Array.from(hostTable.querySelectorAll("thead th[data-sort]")).forEach((th) => {
+      th.addEventListener("click", () => {
+        const next = applyHeaderSort(
+          hostSortKey,
+          hostSortDir,
+          th.getAttribute("data-sort")
+        );
+        hostSortKey = next.key;
+        hostSortDir = next.dir;
+        renderHosts(allHosts);
+      });
+    });
+  }
   [el.tabBtnRealtime, el.tabBtnPeriod].forEach((btn) => {
     if (!btn) return;
     btn.addEventListener("click", () => setTab(btn.getAttribute("data-tab")));

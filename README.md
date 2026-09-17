@@ -21,6 +21,8 @@
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
 - **详情统计**：监测台分 **「实时监控」** / **「时段统计」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总
+- **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载等排序；主机列优先显示**完整 IP**（上报来源、部署清单或 Agent `primary_ip`，避免短主机名片段）
+- **资源组**：在实时监控页创建分组、给主机分配、按组筛选；数据在中心 SQLite，重启保留，**不必升级 Agent**
 - **部署**：中心「客户端部署」页或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`（唯一产品路径；禁止笔记本旁路 scp/sshpass）
 
 > 批量导入只保留 **Excel/CSV**（已去掉与之重合的「文本清单」入口）。
@@ -202,8 +204,10 @@ tail -n 50 .deploy-agent/run/agent.log
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/v1/metrics` | Agent 上报 |
-| GET | `/api/v1/hosts` | 主机列表（含 anomaly） |
+| GET | `/api/v1/hosts` | 主机列表（含 anomaly、完整 `address`、资源组） |
 | GET | `/api/v1/hosts/{id}` | 详情 |
+| GET/POST/DELETE | `/api/v1/groups` | 资源组列表 / 创建；`POST/DELETE /api/v1/groups/{id}` 重命名、删除 |
+| POST | `/api/v1/hosts/{id}/group` | 分配资源组（`{"group_id": 1}` 或 `null` 取消） |
 | GET | `/api/v1/hosts/{id}/history` | 历史趋势（`minutes` / `limit`） |
 | GET | `/api/v1/hosts/{id}/period-stats` | 单机时段统计（`minutes` 或 `from_ts`/`to_ts`；avg/min/max/p95/busy_ratio） |
 | GET | `/api/v1/period-stats` | 集群时段利用（每主机 + 样本加权汇总） |
@@ -241,5 +245,5 @@ tail -n 50 .deploy-agent/run/agent.log
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list
 ```

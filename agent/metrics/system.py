@@ -8,6 +8,7 @@ CPU 采集：
 
 import os
 import platform
+import socket
 import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -276,6 +277,21 @@ def sample_cpu_identity() -> Dict[str, str]:
     }
 
 
+def sample_primary_ip() -> Optional[str]:
+    """本机主要 IPv4（避开回环）。旧 Agent 不上报此字段时，中心仍可用部署清单/来源 IP。"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.2)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+    except OSError:
+        return None
+    if not ip or ip.startswith("127.") or ip.startswith("0.") or ip.startswith("169.254."):
+        return None
+    return ip
+
+
 def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[str, Any]:
     from agent.metrics.disk import collect_disks
     from agent.metrics.network import collect_network
@@ -291,4 +307,7 @@ def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[st
     data.update(sample_memory())
     data.update(collect_disks(disk_path))
     data.update(collect_network())
+    primary_ip = sample_primary_ip()
+    if primary_ip:
+        data["primary_ip"] = primary_ip
     return data
