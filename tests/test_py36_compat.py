@@ -343,6 +343,160 @@ class ResolvePythonScriptTests(unittest.TestCase):
         self.assertIn("ENSURE_FAIL", proc.stdout)
         self.assertIn("未找到可用的 Python >= 3.6", proc.stdout)
 
+    def test_centos7_vault_repo_urls(self):
+        tmp = tempfile.mkdtemp()
+        repo = os.path.join(tmp, "vault.repo")
+        proc = self._run(
+            """
+            _py_write_centos7_vault_repo %s
+            cat %s
+            """
+            % (shlex.quote(repo), shlex.quote(repo))
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("vault.centos.org/7.9.2009/os/", proc.stdout)
+        self.assertIn("vault.centos.org/7.9.2009/updates/", proc.stdout)
+        self.assertIn("vault.centos.org/7.9.2009/extras/", proc.stdout)
+        self.assertIn("$basearch", proc.stdout)
+
+    def test_is_el7_from_os_release(self):
+        tmp = tempfile.mkdtemp()
+        c7 = os.path.join(tmp, "centos7")
+        u20 = os.path.join(tmp, "ubuntu")
+        with open(c7, "w", encoding="utf-8") as f:
+            f.write('ID="centos"\nVERSION_ID="7"\n')
+        with open(u20, "w", encoding="utf-8") as f:
+            f.write('ID="ubuntu"\nVERSION_ID="20.04"\n')
+        proc = self._run(
+            """
+            MONITOR_REDHAT_RELEASE_FILE=/no/such/redhat-release
+            MONITOR_OS_RELEASE_FILE=%s
+            if _py_is_el7; then echo C7_YES; else echo C7_NO; fi
+            MONITOR_OS_RELEASE_FILE=%s
+            if _py_is_el7; then echo U20_YES; else echo U20_NO; fi
+            """
+            % (shlex.quote(c7), shlex.quote(u20))
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("C7_YES", proc.stdout)
+        self.assertIn("U20_NO", proc.stdout)
+
+    def test_el7_yum_404_falls_back_to_vault(self):
+        tmp = tempfile.mkdtemp()
+        os_rel = os.path.join(tmp, "os-release")
+        with open(os_rel, "w", encoding="utf-8") as f:
+            f.write('ID="centos"\nVERSION_ID="7.9.2009"\n')
+        self._write_fake_python(tmp, "python", "2.7", 2)
+        body = """
+            unset PYTHON_BIN || true
+            MONITOR_INSTALL_PYTHON=1
+            MONITOR_PYTHON_ASSUME_ROOT=1
+            MONITOR_PYTHON_PKG_INSTALLER=yum
+            MONITOR_OS_RELEASE_FILE=%s
+            MONITOR_REDHAT_RELEASE_FILE=/no/such/redhat-release
+            yum() {
+              echo "YUM_CALL $*" >&2
+              case "$*" in
+                *reposdir=*)
+                  echo VAULT_RETRY
+                  printf '%%s\\n' '#!/bin/bash' 'echo 3.6' 'exit 0' > "$MONITOR_PYTHON_SEARCH_PATH/python3"
+                  chmod +x "$MONITOR_PYTHON_SEARCH_PATH/python3"
+                  return 0
+                  ;;
+              esac
+              echo "http://mirror.centos.org/centos/7/os/x86_64/repodata/repomd.xml: [Errno 14] HTTP Error 404 - Not Found" >&2
+              return 1
+            }
+            ensure_python 3 6
+            echo PY=$PY
+            echo VER=$PY_VERSION
+            echo INSTALL_FAIL=${MONITOR_PYTHON_INSTALL_FAIL:-0}
+            """ % shlex.quote(os_rel)
+        proc = self._run(
+            body,
+            extra_env={"MONITOR_PYTHON_SEARCH_PATH": tmp, "PYTHON_BIN": ""},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("VAULT_RETRY", proc.stdout + proc.stderr)
+        self.assertIn("VER=3.6", proc.stdout)
+        self.assertIn("INSTALL_FAIL=0", proc.stdout)
+        self.assertIn("python3", proc.stdout)
+
+    def test_el7_yum_vault_fail_sets_python_install_fail(self):
+        tmp = tempfile.mkdtemp()
+        os_rel = os.path.join(tmp, "os-release")
+        with open(os_rel, "w", encoding="utf-8") as f:
+            f.write('ID="centos"\nVERSION_ID="7"\n')
+        self._write_fake_python(tmp, "python", "2.7", 2)
+        body = textwrap.dedent(
+            """
+            unset PYTHON_BIN || true
+            MONITOR_INSTALL_PYTHON=1
+            MONITOR_PYTHON_ASSUME_ROOT=1
+            MONITOR_PYTHON_PKG_INSTALLER=yum
+            MONITOR_OS_RELEASE_FILE=%s
+            MONITOR_REDHAT_RELEASE_FILE=/no/such/redhat-release
+            yum() {
+              echo "HTTP Error 404 - Not Found"
+              return 1
+            }
+            if ensure_python 3 6; then
+              echo unexpectedly_ok
+              exit 0
+            fi
+            echo INSTALL_FAIL=${MONITOR_PYTHON_INSTALL_FAIL:-0}
+            echo ENSURE_FAIL
+            """
+        ) % shlex.quote(os_rel)
+        proc = self._run(
+            body,
+            extra_env={"MONITOR_PYTHON_SEARCH_PATH": tmp, "PYTHON_BIN": ""},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("INSTALL_FAIL=1", proc.stdout)
+        self.assertIn("ENSURE_FAIL", proc.stdout)
+        self.assertIn("python_install_fail", proc.stdout + proc.stderr)
+        self.assertIn("vault.centos.org", proc.stdout + proc.stderr)
+
+    def test_non_el7_yum_404_skips_vault(self):
+        tmp = tempfile.mkdtemp()
+        os_rel = os.path.join(tmp, "os-release")
+        trace = os.path.join(tmp, "yum.trace")
+        with open(os_rel, "w", encoding="utf-8") as f:
+            f.write('ID="ubuntu"\nVERSION_ID="20.04"\n')
+        self._write_fake_python(tmp, "python", "2.7", 2)
+        body = textwrap.dedent(
+            """
+            unset PYTHON_BIN || true
+            MONITOR_INSTALL_PYTHON=1
+            MONITOR_PYTHON_ASSUME_ROOT=1
+            MONITOR_PYTHON_PKG_INSTALLER=yum
+            MONITOR_OS_RELEASE_FILE=%s
+            MONITOR_REDHAT_RELEASE_FILE=/no/such/redhat-release
+            TRACE=%s
+            yum() {
+              echo "$*" >> "$TRACE"
+              echo "HTTP Error 404 - Not Found"
+              return 1
+            }
+            if ensure_python 3 6; then
+              echo unexpectedly_ok
+            fi
+            echo INSTALL_FAIL=${MONITOR_PYTHON_INSTALL_FAIL:-0}
+            echo ENSURE_FAIL
+            """
+        ) % (shlex.quote(os_rel), shlex.quote(trace))
+        proc = self._run(
+            body,
+            extra_env={"MONITOR_PYTHON_SEARCH_PATH": tmp, "PYTHON_BIN": ""},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("INSTALL_FAIL=1", proc.stdout)
+        with open(trace, encoding="utf-8") as f:
+            yum_log = f.read()
+        self.assertIn("install -y python3", yum_log)
+        self.assertNotIn("reposdir=", yum_log)
+
     def test_deploy_agent_sources_resolver(self):
         deploy = os.path.join(ROOT, "scripts", "deploy_agent.sh")
         with open(deploy, "r", encoding="utf-8") as f:
@@ -350,8 +504,17 @@ class ResolvePythonScriptTests(unittest.TestCase):
         self.assertIn("resolve_python.sh", src)
         self.assertIn("ensure_python 3 6", src)
         self.assertIn("MONITOR_INSTALL_PYTHON=1", src)
+        self.assertIn("python_install_fail", src)
+        self.assertIn("no_python", src)
         self.assertIn("sync_tree.sh", src)
         self.assertNotIn('command -v python3 >/dev/null || { echo "需要 python3"', src)
+        lib = os.path.join(ROOT, "scripts", "lib", "resolve_python.sh")
+        with open(lib, "r", encoding="utf-8") as f:
+            lsrc = f.read()
+        self.assertIn("vault.centos.org", lsrc)
+        self.assertIn("7.9.2009", lsrc)
+        self.assertIn("monitor-c7-extras", lsrc)
+        self.assertIn("_py_yum_install_python3_centos7_vault", lsrc)
 
 
 if __name__ == "__main__":

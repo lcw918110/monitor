@@ -26,6 +26,8 @@ from center.deploy_errors import (
     DeployError,
     NO_PYTHON,
     PACKAGE_INCOMPLETE,
+    PYTHON_INSTALL_FAIL,
+    REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
     SUDO_REQUIRED,
@@ -42,11 +44,13 @@ from center.deploy_runner import (
     _make_package_tgz,
     build_remote_root_helper,
     build_ssh_scp_cmds,
+    build_ssh_upload_cmd,
     missing_package_parts,
     needs_remote_sudo,
     require_sshpass_for_password,
     resolve_remote_dir,
     test_ssh_ready,
+    upload_file_via_ssh,
 )
 from center.deploy_store import DEFAULT_AGENT_REMOTE_DIR, DeployStore
 
@@ -167,6 +171,11 @@ class ClassifyTests(unittest.TestCase):
             ("jykj is not in the sudoers file", SUDO_REQUIRED),
             ("[fail] package_incomplete: 安装包不含 agent/", PACKAGE_INCOMPLETE),
             ("/usr/bin/python3.10: No module named agent", PACKAGE_INCOMPLETE),
+            ("[fail] python_install_fail: yum 安装 python3 失败", PYTHON_INSTALL_FAIL),
+            (
+                "yum install python3\nhttp://mirror.centos.org/centos/7/os/x86_64/repodata/repomd.xml: [Errno 14] HTTP Error 404 - Not Found\n",
+                PYTHON_INSTALL_FAIL,
+            ),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -188,6 +197,20 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(code, SSH_UNREACHABLE)
         self.assertIn("不可达", msg)
         self.assertNotIn("SCP 失败", msg)
+
+    def test_scp_missing_remote_not_classified_unreachable(self) -> None:
+        """远端无 scp 不得标成 ssh_unreachable（产品路径已改走 SSH 管道）。"""
+        text = (
+            "SCP 失败 ... exit=1\n"
+            "bash: scp: command not found\n"
+            "lost connection\n"
+        )
+        code, msg = classify_deploy_failure(
+            text, default_code=SSH_UNREACHABLE, default_message="SCP 失败 exit=1"
+        )
+        self.assertEqual(code, REMOTE_FAIL)
+        self.assertNotEqual(code, SSH_UNREACHABLE)
+        self.assertIn("scp", msg.lower())
 
     def test_ssh_retry_then_success(self) -> None:
         calls = {"n": 0}
@@ -220,6 +243,44 @@ class ClassifyTests(unittest.TestCase):
             with mock.patch("center.deploy_errors.subprocess.run", side_effect=always_closed):
                 proc = run_ssh_with_retry(["ssh", "x"], attempts=3)
         self.assertEqual(proc.returncode, 255)
+
+    def test_stdin_path_retry_rereads_binary_file(self) -> None:
+        fd, path = tempfile.mkstemp(prefix="ssh-stdin-")
+        os.close(fd)
+        payload = b"abc\x00def\x1f\x8b\r\n"
+        calls = {"n": 0, "data": []}  # type: ignore[var-annotated]
+        try:
+            with open(path, "wb") as f:
+                f.write(payload)
+
+            def fake_run(_cmd, **kwargs):
+                calls["n"] += 1
+                stdin = kwargs.get("stdin")
+                calls["data"].append(stdin.read())
+                if calls["n"] == 1:
+                    return subprocess.CompletedProcess(
+                        args=["ssh"],
+                        returncode=255,
+                        stdout=b"Connection reset by peer\n",
+                    )
+                return subprocess.CompletedProcess(
+                    args=["ssh"], returncode=0, stdout=b"ok\n"
+                )
+
+            with mock.patch("center.deploy_errors.time.sleep", return_value=None):
+                with mock.patch(
+                    "center.deploy_errors.subprocess.run", side_effect=fake_run
+                ):
+                    proc = run_ssh_with_retry(
+                        ["ssh", "x"], stdin_path=path, attempts=3
+                    )
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(calls["n"], 2)
+            self.assertEqual(calls["data"][0], payload)
+            self.assertEqual(calls["data"][1], payload)
+            self.assertEqual(proc.stdout, "ok\n")
+        finally:
+            os.remove(path)
 
 
 class SyncTreeTests(unittest.TestCase):
@@ -353,6 +414,9 @@ class FleetScriptTests(unittest.TestCase):
         self.assertNotIn("tar -xzf /tmp/monitor-agent.tgz -C '$REMOTE_DIR'", src)
         self.assertNotIn("| grep -q 'agent/__init__.py'", src)
         self.assertIn("tar -tzf /tmp/monitor-agent.tgz agent/__init__.py", src)
+        self.assertIn('cat > /tmp/monitor-agent.tgz', src)
+        self.assertNotIn("本机无 scp", src)
+        self.assertNotIn('ssh_run_retry "$ip" scp ', src)
         center = os.path.join(ROOT, "scripts", "deploy_center.sh")
         with open(center, encoding="utf-8") as f:
             csrc = f.read()
@@ -377,6 +441,10 @@ class FleetScriptTests(unittest.TestCase):
             if ssh_is_retryable "Connection timed out"; then
               echo TIMEOUT_RETRY
             fi
+            code="$(ssh_classify_fail $'bash: scp: command not found\\nlost connection\\n')"
+            echo "SCP_MISS=$code"
+            code="$(ssh_classify_fail $'[fail] python_install_fail: yum 404\\n')"
+            echo "PYINST=$code"
             """
         ).format(root=ROOT)
         proc = subprocess.run(
@@ -391,6 +459,9 @@ class FleetScriptTests(unittest.TestCase):
         self.assertEqual(lines[1].split(), ["10.1.2.4", "hid", "2200"])
         self.assertIn("REFUSED_NO_RETRY", proc.stdout)
         self.assertIn("TIMEOUT_RETRY", proc.stdout)
+        self.assertIn("SCP_MISS=remote_fail", proc.stdout)
+        self.assertIn("PYINST=", proc.stdout)
+        self.assertIn("python_install_fail", proc.stdout)
 
 
 class RemoteDirAndSshpassTests(unittest.TestCase):
@@ -476,6 +547,84 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         self.assertIn("2222", ssh_cmd)
         self.assertEqual(scp_cmd[0], "sshpass")
         self.assertIsNone(cleanup)
+
+    def test_upload_cmd_uses_ssh_cat_not_scp(self) -> None:
+        auth = {"mode": "password", "password": "secret", "key_path": ""}
+        with mock.patch(
+            "center.deploy_runner.shutil.which", return_value="/usr/bin/sshpass"
+        ):
+            ssh_cmd, scp_cmd, _env, _cleanup = build_ssh_scp_cmds(
+                ssh_port=22, auth=auth
+            )
+        upload = build_ssh_upload_cmd(ssh_cmd, "root@10.0.0.9")
+        self.assertEqual(upload[0], "sshpass")
+        self.assertIn("ssh", upload)
+        self.assertNotIn("scp", upload)
+        self.assertIn("-T", upload)
+        self.assertEqual(upload[-2], "root@10.0.0.9")
+        self.assertTrue(upload[-1].startswith("cat >"))
+        self.assertIn("/tmp/monitor-agent.tgz", upload[-1])
+        # scp_cmd 仍会构造，但产品上传路径不再调用它
+        self.assertIn("scp", scp_cmd)
+
+
+class SshPipeUploadTests(unittest.TestCase):
+    def test_upload_file_via_ssh_writes_binary(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="ssh-pipe-")
+        try:
+            src = os.path.join(tmp, "src.bin")
+            dst = os.path.join(tmp, "dst.bin")
+            payload = b"\x1f\x8b gzip-magic \x00\xff\r\n\n" + os.urandom(2048)
+            with open(src, "wb") as f:
+                f.write(payload)
+            fake_ssh = os.path.join(tmp, "ssh")
+            with open(fake_ssh, "w", encoding="utf-8") as f:
+                f.write(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    'cmd="${!#}"\n'
+                    'eval "$cmd"\n'
+                )
+            os.chmod(fake_ssh, 0o755)
+            proc = upload_file_via_ssh(
+                [fake_ssh],
+                "root@host",
+                src,
+                remote_path=dst,
+                env=dict(os.environ),
+                timeout=10,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            with open(dst, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_fleet_ssh_run_retry_pipes_stdin(self) -> None:
+        script = textwrap.dedent(
+            """
+            set -euo pipefail
+            . "{root}/scripts/lib/deploy_ssh.sh"
+            src="$(mktemp)"
+            dst="$(mktemp)"
+            trap 'rm -f "$src" "$dst"' EXIT
+            python3 - <<'PY' > "$src"
+            import sys
+            sys.stdout.buffer.write(b"gz\\x1f\\x8b\\x00\\xffdata")
+            PY
+            out="$(ssh_run_retry lab bash -c "cat > '$dst'" < "$src")"
+            python3 -c "import sys; a=open(sys.argv[1],'rb').read(); b=open(sys.argv[2],'rb').read(); sys.exit(0 if a==b else 1)" "$src" "$dst"
+            echo PIPE_OK
+            """
+        ).format(root=ROOT)
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("PIPE_OK", proc.stdout)
 
 
 class PackageTreeTests(unittest.TestCase):
@@ -747,6 +896,10 @@ class PackageTreeTests(unittest.TestCase):
             src,
         )
         self.assertNotIn('OPTIONAL_PACKAGE_PARTS = ("center"', src)
+        self.assertIn("upload_file_via_ssh", src)
+        self.assertIn("cat >", src)
+        self.assertIn("不依赖远端 scp", src)
+        self.assertNotIn("scp_base + [tgz", src)
 
     def _run_bash(self, script: str) -> "subprocess.CompletedProcess[str]":
         return subprocess.run(

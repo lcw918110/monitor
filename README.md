@@ -142,6 +142,7 @@ cp config/hosts.example.txt config/hosts.txt
 | `sudo_required` | 非 root 写入 `/opt/...` 时 sudo 不可用（先 `sudo -n`，否则同一 SSH 密码 `sudo -S`） |
 | `key_missing` | 填写的私钥文件在中心机上不存在 |
 | `no_python` | 目标机没有可用 Python ≥ 3.6 |
+| `python_install_fail` | 自动安装 python3 失败（CentOS 7 默认 yum 镜像 EOL/404；会再试 `vault.centos.org/7.9.2009`） |
 | `sync_tool_missing` | 同步文件失败（rsync 优先，缺失则 tar / cp 仍都不可用） |
 | `package_incomplete` | 中心树或缺包导致目标没有 `agent/`（产品打的是采集端包，不是整棵 center 树；`--once` 前会校验 `agent/__init__.py`） |
 | `dir_not_writable` | SSH 已通但安装目录不可写（非 root 用 `~/monitor-agent`） |
@@ -183,6 +184,7 @@ cp config/hosts.example.txt config/hosts.txt
 | 清演示数据重来 | `./scripts/local_down.sh` 后删除 `.deploy-center/data/monitor.db*`（及 wal/shm），再 `local_up.sh`；不要跑 `demo_seed.py` |
 | 配置报错退出 | 看终端 `[配置错误]`；从 `config/*.example.json` 复制为 `center.json` / `agent.json` |
 | 部署报「未找到可用的 Python >= 3.6」 | 设置 `PYTHON_BIN` 指向本机解释器，或安装 `python3`；`/usr/local/python3.x` 会被自动探测 |
+| 部署报 `python_install_fail` / yum 404 | CentOS 7 官方镜像已 EOL。产品路径会改用 `vault.centos.org/7.9.2009`（os+updates+extras）装 python3；仍失败则预装 python3≥3.6 或自行改 yum baseurl |
 | `error while loading shared libraries: libpython` | 已处理：使用 `/usr/local/python3.x` 时脚本会设置 `LD_LIBRARY_PATH`；请更新脚本后重装 Agent |
 | macOS 无加速卡工具 | 正常，卡数为 0；仍会上报 CPU/内存等 |
 

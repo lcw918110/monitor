@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SSH/SCP 轻量重试 + 失败短码。供 deploy_fleet.sh 使用。
+# SSH 轻量重试 + 失败短码。供 deploy_fleet.sh 使用。
 # 只对连接超时 / connection closed 等瞬时错误重试 2～3 次，不扫端口、不喷密码。
+# 安装包上传经 SSH stdin（cat > dest），不要求远端 scp。
 #
 # shellcheck shell=bash
 
@@ -53,6 +54,14 @@ ssh_classify_fail() {
       ;;
     *"connection closed"*|*"connection reset"*)
       echo "ssh_unreachable"
+      return 0
+      ;;
+    *"scp: command not found"*|*"bash: scp:"*"not found"*)
+      echo "remote_fail"
+      return 0
+      ;;
+    *"python_install_fail"*|*"vault.centos.org"*)
+      echo "python_install_fail"
       return 0
       ;;
     *"未找到可用的 python"*|*"no_python"*)
