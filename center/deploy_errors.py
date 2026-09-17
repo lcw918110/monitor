@@ -16,6 +16,7 @@ AUTH_FAIL = "auth_fail"
 SSHPASS_MISSING = "sshpass_missing"
 KEY_MISSING = "key_missing"
 NO_PYTHON = "no_python"
+PYTHON_INSTALL_FAIL = "python_install_fail"
 SYNC_TOOL_MISSING = "sync_tool_missing"
 DIR_NOT_WRITABLE = "dir_not_writable"
 SUDO_REQUIRED = "sudo_required"
@@ -122,6 +123,19 @@ def classify_deploy_failure(
 
     if "ssh 私钥不存在" in blob:
         return KEY_MISSING, _msg("SSH 私钥不存在")
+    if "python_install_fail" in blob or (
+        "yum" in blob
+        and "python3" in blob
+        and (
+            "http error 404" in blob
+            or "404 - not found" in blob
+            or "cannot find a valid baseurl" in blob
+            or "could not retrieve mirrorlist" in blob
+        )
+    ):
+        return PYTHON_INSTALL_FAIL, _msg(
+            "自动安装 python3 失败（CentOS 7 默认镜像 EOL/404，会尝试 vault.centos.org/7.9.2009）"
+        )
     if "未找到可用的 python" in blob or "no_python" in blob:
         return NO_PYTHON, _msg("目标机没有可用的 Python >= 3.6")
     if "sync_tool_missing" in blob or "rsync: command not found" in blob:
@@ -178,6 +192,12 @@ def classify_deploy_failure(
         )
     ):
         return AUTH_FAIL, _msg("SSH 认证失败（用户名/密码/私钥）")
+    if "scp: command not found" in blob or (
+        "bash: scp:" in blob and "not found" in blob
+    ):
+        return REMOTE_FAIL, _msg(
+            "远端无 scp（产品路径走 SSH 管道上传，不需要远端 scp）"
+        )
     if isinstance(exc, subprocess.TimeoutExpired):
         return TIMEOUT, _msg("部署超时")
     if any(

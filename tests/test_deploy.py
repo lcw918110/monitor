@@ -26,6 +26,7 @@ from center.deploy_errors import (
     DeployError,
     NO_PYTHON,
     PACKAGE_INCOMPLETE,
+    PYTHON_INSTALL_FAIL,
     REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
@@ -170,6 +171,11 @@ class ClassifyTests(unittest.TestCase):
             ("jykj is not in the sudoers file", SUDO_REQUIRED),
             ("[fail] package_incomplete: 安装包不含 agent/", PACKAGE_INCOMPLETE),
             ("/usr/bin/python3.10: No module named agent", PACKAGE_INCOMPLETE),
+            ("[fail] python_install_fail: yum 安装 python3 失败", PYTHON_INSTALL_FAIL),
+            (
+                "yum install python3\nhttp://mirror.centos.org/centos/7/os/x86_64/repodata/repomd.xml: [Errno 14] HTTP Error 404 - Not Found\n",
+                PYTHON_INSTALL_FAIL,
+            ),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -193,18 +199,18 @@ class ClassifyTests(unittest.TestCase):
         self.assertNotIn("SCP 失败", msg)
 
     def test_scp_missing_remote_not_classified_unreachable(self) -> None:
-        """历史上 scp 失败默认 ssh_unreachable；管道上传失败应保持 remote_fail。"""
+        """远端无 scp 不得标成 ssh_unreachable（产品路径已改走 SSH 管道）。"""
         text = (
             "SCP 失败 ... exit=1\n"
             "bash: scp: command not found\n"
             "lost connection\n"
         )
         code, msg = classify_deploy_failure(
-            text, default_code=REMOTE_FAIL, default_message="上传失败 exit=1"
+            text, default_code=SSH_UNREACHABLE, default_message="SCP 失败 exit=1"
         )
         self.assertEqual(code, REMOTE_FAIL)
         self.assertNotEqual(code, SSH_UNREACHABLE)
-        self.assertIn("上传失败", msg)
+        self.assertIn("scp", msg.lower())
 
     def test_ssh_retry_then_success(self) -> None:
         calls = {"n": 0}
@@ -437,6 +443,8 @@ class FleetScriptTests(unittest.TestCase):
             fi
             code="$(ssh_classify_fail $'bash: scp: command not found\\nlost connection\\n')"
             echo "SCP_MISS=$code"
+            code="$(ssh_classify_fail $'[fail] python_install_fail: yum 404\\n')"
+            echo "PYINST=$code"
             """
         ).format(root=ROOT)
         proc = subprocess.run(
@@ -452,6 +460,8 @@ class FleetScriptTests(unittest.TestCase):
         self.assertIn("REFUSED_NO_RETRY", proc.stdout)
         self.assertIn("TIMEOUT_RETRY", proc.stdout)
         self.assertIn("SCP_MISS=remote_fail", proc.stdout)
+        self.assertIn("PYINST=", proc.stdout)
+        self.assertIn("python_install_fail", proc.stdout)
 
 
 class RemoteDirAndSshpassTests(unittest.TestCase):

@@ -22,6 +22,11 @@
 #   MONITOR_INSTALL_PYTHON     1=找不到时以 root 尝试 apt/yum/dnf 安装 python3
 #   MONITOR_PYTHON_SEARCH_PATH 仅从此 PATH 查找 python3.x 名字（测试用；默认用当前 PATH）
 #   MONITOR_PYTHON_LOCAL_GLOBS 额外扫描的 /usr/local/python3.* glob
+#   MONITOR_CENTOS7_VAULT_HOST/RELEASE  el7 yum 默认源 404 时的 vault（默认 vault.centos.org / 7.9.2009）
+#   MONITOR_SKIP_CENTOS7_VAULT 1=不尝试 vault
+#   MONITOR_PYTHON_PKG_INSTALLER  测试用：apt|dnf|yum|none
+#   MONITOR_PYTHON_ASSUME_ROOT    测试用：当作 root
+#   MONITOR_OS_RELEASE_FILE       测试用：替代 /etc/os-release
 #
 # shellcheck shell=bash
 
@@ -236,24 +241,158 @@ resolve_python() {
   [[ -n "$PY" ]]
 }
 
+_py_read_os_kv() {
+  local file="$1" key="$2" line val
+  [[ -r "$file" ]] || return 1
+  line="$(grep -E "^${key}=" "$file" 2>/dev/null | head -n 1)" || return 1
+  [[ -n "$line" ]] || return 1
+  val="${line#*=}"
+  val="${val#\"}"
+  val="${val%\"}"
+  val="${val#\'}"
+  val="${val%\'}"
+  printf '%s\n' "$val"
+}
+
+_py_is_el7() {
+  # CentOS / RHEL / OL 7：默认镜像已 EOL，yum 常 404。
+  local f id ver rel
+  f="${MONITOR_OS_RELEASE_FILE:-/etc/os-release}"
+  id="$(_py_read_os_kv "$f" ID || true)"
+  ver="$(_py_read_os_kv "$f" VERSION_ID || true)"
+  case "$id" in
+    centos|rhel|ol|scientific)
+      case "$ver" in
+        7|7.*) return 0 ;;
+      esac
+      ;;
+  esac
+  rel="${MONITOR_REDHAT_RELEASE_FILE:-/etc/redhat-release}"
+  if [[ -r "$rel" ]] && grep -qE 'release[[:space:]]+7(\.|[[:space:]]|$)' "$rel"; then
+    return 0
+  fi
+  return 1
+}
+
+_py_detect_pkg_installer() {
+  if [[ -n "${MONITOR_PYTHON_PKG_INSTALLER:-}" ]]; then
+    printf '%s\n' "$MONITOR_PYTHON_PKG_INSTALLER"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    echo apt
+  elif command -v dnf >/dev/null 2>&1; then
+    echo dnf
+  elif command -v yum >/dev/null 2>&1; then
+    echo yum
+  else
+    echo none
+  fi
+}
+
+_py_write_centos7_vault_repo() {
+  local dest="$1"
+  local ver="${MONITOR_CENTOS7_VAULT_RELEASE:-7.9.2009}"
+  local host="${MONITOR_CENTOS7_VAULT_HOST:-vault.centos.org}"
+  local gpgcheck=0 gpgkey=""
+  if [[ -f /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7 ]]; then
+    gpgcheck=1
+    gpgkey="file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7"
+  fi
+  cat > "$dest" <<EOF
+[monitor-c7-os]
+name=CentOS ${ver} - os (vault)
+baseurl=http://${host}/${ver}/os/\$basearch/
+enabled=1
+gpgcheck=${gpgcheck}
+${gpgkey:+gpgkey=${gpgkey}}
+
+[monitor-c7-updates]
+name=CentOS ${ver} - updates (vault)
+baseurl=http://${host}/${ver}/updates/\$basearch/
+enabled=1
+gpgcheck=${gpgcheck}
+${gpgkey:+gpgkey=${gpgkey}}
+
+[monitor-c7-extras]
+name=CentOS ${ver} - extras (vault)
+baseurl=http://${host}/${ver}/extras/\$basearch/
+enabled=1
+gpgcheck=${gpgcheck}
+${gpgkey:+gpgkey=${gpgkey}}
+EOF
+}
+
+_py_yum_install_python3_centos7_vault() {
+  # python3 在 el7 extras；os+updates 不够装依赖时 extras 一起启用。
+  local tmpdir repo yum_rc=0 yum_out
+  local ver="${MONITOR_CENTOS7_VAULT_RELEASE:-7.9.2009}"
+  local host="${MONITOR_CENTOS7_VAULT_HOST:-vault.centos.org}"
+  tmpdir="$(mktemp -d /tmp/monitor-yum-vault.XXXXXX)" || return 1
+  repo="${tmpdir}/monitor-centos7-vault.repo"
+  _py_write_centos7_vault_repo "$repo" || {
+    rm -rf "$tmpdir"
+    return 1
+  }
+  echo "[info] yum 默认源失败，改用 CentOS vault ${host}/${ver} (os+updates+extras) 安装 python3"
+  yum_out="$(yum --disableplugin=fastestmirror --setopt=reposdir="$tmpdir" install -y python3 2>&1)" || yum_rc=$?
+  printf '%s\n' "$yum_out"
+  rm -rf "$tmpdir"
+  return "$yum_rc"
+}
+
 install_python3_best_effort() {
+  local installer yum_rc=0 yum_out
+  MONITOR_PYTHON_INSTALL_FAIL=0
   echo "==> 未找到可用 Python >= ${MONITOR_PY_MIN_MAJOR}.${MONITOR_PY_MIN_MINOR}，尝试安装 python3 ..."
-  if [[ "$(id -u)" -ne 0 ]]; then
+  if [[ "${MONITOR_PYTHON_ASSUME_ROOT:-0}" != "1" && "$(id -u)" -ne 0 ]]; then
     echo "[info] 非 root，无法自动安装 python3"
     return 1
   fi
-  if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -y \
-      && DEBIAN_FRONTEND=noninteractive apt-get install -y python3
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y python3
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y python3
-  else
-    echo "[warn] 未识别到 apt-get / dnf / yum，跳过自动安装"
-    return 1
-  fi
-  hash -r 2>/dev/null || true
+  installer="$(_py_detect_pkg_installer)"
+  case "$installer" in
+    apt)
+      if DEBIAN_FRONTEND=noninteractive apt-get update -y \
+        && DEBIAN_FRONTEND=noninteractive apt-get install -y python3; then
+        hash -r 2>/dev/null || true
+        return 0
+      fi
+      MONITOR_PYTHON_INSTALL_FAIL=1
+      echo "[warn] python_install_fail: apt 安装 python3 失败"
+      return 1
+      ;;
+    dnf)
+      if dnf install -y python3; then
+        hash -r 2>/dev/null || true
+        return 0
+      fi
+      MONITOR_PYTHON_INSTALL_FAIL=1
+      echo "[warn] python_install_fail: dnf 安装 python3 失败"
+      return 1
+      ;;
+    yum)
+      yum_out="$(yum install -y python3 2>&1)" || yum_rc=$?
+      printf '%s\n' "$yum_out"
+      if [[ "$yum_rc" -eq 0 ]]; then
+        hash -r 2>/dev/null || true
+        return 0
+      fi
+      if _py_is_el7 && [[ "${MONITOR_SKIP_CENTOS7_VAULT:-0}" != "1" ]]; then
+        yum_rc=0
+        if _py_yum_install_python3_centos7_vault; then
+          hash -r 2>/dev/null || true
+          return 0
+        fi
+      fi
+      MONITOR_PYTHON_INSTALL_FAIL=1
+      echo "[warn] python_install_fail: yum 安装 python3 失败（CentOS 7 默认镜像已 EOL/404，已尝试 vault.centos.org/${MONITOR_CENTOS7_VAULT_RELEASE:-7.9.2009}）"
+      return 1
+      ;;
+    *)
+      echo "[warn] 未识别到 apt-get / dnf / yum，跳过自动安装"
+      return 1
+      ;;
+  esac
 }
 
 print_python_resolve_error() {
@@ -268,9 +407,11 @@ print_python_resolve_error() {
   3. /usr/local/python3.*/bin/python3
   4. PATH 中的 python3 / python
   5. （可选）root 下 apt/yum/dnf 安装 python3 后再探测
+     （el7 默认镜像 EOL/404 时会再试 vault.centos.org/7.9.2009 os+updates+extras）
 
 请任选其一后重试：
   - 安装发行版包 python3
+  - CentOS 7：把 yum baseurl 改到 vault.centos.org/7.9.2009 后 yum install python3
   - 把可用解释器放到 PATH，或 export PYTHON_BIN=/usr/local/python3.x/bin/python3
   - 源码安装的 Python 若启动时报缺 libpython，确认 prefix/lib 下有对应 .so
 EOF
@@ -292,6 +433,7 @@ log_python_choice() {
 ensure_python() {
   local major="${1:-$MONITOR_PY_MIN_MAJOR}"
   local minor="${2:-$MONITOR_PY_MIN_MINOR}"
+  MONITOR_PYTHON_INSTALL_FAIL=0
   if resolve_python "$major" "$minor"; then
     return 0
   fi

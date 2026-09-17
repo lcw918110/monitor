@@ -28,6 +28,7 @@ from center.deploy_errors import (
     KEY_MISSING,
     NO_PYTHON,
     PACKAGE_INCOMPLETE,
+    PYTHON_INSTALL_FAIL,
     REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
@@ -610,7 +611,12 @@ echo DEPLOY_DONE
                 default_code=REMOTE_FAIL,
                 default_message="远端安装失败，exit=%s%s" % (proc.returncode, hint),
             )
-            if "未找到可用的 Python" in out:
+            if "python_install_fail" in out:
+                code, human = (
+                    PYTHON_INSTALL_FAIL,
+                    "自动安装 python3 失败（CentOS 7 默认镜像 EOL/404 时会尝试 vault.centos.org/7.9.2009）",
+                )
+            elif "未找到可用的 Python" in out:
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"

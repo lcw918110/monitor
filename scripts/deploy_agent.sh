@@ -89,7 +89,11 @@ fail_deploy() {
 
 MONITOR_INSTALL_PYTHON=1
 if ! ensure_python 3 6; then
-  fail_deploy no_python "未找到可用的 Python >= 3.6"
+  if [[ "${MONITOR_PYTHON_INSTALL_FAIL:-0}" == "1" ]]; then
+    fail_deploy python_install_fail "自动安装 python3 失败（CentOS 7 默认镜像 EOL/404 时会尝试 vault.centos.org/7.9.2009）"
+  else
+    fail_deploy no_python "未找到可用的 Python >= 3.6"
+  fi
 fi
 log_python_choice
 apply_python_ld_library_path

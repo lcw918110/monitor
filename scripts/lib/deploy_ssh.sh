@@ -56,6 +56,14 @@ ssh_classify_fail() {
       echo "ssh_unreachable"
       return 0
       ;;
+    *"scp: command not found"*|*"bash: scp:"*"not found"*)
+      echo "remote_fail"
+      return 0
+      ;;
+    *"python_install_fail"*|*"vault.centos.org"*)
+      echo "python_install_fail"
+      return 0
+      ;;
     *"未找到可用的 python"*|*"no_python"*)
       echo "no_python"
       return 0
