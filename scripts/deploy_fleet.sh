@@ -65,16 +65,22 @@ trap cleanup EXIT
 
 echo "==> 打包代码"
 if [[ ! -f "$ROOT/agent/__init__.py" || ! -d "$ROOT/common" || ! -d "$ROOT/scripts" ]]; then
-  echo "[fail] package_incomplete: 中心树缺少 agent/common/scripts，拒绝打包（网页部署从中心安装目录读取）"
+  echo "[fail] package_incomplete: 中心树缺少 agent/common/scripts，拒绝打包（Agent 包不含 center/）"
   exit 1
 fi
+# 只打采集端，不要把 center/ 当主内容打进 /opt/monitor-agent
+PACK_NAMES=(agent common scripts)
+[[ -d "$ROOT/config" ]] && PACK_NAMES+=(config)
+[[ -f "$ROOT/README.md" ]] && PACK_NAMES+=(README.md)
 tar -C "$ROOT" -czf "$TMP_TGZ" \
   --exclude '.git' \
   --exclude 'data' \
   --exclude '.deploy-*' \
   --exclude '__pycache__' \
   --exclude '*.db' \
-  agent center common config scripts tests README.md
+  --exclude 'config/center.json' \
+  --exclude 'config/agent.json' \
+  "${PACK_NAMES[@]}"
 
 fail_one() {
   local ip="$1"
@@ -101,22 +107,31 @@ deploy_one() {
   local ssh_opts=(-p "$port" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8)
   local ssh_e="ssh -p ${port} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8"
   echo "[$ip] 开始部署 host_id=$host_id port=$port"
-  local out rc method="tar"
+  local out rc method="tar" part
 
   if command -v rsync >/dev/null 2>&1 && [[ -z "${MONITOR_SYNC_DISABLE_RSYNC:-}" ]]; then
     if ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "mkdir -p '$REMOTE_DIR' && command -v rsync" >/dev/null; then
       set +e
-      out="$(rsync -a --delete \
-        --exclude 'data/' \
-        --exclude 'config/center.json' \
-        --exclude 'config/agent.json' \
-        --exclude '.git/' \
-        --exclude '.deploy-*/' \
-        --exclude '__pycache__/' \
-        --exclude '*.db' \
-        -e "$ssh_e" \
-        "$ROOT/" "${SSH_USER}@${ip}:${REMOTE_DIR}/" 2>&1)"
-      rc=$?
+      out=""
+      rc=0
+      for part in agent common scripts; do
+        out="$(rsync -a --delete \
+          --exclude '__pycache__/' \
+          --exclude '*.db' \
+          -e "$ssh_e" \
+          "$ROOT/$part/" "${SSH_USER}@${ip}:${REMOTE_DIR}/$part/" 2>&1)"
+        rc=$?
+        [[ "$rc" -eq 0 ]] || break
+      done
+      if [[ "$rc" -eq 0 && -d "$ROOT/config" ]]; then
+        out="$(rsync -a \
+          --exclude 'center.json' \
+          --exclude 'agent.json' \
+          --exclude '*.db' \
+          -e "$ssh_e" \
+          "$ROOT/config/" "${SSH_USER}@${ip}:${REMOTE_DIR}/config/" 2>&1)"
+        rc=$?
+      fi
       set -e
       if [[ "$rc" -eq 0 ]]; then
         method="rsync"
@@ -150,7 +165,7 @@ deploy_one() {
   out="$(ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" bash -s <<EOF
 set -euo pipefail
 sudo mkdir -p '$REMOTE_DIR'
-if [[ -f /tmp/monitor-agent.tgz ]]; then
+if [[ '$method' == tar && -f /tmp/monitor-agent.tgz ]]; then
   tar -tzf /tmp/monitor-agent.tgz | grep -q 'agent/__init__.py' || {
     echo "[fail] package_incomplete: 安装包不含 agent/（请检查中心树）"
     exit 1

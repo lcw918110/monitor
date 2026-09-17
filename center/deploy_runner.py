@@ -84,8 +84,8 @@ TOKEN={shlex.quote(token or '')}
 INTERVAL={int(interval_seconds or 15)}
 {install_assign}
 
-if [[ ! -d "$INSTALL_DIR/agent" ]]; then
-  echo "未找到监控代码目录: $INSTALL_DIR"
+if [[ ! -f "$INSTALL_DIR/agent/__init__.py" ]]; then
+  echo "[fail] package_incomplete: 未找到 $INSTALL_DIR/agent/__init__.py"
   echo "请走中心「客户端部署」或在中心机执行 deploy_fleet.sh / deploy_agent.sh，不要从笔记本 scp。"
   exit 1
 fi
@@ -102,12 +102,14 @@ chmod +x scripts/*.sh 2>/dev/null || true
 """
 
 
+# Agent 安装包只含采集端，不以 center/ 为主内容（center 树留给 /opt/monitor）。
 REQUIRED_PACKAGE_PARTS = ("agent", "common", "scripts")
-OPTIONAL_PACKAGE_PARTS = ("center", "config", "README.md")
+OPTIONAL_PACKAGE_PARTS = ("config", "README.md")
+_SKIP_CONFIG_FILES = frozenset(("agent.json", "center.json"))
 
 
 def missing_package_parts(root: str) -> List[str]:
-    """中心安装树里产品打包必需的部分。缺 agent/ 时绝不能静默省略。"""
+    """中心安装树里 Agent 打包必需的部分。缺 agent/ 时绝不能静默省略。"""
     missing: List[str] = []
     for name in REQUIRED_PACKAGE_PARTS:
         full = os.path.join(root, name)
@@ -119,24 +121,46 @@ def missing_package_parts(root: str) -> List[str]:
     return missing
 
 
+def _agent_tar_filter(ti: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
+    parts = ti.name.replace("\\", "/").split("/")
+    if "__pycache__" in parts or ti.name.endswith(".db"):
+        return None
+    if parts and parts[-1] in _SKIP_CONFIG_FILES:
+        return None
+    return ti
+
+
 def _make_package_tgz(root: str) -> str:
     missing = missing_package_parts(root)
     if missing:
         raise DeployError(
             PACKAGE_INCOMPLETE,
-            "中心安装树缺少 %s；网页/SSH 打包从该目录读取，必须保留 agent 包"
+            "中心安装树缺少 %s；Agent 打包需要 agent/common/scripts，必须保留 agent 包"
             % ", ".join(missing),
         )
     fd, path = tempfile.mkstemp(prefix="monitor-agent-", suffix=".tgz")
     os.close(fd)
     try:
         with tarfile.open(path, "w:gz") as tar:
-            for name in REQUIRED_PACKAGE_PARTS + OPTIONAL_PACKAGE_PARTS:
-                full = os.path.join(root, name)
-                if name in REQUIRED_PACKAGE_PARTS:
-                    tar.add(full, arcname=name)
-                elif os.path.exists(full):
-                    tar.add(full, arcname=name)
+            for name in REQUIRED_PACKAGE_PARTS:
+                tar.add(
+                    os.path.join(root, name),
+                    arcname=name,
+                    filter=_agent_tar_filter,
+                )
+            cfg = os.path.join(root, "config")
+            if os.path.isdir(cfg):
+                for fn in sorted(os.listdir(cfg)):
+                    if fn in _SKIP_CONFIG_FILES or fn.endswith(".db"):
+                        continue
+                    tar.add(
+                        os.path.join(cfg, fn),
+                        arcname="config/" + fn,
+                        filter=_agent_tar_filter,
+                    )
+            readme = os.path.join(root, "README.md")
+            if os.path.isfile(readme):
+                tar.add(readme, arcname="README.md")
     except Exception:
         try:
             os.remove(path)

@@ -102,7 +102,8 @@ mkdir -p "$INSTALL_DIR" || fail_deploy dir_not_writable "无法创建安装目�
 if ! assert_package_tree "$ROOT" "源码 $ROOT"; then
   fail_deploy package_incomplete "源树缺少 agent 包"
 fi
-if ! sync_tree "$ROOT" "$INSTALL_DIR"; then
+# 只同步采集端（agent/common/scripts），不要把 center/ 整树拷进安装目录
+if ! sync_agent_tree "$ROOT" "$INSTALL_DIR"; then
   fail_deploy sync_tool_missing "无法同步代码（rsync 优先，缺失则 tar/cp）"
 fi
 if ! assert_package_tree "$INSTALL_DIR" "安装目录 $INSTALL_DIR"; then
@@ -181,6 +182,9 @@ EOF
 fi
 
 echo "==> 单次上报自检"
+if [[ ! -f "$INSTALL_DIR/agent/__init__.py" ]]; then
+  fail_deploy package_incomplete "安装目录缺少 $INSTALL_DIR/agent/__init__.py，无法 python -m agent"
+fi
 cd "$INSTALL_DIR"
 export PYTHONPATH="$INSTALL_DIR"
 if ! "$PY" -m agent --config "$CFG" --once; then

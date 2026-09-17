@@ -136,7 +136,7 @@ sync_tree() {
   return 1
 }
 
-# 产品打包从中心安装树读取 agent/。源不完整时 rsync --delete 会把目标机上的 agent 删掉。
+# 产品打包从中心安装树读取 agent/。源不完整时禁止同步。
 assert_package_tree() {
   local root="${1:-}"
   local label="${2:-tree}"
@@ -157,4 +157,96 @@ assert_package_tree() {
     return 1
   fi
   return 0
+}
+
+_sync_agent_config() {
+  local src="$1"
+  local dst="$2"
+  local cf cbase
+  [[ -d "$src/config" ]] || return 0
+  mkdir -p "$dst/config"
+  shopt -s nullglob
+  for cf in "$src/config"/*; do
+    [[ -e "$cf" ]] || continue
+    cbase="$(basename "$cf")"
+    if [[ "$cbase" == "center.json" || "$cbase" == "agent.json" ]]; then
+      continue
+    fi
+    cp -a "$cf" "$dst/config/"
+  done
+}
+
+# Agent 安装只同步采集端：agent/ common/ scripts/ 与配置模板。
+# 不要把整棵中心树（含 center/）rsync --delete 进 /opt/monitor-agent。
+sync_agent_tree() {
+  local src="${1:-}"
+  local dst="${2:-}"
+  local src_abs dst_abs name
+  if [[ -z "$src" || -z "$dst" ]]; then
+    echo "[sync] 需要 SRC DST" >&2
+    return 2
+  fi
+  if ! assert_package_tree "$src" "源码 $src"; then
+    return 1
+  fi
+  mkdir -p "$dst"
+  src_abs="$(_sync_abspath "$src")"
+  dst_abs="$(_sync_abspath "$dst")"
+  if [[ -z "$src_abs" || -z "$dst_abs" ]]; then
+    echo "[sync] 无法解析目录路径" >&2
+    return 1
+  fi
+
+  # 解压后 ROOT==INSTALL_DIR：包内已是采集端文件，不再整树拷贝
+  if [[ "$src_abs" == "$dst_abs" ]]; then
+    echo "[sync] method=inplace"
+    return 0
+  fi
+
+  if _sync_has_rsync; then
+    for name in agent common scripts; do
+      rsync -a --delete \
+        --exclude '__pycache__/' \
+        --exclude '*.db' \
+        "$src_abs/$name/" "$dst_abs/$name/"
+    done
+    _sync_agent_config "$src_abs" "$dst_abs"
+    if [[ -f "$src_abs/README.md" ]]; then
+      cp -a "$src_abs/README.md" "$dst_abs/README.md"
+    fi
+    echo "[sync] method=rsync"
+    return 0
+  fi
+
+  if _sync_has_tar; then
+    local names=(agent common scripts)
+    [[ -d "$src_abs/config" ]] && names+=(config)
+    [[ -f "$src_abs/README.md" ]] && names+=(README.md)
+    if tar -C "$src_abs" \
+      --exclude=config/center.json \
+      --exclude=config/agent.json \
+      --exclude=__pycache__ \
+      --exclude=\*.db \
+      -cf - "${names[@]}" | tar -C "$dst_abs" -xf -; then
+      echo "[sync] method=tar"
+      return 0
+    fi
+    echo "[sync] tar 回退失败，改用 cp -a" >&2
+  fi
+
+  if command -v cp >/dev/null 2>&1; then
+    for name in agent common scripts; do
+      rm -rf "$dst_abs/$name"
+      cp -a "$src_abs/$name" "$dst_abs/"
+    done
+    _sync_agent_config "$src_abs" "$dst_abs"
+    if [[ -f "$src_abs/README.md" ]]; then
+      cp -a "$src_abs/README.md" "$dst_abs/README.md"
+    fi
+    echo "[sync] method=cp"
+    return 0
+  fi
+
+  echo "[fail] sync_tool_missing: 本机无 rsync/tar/cp，无法同步代码" >&2
+  return 1
 }

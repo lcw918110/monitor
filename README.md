@@ -58,7 +58,7 @@ chmod +x scripts/*.sh
 
 同机既有 Center 又有 Agent 时必须分开目录：Center 保持 `/opt/monitor`，Agent 用 `/opt/monitor-agent`，避免互相覆盖。已有清单/数据库里若仍是 `/opt/monitor`，**不会自动改写**；新产品默认与 Excel 空列才用 `/opt/monitor-agent`。
 
-中心安装树（`/opt/monitor`）**必须保留 `agent/` 包**：网页 SSH / `deploy_fleet.sh` 都是从中心目录打包下发。源树缺 `agent/` 时禁止同步（避免 `rsync --delete` 把已有包删掉），安装包缺 `agent/` 会短码 `package_incomplete`，不会再静默漏打。
+中心安装树（`/opt/monitor`）**必须保留 `agent/` 包**：网页 SSH / `deploy_fleet.sh` 从该目录打 **Agent 包**（`agent/`、`common/`、`scripts/` 与配置模板），**不会**把 `center/` 当主内容整树拷到 `/opt/monitor-agent`。源树缺 `agent/` 禁止打包；安装后、`--once` 前校验 `agent/__init__.py`，缺包短码 `package_incomplete`。
 
 **SSH 端口**：清单、Excel 的 `ssh_port`、网页「SSH 端口」、`deploy_fleet.sh --ssh-port` / `--port`，缺省 **22**。**不扫描端口。**
 
@@ -141,7 +141,7 @@ cp config/hosts.example.txt config/hosts.txt
 | `key_missing` | 填写的私钥文件在中心机上不存在 |
 | `no_python` | 目标机没有可用 Python ≥ 3.6 |
 | `sync_tool_missing` | 同步文件失败（rsync 优先，缺失则 tar / cp 仍都不可用） |
-| `package_incomplete` | 中心安装树或下发安装包缺少 `agent/`（打包从中心目录读取，**必须保留 agent 包**；rsync --delete 源不完整会删掉目标 agent） |
+| `package_incomplete` | 中心树或缺包导致目标没有 `agent/`（产品打的是采集端包，不是整棵 center 树；`--once` 前会校验 `agent/__init__.py`） |
 | `dir_not_writable` | SSH 已通但安装目录不可写（非 root 用 `~/monitor-agent`） |
 | `agent_start_fail` | 上报自检或 Agent 启动失败（中心地址 / Token / 网络） |
 | `center_url_missing` | 未配置「中心对外访问地址」 |

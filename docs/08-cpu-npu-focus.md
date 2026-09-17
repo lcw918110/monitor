@@ -65,12 +65,12 @@
 ### 客户端与网页部署（唯一产品路径）
 
 - **不要**从笔记本用 sshpass+scp 旁路安装；Agent 由中心 UI `/deploy.html` 或中心机上的 `deploy_fleet.sh` 下发。
-- 中心安装目录必须保留 **`agent/`** 包：产品打包从这里读取。缺包会 `package_incomplete`，不会静默省略。
+- 中心安装目录必须保留 **`agent/`** 包：产品从这里打 **采集端包**（`agent/` `common/` `scripts/`），不以 `center/` 为主内容。缺包会 `package_incomplete`，不会静默省略。
 - Agent 默认目录 **`/opt/monitor-agent`**（避免覆盖同机 Center 的 `/opt/monitor`）。已有库/清单里的 `/opt/monitor` 不自动改写。
 - `deploy_agent.sh`：本机变量 `INSTALL_DIR`；**无 sudo 的非 root** 若目录是 `/opt/monitor-agent` 或 `/opt/monitor` 会改到 `~/monitor-agent`。中心 SSH 部署对 `/opt` 会 `sudo` 再跑该脚本，从而保住 systemd。  
   - **Python**：先复用已有解释器（`PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`），要求 **≥ 3.6**；都没有且为 root 时再 apt/yum/dnf 安装 `python3`  
   - `/usr/local/python3.x` 若 libpython 不在默认链接路径，自动设置 `LD_LIBRARY_PATH`  
-  - **同步**：优先 `rsync`；目标机/本机没有则静默回退 `tar` 管道或 `cp -a`（`scripts/lib/sync_tree.sh`），不捆绑离线 Python  
+  - **同步**：只同步 `agent/` `common/` `scripts/`（及配置模板）；优先 `rsync`，否则 `tar` / `cp`（`scripts/lib/sync_tree.sh` 的 `sync_agent_tree`），不捆绑离线 Python 
 - SSH 在线部署：远端使用 `REMOTE_DIR`（勿再嵌套未赋值的 `INSTALL_DIR`）  
   - 清单/Excel/`deploy_fleet.sh` 支持可选 **ssh_port**（默认 22；CLI `--ssh-port` / `--port`）；**不扫描端口**  
   - 连接超时 / connection closed 自动重试 2～3 次（1s、2s 退避）  
