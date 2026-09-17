@@ -35,6 +35,10 @@ ssh_classify_fail() {
       echo "sshpass_missing"
       return 0
       ;;
+    *"sudo_required"*|*"需要 sudo"*)
+      echo "sudo_required"
+      return 0
+      ;;
     *"permission denied"*|*"authentication failed"*|*"too many authentication"*|*"publickey"*)
       echo "auth_fail"
       return 0

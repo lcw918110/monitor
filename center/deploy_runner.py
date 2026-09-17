@@ -30,6 +30,7 @@ from center.deploy_errors import (
     REMOTE_FAIL,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
+    SUDO_REQUIRED,
     TIMEOUT,
     UNKNOWN,
     DeployError,
@@ -39,7 +40,6 @@ from center.deploy_errors import (
 )
 from center.deploy_store import (
     DEFAULT_AGENT_REMOTE_DIR,
-    LEGACY_AGENT_REMOTE_DIR,
     DeployStore,
 )
 
@@ -195,21 +195,52 @@ def build_ssh_scp_cmds(
     return ssh_cmd, scp_cmd, env, None
 
 
-def resolve_remote_dir(ssh_user: str, remote_dir: str) -> str:
-    """非 root 不要用 /opt 下系统目录（通常无写权限）。
-
-    新产品默认 ``/opt/monitor-agent`` → ``~/monitor-agent``；
-    旧值 ``/opt/monitor`` 仍映射到 ``~/monitor``，已有清单不改写。
-    """
+def needs_remote_sudo(ssh_user: str, remote_dir: str) -> bool:
+    """非 root 往 /opt 装 Agent 时走 sudo，保住已有 systemd 路径。"""
     user = (ssh_user or "root").strip() or "root"
-    rd = (remote_dir or "").strip() or DEFAULT_AGENT_REMOTE_DIR
     if user == "root":
-        return rd
-    stripped = rd.rstrip("/")
-    if stripped == DEFAULT_AGENT_REMOTE_DIR.rstrip("/"):
-        return "~/monitor-agent"
-    if stripped == LEGACY_AGENT_REMOTE_DIR.rstrip("/"):
-        return "~/monitor"
+        return False
+    rd = (remote_dir or "").strip()
+    if not rd or rd.startswith("~") or rd.startswith("$HOME"):
+        return False
+    return rd.startswith("/opt/") or rd.startswith("/usr/local/")
+
+
+def build_remote_root_helper(auth: Dict[str, Any], *, use_sudo: bool) -> str:
+    """远端 run_root：先 sudo -n，不行再用同一 SSH 密码 sudo -S。"""
+    password = str(auth.get("password") or "").strip() if use_sudo else ""
+    pw_assign = "MONITOR_SUDO_PW=%s" % shlex.quote(password) if password else 'MONITOR_SUDO_PW=""'
+    need = "1" if use_sudo else "0"
+    return f"""
+NEED_SUDO={need}
+{pw_assign}
+run_root() {{
+  if [[ "$(id -u)" -eq 0 || "$NEED_SUDO" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  if sudo -n true >/dev/null 2>&1; then
+    sudo -n "$@"
+    return
+  fi
+  if [[ -n "${{MONITOR_SUDO_PW:-}}" ]]; then
+    printf '%s\\n' "$MONITOR_SUDO_PW" | sudo -S -p '' "$@"
+    return
+  fi
+  echo "[fail] sudo_required: 非 root 无法写入 /opt（请配置免密 sudo，或把远端目录改为 ~/monitor-agent）"
+  exit 1
+}}
+"""
+
+
+def resolve_remote_dir(ssh_user: str, remote_dir: str) -> str:
+    """返回清单中的远端目录；空则新产品默认 /opt/monitor-agent。
+
+    非 root 写 /opt 不再改写成家目录（否则会拆掉已有 monitor-agent.service）。
+    由 build_remote_root_helper 在远端 sudo。
+    """
+    _ = ssh_user
+    rd = (remote_dir or "").strip() or DEFAULT_AGENT_REMOTE_DIR
     return rd
 
 
@@ -249,13 +280,16 @@ def test_ssh_ready(
             "remote_dir": remote_dir,
         }
     remote = "%s@%s" % (ssh_user, ip)
+    helper = build_remote_root_helper(
+        auth, use_sudo=needs_remote_sudo(ssh_user, remote_dir)
+    )
     script = f"""set -euo pipefail
 echo SSH_OK
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
-mkdir -p "$REMOTE_DIR"
-TESTFILE="$REMOTE_DIR/.monitor_write_test.$$"
-echo ok > "$TESTFILE"
-rm -f "$TESTFILE"
+{helper}
+run_root mkdir -p "$REMOTE_DIR"
+run_root touch "$REMOTE_DIR/.monitor_write_test.$$"
+run_root rm -f "$REMOTE_DIR/.monitor_write_test.$$"
 echo WRITE_OK
 echo REMOTE_DIR=$REMOTE_DIR
 """
@@ -292,8 +326,15 @@ echo REMOTE_DIR=$REMOTE_DIR
             if code in (REMOTE_FAIL, UNKNOWN) and "permission denied" in out.lower():
                 code = AUTH_FAIL
         else:
-            code = DIR_NOT_WRITABLE
-            human = "SSH 已通，但安装目录不可写：%s（可改为 ~/monitor-agent）" % remote_dir
+            if "sudo_required" in out:
+                code = SUDO_REQUIRED
+                human = "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
+            else:
+                code = DIR_NOT_WRITABLE
+                human = (
+                    "SSH 已通，但安装目录不可写：%s（非 root 写 /opt 需 sudo，或改为 ~/monitor-agent）"
+                    % remote_dir
+                )
         if out and "输出:" not in human:
             human = human + "；输出: " + " | ".join(out.splitlines()[-5:])
         return {
@@ -363,6 +404,8 @@ def deploy_one_target(
     }.get(auth["mode"], auth["mode"])
     log("[%s] 认证方式: %s  用户=%s 端口=%s" % (ip, mode_label, ssh_user, ssh_port))
     log("[%s] 安装目录: %s" % (ip, remote_dir))
+    if needs_remote_sudo(ssh_user, remote_dir):
+        log("[%s] 非 root 写 /opt：远端将 sudo -n，失败则用同一密码 sudo -S" % ip)
     if auth["mode"] == "key":
         log("[%s] 私钥: %s" % (ip, auth["key_path"]))
 
@@ -391,18 +434,21 @@ def deploy_one_target(
             raise DeployError(code, human)
         # 远端展开 ~ 后直接安装，避免嵌套 heredoc 在 set -u 下误展开变量
         center = public_url.rstrip("/")
+        helper = build_remote_root_helper(
+            auth, use_sudo=needs_remote_sudo(ssh_user, remote_dir)
+        )
         remote_script = f"""set -euo pipefail
 REMOTE_DIR=$(eval echo {shlex.quote(remote_dir)})
 echo "REMOTE_DIR=$REMOTE_DIR"
-mkdir -p "$REMOTE_DIR" || {{
-  echo "无法创建安装目录: $REMOTE_DIR"
-  echo "非 root 用户请使用 ~/monitor-agent，或在清单中修改「远端安装目录」"
+{helper}
+run_root mkdir -p "$REMOTE_DIR" || {{
+  echo "[fail] dir_not_writable: 无法创建安装目录: $REMOTE_DIR"
   exit 1
 }}
-tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
+run_root tar -xzf /tmp/monitor-agent.tgz -C "$REMOTE_DIR"
 cd "$REMOTE_DIR"
-chmod +x scripts/*.sh 2>/dev/null || true
-./scripts/deploy_agent.sh \\
+run_root chmod +x scripts/*.sh || true
+run_root ./scripts/deploy_agent.sh \\
   --center-url {shlex.quote(center)} \\
   --dir "$REMOTE_DIR" \\
   --host-id {shlex.quote(host_id)} \\
@@ -434,7 +480,7 @@ echo DEPLOY_DONE
         if proc.returncode != 0:
             hint = ""
             if "Permission denied" in out:
-                hint = "（权限不足：非 root 已自动改用 ~/monitor-agent，若仍失败请检查家目录权限）"
+                hint = "（非 root 写 /opt 需 sudo；或把远端目录改为 ~/monitor-agent）"
             elif "unbound variable" in out:
                 hint = "（远端脚本变量错误，请更新中心端后重试）"
             code, human = classify_deploy_failure(
@@ -446,6 +492,8 @@ echo DEPLOY_DONE
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
+            elif "sudo_required" in out:
+                code, human = SUDO_REQUIRED, "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码）"
             raise DeployError(code, human)
         log("[%s] 部署成功" % ip)
     finally:

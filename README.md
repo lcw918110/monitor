@@ -60,7 +60,7 @@ chmod +x scripts/*.sh
 
 **SSH 端口**：清单、Excel 的 `ssh_port`、网页「SSH 端口」、`deploy_fleet.sh --ssh-port` / `--port`，缺省 **22**。**不扫描端口。**
 
-**密码登录**：必须在 **中心机**（跑 Center / `deploy_fleet.sh` 的那台）安装 `sshpass`，否则失败短码 `sshpass_missing`。没有 sshpass 就改用 SSH 密钥。不要指望笔记本侧的 sshpass 旁路。
+**密码登录**：必须在 **中心机**（跑 Center / `deploy_fleet.sh` 的那台）安装 `sshpass`，否则失败短码 `sshpass_missing`。没有 sshpass 就改用 SSH 密钥。不要指望笔记本侧的 sshpass 旁路。非 root 往 `/opt/monitor-agent` 装时，产品路径会先 `sudo -n`，不行再用**同一 SSH 密码** `sudo -S`，以保住已有 systemd 单元。
 
 失败短码见下文「部署失败短码」。
 
@@ -94,7 +94,7 @@ Agent 安装目录：
 
 - 新产品默认 **`/opt/monitor-agent`**（网页设置 / Excel 空列 / `deploy_agent.sh` 未传 `--dir`）
 - 旧环境或显式填写的 **`/opt/monitor`** 仍然有效，已入库记录不迁移
-- 非 root：`/opt/monitor-agent` → `~/monitor-agent`；旧值 `/opt/monitor` → `~/monitor`
+- 非 root 写 `/opt/...`：中心 SSH 部署先 `sudo -n`，否则同一密码 `sudo -S`（短码 `sudo_required`）。本机直接跑 `deploy_agent.sh` 且无 sudo 时仍会落到 `~/monitor-agent`
 - SSH 在线部署使用 `REMOTE_DIR`（本机脚本内部变量是 `INSTALL_DIR`）
 
 部署页上的「目标机补跑脚本」只用于产品路径已经把代码同步到目标机之后，在该机再跑一次 `deploy_agent.sh`；**不是**从笔记本拷文件的第二条安装方式。
@@ -135,6 +135,7 @@ cp config/hosts.example.txt config/hosts.txt
 | `ssh_unreachable` | 连不上（超时、拒绝、无路由、DNS、连接被关闭）；先核对 IP 与 **ssh_port（默认 22）** |
 | `auth_fail` | 用户名 / 密码 / 私钥认证失败 |
 | `sshpass_missing` | 密码部署但**中心机**未安装 `sshpass`（请安装或改用密钥，不要从笔记本旁路） |
+| `sudo_required` | 非 root 写入 `/opt/...` 时 sudo 不可用（先 `sudo -n`，否则同一 SSH 密码 `sudo -S`） |
 | `key_missing` | 填写的私钥文件在中心机上不存在 |
 | `no_python` | 目标机没有可用 Python ≥ 3.6 |
 | `sync_tool_missing` | 同步文件失败（rsync 优先，缺失则 tar / cp 仍都不可用） |

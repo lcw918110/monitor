@@ -18,6 +18,7 @@ KEY_MISSING = "key_missing"
 NO_PYTHON = "no_python"
 SYNC_TOOL_MISSING = "sync_tool_missing"
 DIR_NOT_WRITABLE = "dir_not_writable"
+SUDO_REQUIRED = "sudo_required"
 AGENT_START_FAIL = "agent_start_fail"
 CENTER_URL_MISSING = "center_url_missing"
 TIMEOUT = "timeout"
@@ -128,6 +129,10 @@ def classify_deploy_failure(
         return AGENT_START_FAIL, _msg("Agent 上报自检或启动失败")
     if "无法创建安装目录" in blob or "安装目录不可写" in blob:
         return DIR_NOT_WRITABLE, _msg("安装目录不可写")
+    if "sudo_required" in blob or "需要 sudo" in blob or "免密 sudo" in blob:
+        return SUDO_REQUIRED, _msg(
+            "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
+        )
     if "请先在部署设置" in blob or "public_center_url" in blob:
         return CENTER_URL_MISSING, _msg("请先填写中心对外访问地址")
     if "sshpass_missing" in blob or (

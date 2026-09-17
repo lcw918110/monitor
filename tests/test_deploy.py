@@ -23,6 +23,7 @@ from center.deploy_errors import (
     NO_PYTHON,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
+    SUDO_REQUIRED,
     SYNC_TOOL_MISSING,
     classify_deploy_failure,
     is_retryable_ssh_error,
@@ -31,7 +32,9 @@ from center.deploy_errors import (
     run_ssh_with_retry,
 )
 from center.deploy_runner import (
+    build_remote_root_helper,
     build_ssh_scp_cmds,
+    needs_remote_sudo,
     require_sshpass_for_password,
     resolve_remote_dir,
     test_ssh_ready,
@@ -150,6 +153,7 @@ class ClassifyTests(unittest.TestCase):
             ("[fail] sync_tool_missing: 无法同步代码", SYNC_TOOL_MISSING),
             ("sshpass: command not found", SSHPASS_MISSING),
             ("[sshpass_missing] 密码部署需要中心机安装 sshpass", SSHPASS_MISSING),
+            ("[fail] sudo_required: 非 root 无法写入 /opt", SUDO_REQUIRED),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -358,10 +362,26 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         self.assertEqual(resolve_remote_dir("root", ""), DEFAULT_AGENT_REMOTE_DIR)
         self.assertEqual(resolve_remote_dir("root", "/opt/monitor"), "/opt/monitor")
         self.assertEqual(
-            resolve_remote_dir("ubuntu", "/opt/monitor-agent"), "~/monitor-agent"
+            resolve_remote_dir("jykj", "/opt/monitor-agent"), "/opt/monitor-agent"
         )
-        self.assertEqual(resolve_remote_dir("ubuntu", "/opt/monitor"), "~/monitor")
+        self.assertEqual(resolve_remote_dir("ubuntu", "/opt/monitor"), "/opt/monitor")
+        self.assertEqual(resolve_remote_dir("ubuntu", "~/monitor-agent"), "~/monitor-agent")
         self.assertEqual(resolve_remote_dir("ubuntu", "/data/agent"), "/data/agent")
+
+    def test_nonroot_opt_uses_sudo_helper(self) -> None:
+        self.assertTrue(needs_remote_sudo("jykj", "/opt/monitor-agent"))
+        self.assertTrue(needs_remote_sudo("ubuntu", "/opt/monitor"))
+        self.assertFalse(needs_remote_sudo("root", "/opt/monitor-agent"))
+        self.assertFalse(needs_remote_sudo("jykj", "~/monitor-agent"))
+        auth = {"mode": "password", "password": "pw-of-jykj", "key_path": ""}
+        helper = build_remote_root_helper(auth, use_sudo=True)
+        self.assertIn("sudo -n", helper)
+        self.assertIn("sudo -S", helper)
+        self.assertIn("sudo_required", helper)
+        self.assertIn("pw-of-jykj", helper)
+        nosudo = build_remote_root_helper(auth, use_sudo=False)
+        self.assertIn('MONITOR_SUDO_PW=""', nosudo)
+        self.assertNotIn("pw-of-jykj", nosudo)
 
     def test_password_without_sshpass_is_sshpass_missing(self) -> None:
         auth = {"mode": "password", "password": "secret", "key_path": ""}
