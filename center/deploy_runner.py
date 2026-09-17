@@ -220,12 +220,13 @@ run_root() {{
     return
   fi
   if sudo -n true >/dev/null 2>&1; then
-    sudo -n "$@"
+    sudo -n "$@" </dev/null
     return
   fi
   if [[ -n "${{MONITOR_SUDO_PW:-}}" ]]; then
-    printf '%s\\n' "$MONITOR_SUDO_PW" | sudo -S -p '' "$@"
-    return
+    if printf '%s\\n' "$MONITOR_SUDO_PW" | sudo -S -p '' "$@"; then
+      return 0
+    fi
   fi
   echo "[fail] sudo_required: 非 root 无法写入 /opt（请配置免密 sudo，或把远端目录改为 ~/monitor-agent）"
   exit 1
@@ -326,7 +327,12 @@ echo REMOTE_DIR=$REMOTE_DIR
             if code in (REMOTE_FAIL, UNKNOWN) and "permission denied" in out.lower():
                 code = AUTH_FAIL
         else:
-            if "sudo_required" in out:
+            blob = out.lower()
+            if (
+                "sudo_required" in out
+                or "not in the sudoers" in blob
+                or "a password is required" in blob
+            ):
                 code = SUDO_REQUIRED
                 human = "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
             else:
@@ -492,7 +498,11 @@ echo DEPLOY_DONE
                 code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
             elif "上报自检失败" in out:
                 code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
-            elif "sudo_required" in out:
+            elif (
+                "sudo_required" in out
+                or "not in the sudoers" in out.lower()
+                or "a password is required" in out.lower()
+            ):
                 code, human = SUDO_REQUIRED, "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码）"
             raise DeployError(code, human)
         log("[%s] 部署成功" % ip)

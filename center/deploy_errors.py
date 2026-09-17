@@ -133,6 +133,18 @@ def classify_deploy_failure(
         return SUDO_REQUIRED, _msg(
             "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
         )
+    if any(
+        n in blob
+        for n in (
+            "not in the sudoers",
+            "a password is required",
+            "incorrect password attempt",
+            "a terminal is required to read the password",
+        )
+    ):
+        return SUDO_REQUIRED, _msg(
+            "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码 sudo -S）"
+        )
     if "请先在部署设置" in blob or "public_center_url" in blob:
         return CENTER_URL_MISSING, _msg("请先填写中心对外访问地址")
     if "sshpass_missing" in blob or (

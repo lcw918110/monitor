@@ -154,6 +154,8 @@ class ClassifyTests(unittest.TestCase):
             ("sshpass: command not found", SSHPASS_MISSING),
             ("[sshpass_missing] 密码部署需要中心机安装 sshpass", SSHPASS_MISSING),
             ("[fail] sudo_required: 非 root 无法写入 /opt", SUDO_REQUIRED),
+            ("sudo: a password is required", SUDO_REQUIRED),
+            ("jykj is not in the sudoers file", SUDO_REQUIRED),
         ]
         for text, expected in cases:
             code, _msg = classify_deploy_failure(text)
@@ -382,6 +384,33 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         nosudo = build_remote_root_helper(auth, use_sudo=False)
         self.assertIn('MONITOR_SUDO_PW=""', nosudo)
         self.assertNotIn("pw-of-jykj", nosudo)
+
+    def test_run_root_prints_sudo_required_when_sudo_fails(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root 下 run_root 不会走 sudo")
+        helper = build_remote_root_helper(
+            {"mode": "password", "password": "bad-pass"}, use_sudo=True
+        )
+        script = (
+            "set -euo pipefail\n"
+            + helper
+            + textwrap.dedent(
+                """
+                sudo() { echo "sudo: a password is required" >&2; return 1; }
+                run_root true
+                echo SHOULD_NOT_REACH
+                """
+            )
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("sudo_required", proc.stdout)
+        self.assertNotIn("SHOULD_NOT_REACH", proc.stdout)
 
     def test_password_without_sshpass_is_sshpass_missing(self) -> None:
         auth = {"mode": "password", "password": "secret", "key_path": ""}
