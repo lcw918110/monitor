@@ -159,18 +159,9 @@ def sample_memory() -> Dict[str, float]:
 
 
 def sample_disk(path: str = "/") -> Dict[str, float]:
-    try:
-        st = os.statvfs(path)
-        total = st.f_frsize * st.f_blocks
-        free = st.f_frsize * st.f_bavail
-        used = total - free
-        return {
-            "disk_total_gb": round(total / 1024 / 1024 / 1024, 2),
-            "disk_used_gb": round(used / 1024 / 1024 / 1024, 2),
-            "disk_percent": round(used * 100.0 / total, 2) if total else 0.0,
-        }
-    except OSError:
-        return {"disk_total_gb": 0, "disk_used_gb": 0, "disk_percent": 0.0}
+    from agent.metrics.disk import sample_disk as _sample_disk
+
+    return _sample_disk(path)
 
 
 def sample_load() -> Dict[str, float]:
@@ -286,6 +277,7 @@ def sample_cpu_identity() -> Dict[str, str]:
 
 
 def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[str, Any]:
+    from agent.metrics.disk import collect_disks
     from agent.metrics.network import collect_network
 
     data: Dict[str, Any] = {
@@ -297,6 +289,6 @@ def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[st
     data.update(sample_cpu_freq())
     data.update(sample_load())
     data.update(sample_memory())
-    data.update(sample_disk(disk_path))
+    data.update(collect_disks(disk_path))
     data.update(collect_network())
     return data

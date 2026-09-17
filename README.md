@@ -168,6 +168,7 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/06-optimization-backlog.md` | 历史优化 backlog |
 | `docs/08-cpu-npu-focus.md` | 加速卡与部署说明 |
 | `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
+| `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | **`docs/10-roadmap.md`** | **下一步待办（服务器实装 / 框架化 / 拓扑图 / 容量验证）** |
 
 ## 下一步（摘要）
@@ -182,5 +183,5 @@ tail -n 50 .deploy-agent/run/agent.log
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk
 ```

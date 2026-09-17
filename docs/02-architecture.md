@@ -51,7 +51,8 @@
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
 | Web UI | `center/static/*` | 监测台、部署页 |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
-| 系统采集 | `agent/metrics/system.py` | CPU/内存/磁盘/负载/uptime/网络等 |
+| 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
+| 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
 | 加速卡采集 | `agent/metrics/accelerators.py` | 多厂商加速卡 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
@@ -74,4 +75,5 @@
 - 需求：`docs/01-requirements.md`
 - 设计与测试：`docs/03-design-and-test.md`
 - 部署与加速卡：`docs/08-cpu-npu-focus.md`
+- 多挂载磁盘：`docs/12-disk-mounts.md`
 - 下一步：`docs/10-roadmap.md`

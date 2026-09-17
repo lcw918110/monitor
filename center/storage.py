@@ -272,11 +272,18 @@ class Storage:
                     gpu_utils.append(float(g["util_percent"]))
                 except (TypeError, ValueError):
                     pass
+        disks = system.get("disks")
+        disk_count = system.get("disk_count")
+        if disk_count is None and isinstance(disks, list):
+            disk_count = len(disks)
         return {
             "cpu_percent": system.get("cpu_percent"),
             "cpu_count": system.get("cpu_count"),
             "mem_percent": system.get("mem_percent"),
             "disk_percent": system.get("disk_percent"),
+            "disk_used_gb": system.get("disk_used_gb"),
+            "disk_total_gb": system.get("disk_total_gb"),
+            "disk_count": disk_count,
             "load1": system.get("load1"),
             "net_rx_mbps": system.get("net_rx_mbps"),
             "net_tx_mbps": system.get("net_tx_mbps"),

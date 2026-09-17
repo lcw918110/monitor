@@ -588,6 +588,93 @@
     }
   }
 
+  function hostDiskCell(h) {
+    const pct = metricPct(
+      h.disk_percent,
+      thresholds.disk_warn_percent,
+      thresholds.disk_critical_percent
+    );
+    const n = Number(h.disk_count);
+    if (n > 1) {
+      return pct + ' <span class="muted">· ' + n + "盘</span>";
+    }
+    return pct;
+  }
+
+  function diskEntries(sys) {
+    const list = Array.isArray(sys.disks) ? sys.disks.slice() : [];
+    return list.filter((d) => d && d.mount);
+  }
+
+  function renderDiskBlock(sys) {
+    const disks = diskEntries(sys).sort((a, b) => {
+      const dp = (Number(b.percent) || 0) - (Number(a.percent) || 0);
+      if (dp) return dp;
+      return String(a.mount || "").localeCompare(String(b.mount || ""));
+    });
+    const count = disks.length;
+    const maxDisk = disks[0];
+    let usageText = rtRated(
+      fmtNum(sys.disk_used_gb, 2) + " GB",
+      fmtNum(sys.disk_total_gb, 2) + " GB"
+    );
+    let extra = "";
+    if (count > 1) {
+      usageText =
+        "合计 " +
+        fmtNum(sys.disk_used_gb, 2) +
+        " / " +
+        fmtNum(sys.disk_total_gb, 2) +
+        " GB";
+      const mnt = maxDisk && maxDisk.mount ? maxDisk.mount : "";
+      extra =
+        ' <span class="muted">' +
+        (mnt ? escapeHtml(mnt) + " · " : "") +
+        count +
+        " 挂载</span>";
+    }
+    let html =
+      '<div class="k">磁盘</div><div class="v">' +
+      usageText +
+      " " +
+      metricPct(
+        sys.disk_percent,
+        thresholds.disk_warn_percent,
+        thresholds.disk_critical_percent
+      ) +
+      extra +
+      " " +
+      bar(sys.disk_percent);
+    if (count > 1) {
+      html +=
+        '<div class="table-wrap disk-wrap"><table class="disk-table"><thead><tr>' +
+        "<th>挂载</th><th>已用 / 总量</th><th>利用率</th></tr></thead><tbody>";
+      disks.forEach((d) => {
+        const sub = [d.device, d.fstype].filter(Boolean).join(" · ");
+        html +=
+          "<tr><td>" +
+          escapeHtml(d.mount || "-") +
+          (sub ? '<div class="muted">' + escapeHtml(sub) + "</div>" : "") +
+          "</td><td>" +
+          fmtNum(d.used_gb, 2) +
+          " / " +
+          fmtNum(d.total_gb, 2) +
+          " GB</td><td>" +
+          metricPct(
+            d.percent,
+            thresholds.disk_warn_percent,
+            thresholds.disk_critical_percent
+          ) +
+          " " +
+          bar(d.percent) +
+          "</td></tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    html += "</div>";
+    return html;
+  }
+
   function renderAnomalySummary(data) {
     if (data && data.thresholds) {
       thresholds = Object.assign({}, thresholds, data.thresholds);
@@ -658,7 +745,7 @@
     el.hostCount.textContent = "显示 " + view.length + " / " + allHosts.length;
     if (!view.length) {
       el.hostBody.innerHTML =
-        '<tr><td colspan="7" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="8" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
       return;
     }
     el.hostBody.innerHTML = view
@@ -707,6 +794,9 @@
           "</td>" +
           "<td>" +
           cardText +
+          "</td>" +
+          "<td>" +
+          hostDiskCell(h) +
           "</td>" +
           "<td>" +
           fmtTime(h.last_seen) +
@@ -938,21 +1028,7 @@
       " " +
       bar(sys.mem_percent) +
       "</div>";
-    html +=
-      '<div class="k">磁盘</div><div class="v">' +
-      rtRated(
-        fmtNum(sys.disk_used_gb, 2) + " GB",
-        fmtNum(sys.disk_total_gb, 2) + " GB"
-      ) +
-      " " +
-      metricPct(
-        sys.disk_percent,
-        thresholds.disk_warn_percent,
-        thresholds.disk_critical_percent
-      ) +
-      " " +
-      bar(sys.disk_percent) +
-      "</div>";
+    html += renderDiskBlock(sys);
     const netUtil = Math.max(
       Number(sys.net_rx_percent) || 0,
       Number(sys.net_tx_percent) || 0
