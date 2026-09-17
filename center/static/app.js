@@ -2,7 +2,8 @@
   const REFRESH_MS = 15000;
   let selectedId = null;
   let allHosts = [];
-  /** 时段利用时间窗（与详情统计共用） */
+  let currentTab = "realtime"; // realtime | period
+  /** 时段统计时间窗（时段页与单机时段详情共用） */
   let detailMinutes = 120;
   let periodMode = "preset"; // preset | custom
   let periodFromTs = null;
@@ -43,6 +44,12 @@
     filterStatus: document.getElementById("filterStatus"),
     periodUtilControls: document.getElementById("periodUtilControls"),
     periodUtilBody: document.getElementById("periodUtilBody"),
+    periodDetailTitle: document.getElementById("periodDetailTitle"),
+    periodDetailBody: document.getElementById("periodDetailBody"),
+    viewRealtime: document.getElementById("viewRealtime"),
+    viewPeriod: document.getElementById("viewPeriod"),
+    tabBtnRealtime: document.getElementById("tabBtnRealtime"),
+    tabBtnPeriod: document.getElementById("tabBtnPeriod"),
   };
 
   function fmtPct(v) {
@@ -268,6 +275,48 @@
     return text + (suffix || "");
   }
 
+  function hostById(id) {
+    return allHosts.find((h) => h.host_id === id) || null;
+  }
+
+  function tabFromHash() {
+    return location.hash === "#period" ? "period" : "realtime";
+  }
+
+  function applyTabVisibility(next) {
+    currentTab = next === "period" ? "period" : "realtime";
+    if (el.viewRealtime) el.viewRealtime.hidden = currentTab !== "realtime";
+    if (el.viewPeriod) el.viewPeriod.hidden = currentTab !== "period";
+    [el.tabBtnRealtime, el.tabBtnPeriod].forEach((btn) => {
+      if (!btn) return;
+      const on = btn.getAttribute("data-tab") === currentTab;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  function setTab(name, opts) {
+    const next = name === "period" ? "period" : "realtime";
+    const fromHash = opts && opts.fromHash;
+    applyTabVisibility(next);
+    if (!fromHash) {
+      const hash = next === "period" ? "#period" : "#realtime";
+      if (location.hash !== hash) {
+        if (history.replaceState) {
+          history.replaceState(null, "", hash);
+        } else {
+          location.hash = next;
+        }
+      }
+    }
+    if (next === "period") {
+      loadPeriodUtil();
+      if (selectedId) loadPeriodHostDetail(selectedId);
+    } else if (selectedId) {
+      loadDetail(selectedId);
+    }
+  }
+
   function renderPeriodButtons() {
     return PERIOD_OPTIONS.map((opt) => {
       const active =
@@ -282,15 +331,6 @@
         "</button>"
       );
     }).join("");
-  }
-
-  function renderPeriodPicker() {
-    return (
-      '<div class="period-bar">' +
-      '<span class="muted">统计时间段（与上方「时段利用」相同）</span>' +
-      renderPeriodButtons() +
-      "</div>"
-    );
   }
 
   function renderPeriodControls() {
@@ -336,8 +376,7 @@
           periodFromTs = null;
           periodToTs = null;
           renderPeriodControls();
-          loadPeriodUtil();
-          if (selectedId) loadDetail(selectedId);
+          reloadPeriodViews();
         });
       }
     );
@@ -361,8 +400,7 @@
       if (!Number.isNaN(c) && c >= 0) busyCpu = c;
       if (!Number.isNaN(a) && a >= 0) busyAccel = a;
       updatePeriodExportLink();
-      loadPeriodUtil();
-      if (selectedId) loadDetail(selectedId);
+      reloadPeriodViews();
     }
     if (cpuInput) cpuInput.addEventListener("change", applyBusy);
     if (accelInput) accelInput.addEventListener("change", applyBusy);
@@ -382,8 +420,12 @@
     periodFromTs = fromTs;
     periodToTs = toTs;
     renderPeriodControls();
+    reloadPeriodViews();
+  }
+
+  function reloadPeriodViews() {
     loadPeriodUtil();
-    if (selectedId) loadDetail(selectedId);
+    if (selectedId) loadPeriodHostDetail(selectedId);
   }
 
   const PERIOD_METRIC_ROWS = [
@@ -452,22 +494,6 @@
     });
     html += "</tbody></table>";
     return html;
-  }
-
-  function bindPeriodPicker(hostId) {
-    Array.from(el.detailBody.querySelectorAll(".period-btn")).forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const m = Number(btn.getAttribute("data-minutes"));
-        if (!m) return;
-        periodMode = "preset";
-        detailMinutes = m;
-        periodFromTs = null;
-        periodToTs = null;
-        renderPeriodControls();
-        loadDetail(hostId);
-        loadPeriodUtil();
-      });
-    });
   }
 
   function updatePeriodExportLink() {
@@ -566,7 +592,7 @@
     Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((tr) => {
       tr.addEventListener("click", () => {
         selectedId = decodeURIComponent(tr.getAttribute("data-id"));
-        loadDetail(selectedId);
+        loadPeriodHostDetail(selectedId);
         renderHosts(allHosts);
         Array.from(el.periodUtilBody.querySelectorAll("tr")).forEach((r) =>
           r.classList.remove("active")
@@ -586,6 +612,100 @@
       el.periodUtilBody.innerHTML =
         '<p class="muted">时段统计加载失败：' + escapeHtml(e.message) + "</p>";
     }
+  }
+
+  function renderPeriodCharts(pts) {
+    pts = pts || [];
+    let html =
+      '<div class="section-title">' + currentWindowLabel() + " 趋势</div>";
+    html += '<div class="charts">';
+    html +=
+      '<div class="chart-card"><div class="title">CPU %</div>' +
+      sparkline(
+        pts.map((x) => x.cpu_percent),
+        "#3d9cfd"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">加速卡利用率 %</div>' +
+      sparkline(
+        pts.map((x) => x.accel_util_avg || x.npu_util_avg || x.gpu_util_avg),
+        "#c9a0ff"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">加速卡最高温度 °C</div>' +
+      sparkline(
+        pts.map((x) => x.accel_temp_max || x.npu_temp_max || x.gpu_temp_max),
+        "#e25c5c"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">内存 %</div>' +
+      sparkline(
+        pts.map((x) => x.mem_percent),
+        "#46c2b0"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络入向 Mbps</div>' +
+      sparkline(
+        pts.map((x) => x.net_rx_mbps),
+        "#7ec8e3"
+      ) +
+      "</div>";
+    html +=
+      '<div class="chart-card"><div class="title">网络出向 Mbps</div>' +
+      sparkline(
+        pts.map((x) => x.net_tx_mbps),
+        "#e3c07e"
+      ) +
+      "</div>";
+    html += "</div>";
+    return html;
+  }
+
+  async function loadPeriodHostDetail(hostId) {
+    if (!el.periodDetailBody) return;
+    if (!hostId) {
+      if (el.periodDetailTitle) el.periodDetailTitle.textContent = "请选择主机";
+      el.periodDetailBody.innerHTML =
+        '<p class="empty">点选左侧主机，查看该机时段指标与趋势</p>';
+      return;
+    }
+    const host = hostById(hostId);
+    if (el.periodDetailTitle) {
+      el.periodDetailTitle.textContent =
+        (host && (host.hostname || host.host_id)) || hostId;
+    }
+    let hist = { points: [] };
+    let periodStats = null;
+    let histMinutes = detailMinutes;
+    if (periodMode === "custom" && periodFromTs && periodToTs) {
+      histMinutes = Math.max(1, Math.ceil((periodToTs - periodFromTs) / 60));
+    }
+    const histLimit = Math.min(
+      2000,
+      Math.max(240, Math.ceil(histMinutes / 2))
+    );
+    try {
+      const base = "/api/v1/hosts/" + encodeURIComponent(hostId);
+      const [hr, sr] = await Promise.all([
+        fetch(base + "/history?" + periodQuery("limit=" + histLimit)),
+        fetch(base + "/period-stats?" + periodQuery()),
+      ]);
+      if (hr.ok) hist = await hr.json();
+      if (sr.ok) periodStats = await sr.json();
+    } catch (e) {
+      el.periodDetailBody.innerHTML =
+        '<p class="muted">时段统计加载失败：' + escapeHtml(e.message) + "</p>";
+      return;
+    }
+    const pts = hist.points || [];
+    let html = '<div class="section-title">时段指标</div>';
+    html += renderPeriodStatsTable(periodStats);
+    html += renderPeriodCharts(pts);
+    el.periodDetailBody.innerHTML = html;
   }
 
   function hostDiskCell(h) {
@@ -816,7 +936,7 @@
     });
   }
 
-  async function renderDetail(data) {
+  function renderDetail(data) {
     if (!data) {
       el.detailTitle.textContent = "请选择左侧主机";
       el.detailBody.innerHTML = '<p class="empty">暂无选中主机</p>';
@@ -839,33 +959,6 @@
       " · " +
       statusLabel(anomaly.overall);
 
-    let hist = { points: [] };
-    let periodStats = null;
-    let histMinutes = detailMinutes;
-    if (periodMode === "custom" && periodFromTs && periodToTs) {
-      histMinutes = Math.max(1, Math.ceil((periodToTs - periodFromTs) / 60));
-    }
-    const histLimit = Math.min(
-      2000,
-      Math.max(240, Math.ceil(histMinutes / 2))
-    );
-    try {
-      const base =
-        "/api/v1/hosts/" + encodeURIComponent(data.host_id);
-      const [hr, sr] = await Promise.all([
-        fetch(
-          base +
-            "/history?" +
-            periodQuery("limit=" + histLimit)
-        ),
-        fetch(base + "/period-stats?" + periodQuery()),
-      ]);
-      if (hr.ok) hist = await hr.json();
-      if (sr.ok) periodStats = await sr.json();
-    } catch (e) {
-      /* ignore */
-    }
-    const pts = hist.points || [];
     const accelStatus = (anomaly.accel || anomaly.npu || {}).status;
 
     let html = "";
@@ -898,59 +991,8 @@
     } else {
       html += '<p class="muted">当前指标未见异常</p>';
     }
-
-    html += '<div class="section-title">时段利用</div>';
-    html += renderPeriodPicker();
-    html += renderPeriodStatsTable(periodStats);
-
     html +=
-      '<div class="section-title">' +
-      currentWindowLabel(periodStats) +
-      " 趋势</div>";
-    html += '<div class="charts">';
-    html +=
-      '<div class="chart-card"><div class="title">CPU %</div>' +
-      sparkline(
-        pts.map((x) => x.cpu_percent),
-        "#3d9cfd"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">加速卡利用率 %</div>' +
-      sparkline(
-        pts.map((x) => x.accel_util_avg || x.npu_util_avg || x.gpu_util_avg),
-        "#c9a0ff"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">加速卡最高温度 °C</div>' +
-      sparkline(
-        pts.map((x) => x.accel_temp_max || x.npu_temp_max || x.gpu_temp_max),
-        "#e25c5c"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">内存 %（实时/总量）</div>' +
-      sparkline(
-        pts.map((x) => x.mem_percent),
-        "#46c2b0"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">网络入向 Mbps（实时）</div>' +
-      sparkline(
-        pts.map((x) => x.net_rx_mbps),
-        "#7ec8e3"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">网络出向 Mbps（实时）</div>' +
-      sparkline(
-        pts.map((x) => x.net_tx_mbps),
-        "#e3c07e"
-      ) +
-      "</div>";
-    html += "</div>";
+      '<p class="muted"><a class="link" href="#period" id="gotoPeriodTab">查看该机时段统计</a></p>';
 
     html += '<div class="section-title">CPU / 基础资源（实时用量 + 额定/总量）</div>';
     html += '<div class="kv">';
@@ -1184,7 +1226,13 @@
     }
 
     el.detailBody.innerHTML = html;
-    bindPeriodPicker(data.host_id);
+    const gotoPeriod = document.getElementById("gotoPeriodTab");
+    if (gotoPeriod) {
+      gotoPeriod.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        setTab("period");
+      });
+    }
   }
 
   async function loadDetail(hostId) {
@@ -1196,7 +1244,7 @@
       const res = await fetch("/api/v1/hosts/" + encodeURIComponent(hostId));
       if (!res.ok) throw new Error("详情请求失败");
       const data = await res.json();
-      await renderDetail(data);
+      renderDetail(data);
     } catch (e) {
       el.detailBody.innerHTML =
         '<p class="empty">加载详情失败：' + escapeHtml(e.message) + "</p>";
@@ -1213,12 +1261,15 @@
       renderStats(await statsRes.json());
       renderAnomalySummary(await anomalyRes.json());
       const hostsData = await hostsRes.json();
-      renderHosts(hostsData.hosts || []);
-      await loadPeriodUtil();
-      if (selectedId) {
-        await loadDetail(selectedId);
-      } else if ((hostsData.hosts || []).length) {
-        selectedId = hostsData.hosts[0].host_id;
+      const hosts = hostsData.hosts || [];
+      if (!selectedId && hosts.length) {
+        selectedId = hosts[0].host_id;
+      }
+      renderHosts(hosts);
+      if (currentTab === "period") {
+        await loadPeriodUtil();
+        if (selectedId) await loadPeriodHostDetail(selectedId);
+      } else if (selectedId) {
         await loadDetail(selectedId);
       }
     } catch (e) {
@@ -1230,7 +1281,16 @@
   el.filterQ.addEventListener("input", () => renderHosts(allHosts));
   el.filterType.addEventListener("change", () => renderHosts(allHosts));
   el.filterStatus.addEventListener("change", () => renderHosts(allHosts));
+  [el.tabBtnRealtime, el.tabBtnPeriod].forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => setTab(btn.getAttribute("data-tab")));
+  });
+  window.addEventListener("hashchange", () => {
+    const name = tabFromHash();
+    if (name !== currentTab) setTab(name, { fromHash: true });
+  });
   renderPeriodControls();
+  applyTabVisibility(tabFromHash());
   refresh();
   setInterval(refresh, REFRESH_MS);
 })();
