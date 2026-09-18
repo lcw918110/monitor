@@ -11,6 +11,12 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from center.hostaddr import normalize_ip, resolve_host_address
+from common.accel_identity import (
+    accel_utils,
+    cards_from_payload,
+    merge_inventories,
+    summarize_accelerators,
+)
 
 
 PERIOD_METRIC_KEYS = (
@@ -517,6 +523,9 @@ class Storage:
                     gpu_utils.append(float(g["util_percent"]))
                 except (TypeError, ValueError):
                     pass
+        cards = cards_from_payload(payload)
+        identity = summarize_accelerators(cards)
+        accel_util_vals = accel_utils(cards)
         disks = system.get("disks")
         disk_count = system.get("disk_count")
         if disk_count is None and isinstance(disks, list):
@@ -537,6 +546,14 @@ class Storage:
             "npu_util_avg": round(sum(npu_utils) / len(npu_utils), 2) if npu_utils else None,
             "gpu_count": len(gpus),
             "gpu_util_avg": round(sum(gpu_utils) / len(gpu_utils), 2) if gpu_utils else None,
+            "accel_count": identity["count"],
+            "accel_summary": identity["summary"] or None,
+            "accel_inventory": identity["inventory"],
+            "accel_util_avg": (
+                round(sum(accel_util_vals) / len(accel_util_vals), 2)
+                if accel_util_vals
+                else None
+            ),
         }
 
     def list_hosts(self) -> List[Dict[str, Any]]:
@@ -607,6 +624,10 @@ class Storage:
             "last_remote_ip": row["last_remote_ip"],
             "payload": payload,
         }
+        identity = summarize_accelerators(cards_from_payload(payload))
+        item["accel_count"] = identity["count"]
+        item["accel_summary"] = identity["summary"] or None
+        item["accel_inventory"] = identity["inventory"]
         self._attach_host_meta(
             item,
             payload,
@@ -624,7 +645,11 @@ class Storage:
 
         npu_cards = sum(int(h.get("npu_count") or 0) for h in hosts)
         gpu_cards = sum(int(h.get("gpu_count") or 0) for h in hosts)
+        accel_cards = sum(int(h.get("accel_count") or 0) for h in hosts)
+        if not accel_cards:
+            accel_cards = npu_cards + gpu_cards
         cpu_cores = sum(int(h.get("cpu_count") or 0) for h in online)
+        cluster_identity = merge_inventories(h.get("accel_inventory") for h in hosts)
 
         def _avg(values: List[float]) -> Optional[float]:
             return round(sum(values) / len(values), 2) if values else None
@@ -637,6 +662,11 @@ class Storage:
         avg_gpu = _avg(
             [float(h["gpu_util_avg"]) for h in online if h.get("gpu_util_avg") is not None]
         )
+        avg_accel = _avg(
+            [float(h["accel_util_avg"]) for h in online if h.get("accel_util_avg") is not None]
+        )
+        if avg_accel is None:
+            avg_accel = avg_npu if avg_npu is not None else avg_gpu
 
         return {
             "host_total": len(hosts),
@@ -646,10 +676,14 @@ class Storage:
             "npu_cards": npu_cards,
             "gpu_hosts": len(gpu_hosts),
             "gpu_cards": gpu_cards,
+            "accel_cards": accel_cards,
+            "accel_summary": cluster_identity.get("summary") or None,
+            "accel_inventory": cluster_identity.get("inventory") or [],
             "avg_cpu_percent": avg_cpu,
             "avg_mem_percent": avg_mem,
             "avg_npu_util_percent": avg_npu,
             "avg_gpu_util_percent": avg_gpu,
+            "avg_accel_util_percent": avg_accel,
             "offline_seconds": self.offline_seconds,
             "generated_at": int(time.time()),
         }
@@ -999,15 +1033,30 @@ class Storage:
             thresholds = dict(busy_thresholds)
         hostname = None
         host_type = None
+        accel_summary = None
+        accel_count = 0
+        accel_inventory: List[Dict[str, Any]] = []
         if host is None:
             host = self.get_host(host_id)
         if host:
             hostname = host.get("hostname")
             host_type = host.get("host_type")
+            payload = host.get("payload") or {}
+            identity = summarize_accelerators(cards_from_payload(payload))
+            accel_summary = identity.get("summary") or None
+            accel_count = identity.get("count") or 0
+            accel_inventory = identity.get("inventory") or []
+            if not accel_count:
+                accel_count = int(host.get("accel_count") or 0)
+                accel_summary = host.get("accel_summary") or accel_summary
+                accel_inventory = host.get("accel_inventory") or accel_inventory
         result = {
             "host_id": host_id,
             "hostname": hostname,
             "host_type": host_type,
+            "accel_count": accel_count,
+            "accel_summary": accel_summary,
+            "accel_inventory": accel_inventory,
             "minutes": window["minutes"],
             "sample_count": parsed,
             "from_ts": first_ts,
@@ -1080,12 +1129,19 @@ class Storage:
                     "address": host.get("address") or "",
                     "group_id": host.get("group_id"),
                     "group_name": host.get("group_name"),
+                    "accel_count": host.get("accel_count") or 0,
+                    "accel_summary": host.get("accel_summary") or "",
+                    "accel_inventory": host.get("accel_inventory") or [],
                     "sample_count": stats.get("sample_count") or 0,
                     "from_ts": stats.get("from_ts"),
                     "to_ts": stats.get("to_ts"),
                     "metrics": stats.get("metrics") or {},
                 }
             )
+
+        cluster_identity = merge_inventories(
+            h.get("accel_inventory") for h in host_rows
+        )
 
         return {
             "minutes": window["minutes"],
@@ -1098,9 +1154,15 @@ class Storage:
             "sample_count": total_samples,
             "from_ts": window["from_ts"],
             "to_ts": window["to_ts"],
+            "accel_count": cluster_identity.get("count") or 0,
+            "accel_summary": cluster_identity.get("summary") or None,
+            "accel_inventory": cluster_identity.get("inventory") or [],
             "cluster": {
                 "sample_count": total_samples,
                 "metrics": self._metrics_from_series(pooled, thresholds),
+                "accel_count": cluster_identity.get("count") or 0,
+                "accel_summary": cluster_identity.get("summary") or None,
+                "accel_inventory": cluster_identity.get("inventory") or [],
             },
             "hosts": host_rows,
         }

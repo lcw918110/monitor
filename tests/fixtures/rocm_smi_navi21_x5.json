@@ -1,0 +1,65 @@
+{
+  "card0": {
+    "GPU use (%)": "8",
+    "VRAM Total Memory (B)": "17163091968",
+    "VRAM Total Used Memory (B)": "858154496",
+    "Temperature (Sensor edge) (C)": "42.0",
+    "Average Graphics Package Power (W)": "28.5",
+    "Max Graphics Package Power (W)": "250.0",
+    "Card series": "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "Card model": "0x73bf",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "Card SKU": "D5120100"
+  },
+  "card1": {
+    "GPU use (%)": "12",
+    "VRAM Total Memory (B)": "17163091968",
+    "VRAM Total Used Memory (B)": "1024458752",
+    "Temperature (Sensor edge) (C)": "45.0",
+    "Average Graphics Package Power (W)": "31.0",
+    "Max Graphics Package Power (W)": "250.0",
+    "Card series": "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "Card model": "0x73bf",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "Card SKU": "D5120100"
+  },
+  "card2": {
+    "GPU use (%)": "0",
+    "VRAM Total Memory (B)": "17163091968",
+    "VRAM Total Used Memory (B)": "134217728",
+    "Temperature (Sensor edge) (C)": "38.0",
+    "Average Graphics Package Power (W)": "22.0",
+    "Max Graphics Package Power (W)": "250.0",
+    "Card series": "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "Card model": "0x73bf",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "Card SKU": "D5120100"
+  },
+  "card3": {
+    "GPU use (%)": "55",
+    "VRAM Total Memory (B)": "17163091968",
+    "VRAM Total Used Memory (B)": "8589934592",
+    "Temperature (Sensor edge) (C)": "61.0",
+    "Average Graphics Package Power (W)": "180.2",
+    "Max Graphics Package Power (W)": "250.0",
+    "Card series": "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "Card model": "0x73bf",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "Card SKU": "D5120100"
+  },
+  "card4": {
+    "GPU use (%)": "3",
+    "VRAM Total Memory (B)": "17163091968",
+    "VRAM Total Used Memory (B)": "268435456",
+    "Temperature (Sensor edge) (C)": "40.0",
+    "Average Graphics Package Power (W)": "25.4",
+    "Max Graphics Package Power (W)": "250.0",
+    "Card series": "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "Card model": "0x73bf",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "Card SKU": "D5120100"
+  },
+  "system": {
+    "DRIVER_VERSION": "6.3.0"
+  }
+}

@@ -61,7 +61,8 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
     else:
         host_type = configured
 
-    gpu_procs = collect_nvidia_processes() if parts["gpus"] else []
+    nvidia_cards = [c for c in parts["gpus"] if (c.get("vendor") or "") == "nvidia"]
+    gpu_procs = collect_nvidia_processes() if nvidia_cards else []
 
     payload: Dict[str, Any] = {
         "host_id": ident["host_id"],

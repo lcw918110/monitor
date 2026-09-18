@@ -53,7 +53,8 @@
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
 | 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
-| 加速卡采集 | `agent/metrics/accelerators.py` | 多厂商加速卡 |
+| 加速卡采集 | `agent/metrics/accelerators.py` | 多厂商加速卡（NVIDIA / AMD / 昇腾 / 寒武纪 / RKNN） |
+| AMD GPU 采集 | `agent/metrics/amd.py` | `rocm-smi` 优先，`amd-smi` 回退 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
 | 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/deploy_ssh.sh` 端口/重试 |

@@ -139,7 +139,12 @@ else
   echo "  [--] 未发现 npu-smi（NPU 指标为空，仍上报 CPU）"
 fi
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "  [ok] 发现 nvidia-smi（将采集 GPU，可选）"
+  echo "  [ok] 发现 nvidia-smi（将采集 NVIDIA GPU）"
+fi
+if command -v rocm-smi >/dev/null 2>&1; then
+  echo "  [ok] 发现 rocm-smi（将采集 AMD GPU）"
+elif command -v amd-smi >/dev/null 2>&1; then
+  echo "  [ok] 发现 amd-smi（将采集 AMD GPU）"
 fi
 
 LD_EXPORT=""

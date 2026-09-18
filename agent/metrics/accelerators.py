@@ -2,6 +2,7 @@
 
 当前支持：
 - 英伟达 NVIDIA：`nvidia-smi`
+- AMD：优先 `rocm-smi`，失败回退 `amd-smi`
 - 华为昇腾 Huawei Ascend：`npu-smi`
 - 寒武纪 Cambricon MLU：`cnmon`
 - 瑞芯微 Rockchip RKNN 系列：`/sys/kernel/debug/rknpu/load` 等
@@ -15,8 +16,11 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Match, Optional
 
+from agent.metrics.amd import collect_amd_gpus
 from agent.metrics.gpu import collect_gpu_processes, collect_gpus
 from agent.metrics.npu import collect_npus
+
+_GPU_VENDORS = ("nvidia", "amd")
 
 
 def _num(v: Any) -> Optional[float]:
@@ -46,6 +50,21 @@ def _from_nvidia() -> List[Dict[str, Any]]:
         item = dict(g)
         item["vendor"] = "nvidia"
         item["vendor_label"] = "英伟达"
+        item["card_kind"] = "gpu"
+        mu = _num(item.get("mem_used_mb"))
+        mt = _num(item.get("mem_total_mb"))
+        if mu is not None and mt and mt > 0:
+            item["mem_percent"] = round(mu * 100.0 / mt, 2)
+        out.append(item)
+    return out
+
+
+def _from_amd() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for g in collect_amd_gpus():
+        item = dict(g)
+        item["vendor"] = "amd"
+        item["vendor_label"] = "AMD"
         item["card_kind"] = "gpu"
         mu = _num(item.get("mem_used_mb"))
         mt = _num(item.get("mem_total_mb"))
@@ -344,6 +363,7 @@ def collect_accelerators() -> List[Dict[str, Any]]:
     """探测并采集本机全部已支持厂商的加速卡。"""
     cards: List[Dict[str, Any]] = []
     cards.extend(_from_nvidia())
+    cards.extend(_from_amd())
     cards.extend(_from_huawei())
     cards.extend(_from_cambricon())
     cards.extend(_from_rockchip_rknn())
@@ -351,9 +371,16 @@ def collect_accelerators() -> List[Dict[str, Any]]:
 
 
 def split_for_payload(cards: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """兼容旧字段：gpus=英伟达；npus=其余加速卡（华为/寒武纪/瑞芯微 RKNN 等）。"""
-    gpus = [c for c in cards if c.get("vendor") == "nvidia"]
-    npus = [c for c in cards if c.get("vendor") != "nvidia"]
+    """兼容旧字段：gpus=NVIDIA/AMD GPU；npus=其余加速卡（华为/寒武纪/瑞芯微 RKNN 等）。"""
+    gpus: List[Dict[str, Any]] = []
+    npus: List[Dict[str, Any]] = []
+    for card in cards:
+        vendor = (card.get("vendor") or "").lower()
+        kind = (card.get("card_kind") or "").lower()
+        if vendor in _GPU_VENDORS or kind == "gpu":
+            gpus.append(card)
+        else:
+            npus.append(card)
     return {"gpus": gpus, "npus": npus, "accelerators": cards}
 
 

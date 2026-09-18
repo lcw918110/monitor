@@ -11,7 +11,7 @@
 ## 当前已交付（摘要）
 
 - Center + Agent，Python 3 标准库；SQLite 存储；中文监测台 + 客户端部署页
-- 采集：系统资源 + 加速卡（英伟达 / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
+- 采集：系统资源 + 加速卡（英伟达 / AMD / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
 - 主机类型：`auto` | `cpu` | `gpu`
 - 异常阈值着色；主机详情 **时间段统计**（1h/2h/6h/24h/7d）+ 趋势图
 - 部署：Excel/CSV 导入、SSH（密码需中心机 `sshpass`，或私钥）、配置地址自动探查；Agent 默认目录 `/opt/monitor-agent`（Center 仍为 `/opt/monitor`）

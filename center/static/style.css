@@ -254,6 +254,31 @@ html, body {
 
 .muted { color: var(--muted); font-size: 12px; }
 
+.accel-cell {
+  min-width: 128px;
+  max-width: 240px;
+  line-height: 1.3;
+}
+
+.accel-cell .accel-id,
+.accel-id-cell {
+  font-size: 12px;
+  white-space: normal;
+  overflow: visible;
+  word-break: break-word;
+  max-width: 240px;
+}
+
+.accel-inv {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.gpu-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
 .table-wrap { overflow: auto; max-height: 560px; }
 
 #hostTable th,
@@ -634,6 +659,10 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   width: 100%;
   font-size: 12px;
   table-layout: fixed;
+}
+
+.gpu-table {
+  table-layout: auto;
 }
 
 .gpu-table th, .gpu-table td,
