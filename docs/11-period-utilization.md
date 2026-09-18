@@ -36,8 +36,9 @@ GET /api/v1/period-stats?minutes=1440&host_ids=gpu-01,app-01
 
 `host_ids` 为可选逗号分隔过滤。响应包含：
 
-- `hosts[]`：每台主机的聚合
+- `hosts[]`：每台主机的聚合（含最新快照的 `accel_summary` / `accel_count` / `accel_inventory`，型号+数量，不参与 idle/busy）
 - `cluster.metrics`：集群汇总
+- 顶层与 `cluster` 亦含集群盘点 `accel_summary` / `accel_inventory`
 - `rollup`: `"sample_weighted"`
 
 ### 导出 CSV
@@ -46,7 +47,7 @@ GET /api/v1/period-stats?minutes=1440&host_ids=gpu-01,app-01
 GET /api/v1/export/period-stats.csv?minutes=120
 ```
 
-行为与集群接口同一套查询参数。首行 `__cluster__` 为汇总，其后每台主机一行；列为各指标的 avg/min/max/p95/busy_ratio。
+行为与集群接口同一套查询参数。首行 `__cluster__` 为汇总，其后每台主机一行；列为 `accel_count` / `accel_summary` 以及各指标的 avg/min/max/p95/busy_ratio。
 
 历史趋势（详情折线）也可带同一时间窗：
 

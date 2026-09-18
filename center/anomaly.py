@@ -401,6 +401,8 @@ def evaluate_cluster(
                 "npu_count": h.get("npu_count"),
                 "npu_util_avg": h.get("npu_util_avg"),
                 "gpu_count": h.get("gpu_count"),
+                "accel_count": h.get("accel_count"),
+                "accel_summary": h.get("accel_summary"),
                 "anomaly": judged,
             }
         )

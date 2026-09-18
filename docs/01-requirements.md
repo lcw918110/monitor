@@ -38,14 +38,14 @@
 | 采集端（Agent） | 部署在被监控主机上的轻量进程，周期采集并回传 |
 | 主机（Host） | 被监控的一台物理机或虚拟机 |
 | 指标（Metric） | 某一时刻的数值型或结构化监控数据 |
-| GPU 服务器 | 安装 NVIDIA 驱动、可通过 `nvidia-smi` 查询的主机 |
+| GPU 主机 | 安装 NVIDIA 或 AMD 驱动、可通过对应 smi 工具查询的主机 |
 | 应用服务器 | 以 CPU/内存/磁盘/网络为主的业务主机 |
 
 ### 1.5 约束
 
 1. **不引入** Prometheus、Grafana、Zabbix、InfluxDB、Elastic、DCGM 等外部监控软件作为运行依赖。
 2. 实现以 **Python 3 标准库** 为主（`http.server`、`sqlite3`、`urllib`、`subprocess`、`json` 等）。
-3. GPU 采集依赖主机已安装的 `nvidia-smi`（驱动自带工具），不 bundling 第三方 GPU 库。
+3. GPU 采集依赖主机已安装的厂商工具（NVIDIA：`nvidia-smi`；AMD：`rocm-smi` 或 `amd-smi`），不 bundling 第三方 GPU 库。
 4. 中心端支持单机一键式部署；Agent 配置中心地址后即可工作。
 
 ---

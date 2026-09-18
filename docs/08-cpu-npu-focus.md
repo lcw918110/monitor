@@ -13,6 +13,7 @@
 | 厂商 | 探测方式（示例） |
 | --- | --- |
 | 英伟达 | `nvidia-smi` |
+| AMD | 优先 `rocm-smi`，失败回退 `amd-smi` |
 | 华为昇腾 | `npu-smi` |
 | 寒武纪 | `cnmon` 等 |
 | 瑞芯微 RKNN | rknpu 相关节点/工具 |

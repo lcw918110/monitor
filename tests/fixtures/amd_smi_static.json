@@ -1,0 +1,20 @@
+[
+  {
+    "gpu": 0,
+    "asic": {
+      "market_name": "Radeon RX 6800",
+      "vendor_id": "0x1002",
+      "device_id": "0x73bf",
+      "vendor_name": "AMD"
+    }
+  },
+  {
+    "gpu": 1,
+    "asic": {
+      "market_name": "Radeon RX 6800",
+      "vendor_id": "0x1002",
+      "device_id": "0x73bf",
+      "vendor_name": "AMD"
+    }
+  }
+]

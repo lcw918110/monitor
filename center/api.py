@@ -26,6 +26,8 @@ PERIOD_CSV_FIELDS = [
     "host_id",
     "hostname",
     "host_type",
+    "accel_count",
+    "accel_summary",
     "sample_count",
     "from_ts",
     "to_ts",
@@ -305,12 +307,16 @@ def _flatten_period_row(
     from_ts: Any,
     to_ts: Any,
     metrics: Dict[str, Any],
+    accel_count: Any = None,
+    accel_summary: Any = None,
 ) -> Dict[str, Any]:
     row: Dict[str, Any] = {
         "scope": scope,
         "host_id": host_id,
         "hostname": hostname or "",
         "host_type": host_type or "",
+        "accel_count": accel_count or 0,
+        "accel_summary": accel_summary or "",
         "sample_count": sample_count or 0,
         "from_ts": from_ts or "",
         "to_ts": to_ts or "",
@@ -350,6 +356,8 @@ def handle_export_period_csv(
             window.get("from_ts"),
             window.get("to_ts"),
             cluster.get("metrics") or {},
+            cluster.get("accel_count") or payload.get("accel_count"),
+            cluster.get("accel_summary") or payload.get("accel_summary"),
         )
     )
     for host in payload.get("hosts") or []:
@@ -363,6 +371,8 @@ def handle_export_period_csv(
                 host.get("from_ts"),
                 host.get("to_ts"),
                 host.get("metrics") or {},
+                host.get("accel_count"),
+                host.get("accel_summary"),
             )
         )
     return 200, buf.getvalue()
@@ -406,6 +416,8 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         "npu_util_avg",
         "gpu_count",
         "gpu_util_avg",
+        "accel_count",
+        "accel_summary",
         "net_rx_mbps",
         "net_tx_mbps",
         "net_rated_mbps",

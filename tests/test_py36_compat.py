@@ -151,7 +151,7 @@ class AgentPy36CompatTests(unittest.TestCase):
 
     def test_agent_modules_import(self):
         from agent import main as agent_main
-        from agent.metrics import accelerators, disk, gpu, network, npu, system
+        from agent.metrics import accelerators, amd, disk, gpu, network, npu, system
         from common import host_type, validate
         import importlib.util
 
@@ -159,6 +159,7 @@ class AgentPy36CompatTests(unittest.TestCase):
         self.assertTrue(callable(system.collect_system))
         self.assertTrue(callable(disk.collect_disks))
         self.assertTrue(callable(accelerators.collect_accelerators))
+        self.assertTrue(callable(amd.collect_amd_gpus))
         self.assertTrue(callable(gpu.collect_gpus))
         self.assertTrue(callable(npu.collect_npus))
         self.assertTrue(callable(network.collect_network))

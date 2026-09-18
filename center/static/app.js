@@ -212,9 +212,7 @@
     if (key === "mem_percent") return numOrNull(h.mem_percent);
     if (key === "disk_percent") return numOrNull(h.disk_percent);
     if (key === "accel") {
-      return numOrNull(
-        h.npu_util_avg != null ? h.npu_util_avg : h.gpu_util_avg
-      );
+      return numOrNull(accelUtilOf(h));
     }
     if (key === "load1") return numOrNull(h.load1);
     if (key === "last_seen") return numOrNull(h.last_seen);
@@ -240,12 +238,73 @@
     if (key === "cpu_busy") return periodMetric(h, "cpu_percent", "busy_ratio");
     if (key === "mem_avg") return periodMetric(h, "mem_percent", "avg");
     if (key === "disk_avg") return periodMetric(h, "disk_percent", "avg");
+    if (key === "accel_id") return (h.accel_summary || "").toLowerCase();
     if (key === "accel_avg") return periodMetric(h, "accel_util_avg", "avg");
     if (key === "accel_p95") return periodMetric(h, "accel_util_avg", "p95");
     if (key === "accel_busy") return periodMetric(h, "accel_util_avg", "busy_ratio");
     if (key === "rx_pct") return periodMetric(h, "net_rx_percent", "avg");
     if (key === "tx_pct") return periodMetric(h, "net_tx_percent", "avg");
     return null;
+  }
+
+  function accelCountOf(h) {
+    if (!h) return 0;
+    if (h.accel_count != null && h.accel_count !== "") {
+      const n = Number(h.accel_count);
+      if (!Number.isNaN(n)) return n;
+    }
+    return (h.npu_count || 0) + (h.gpu_count || 0);
+  }
+
+  function accelUtilOf(h) {
+    if (!h) return null;
+    if (h.accel_util_avg != null) return h.accel_util_avg;
+    if (h.npu_util_avg != null) return h.npu_util_avg;
+    return h.gpu_util_avg;
+  }
+
+  function accelSummaryOf(h) {
+    return String((h && h.accel_summary) || "").trim();
+  }
+
+  function accelListInventory(cards) {
+    const groups = {};
+    const order = [];
+    (cards || []).forEach((c) => {
+      const vendor = String(
+        (c && (c.vendor_label || c.vendor)) || "加速卡"
+      ).trim();
+      const name = String((c && c.name) || "").trim() || "GPU";
+      const key = vendor + "\0" + name;
+      if (!groups[key]) {
+        groups[key] = { vendor: vendor, name: name, count: 0 };
+        order.push(key);
+      }
+      groups[key].count += 1;
+    });
+    return order
+      .map((k) => {
+        const g = groups[k];
+        return g.vendor + " ×" + g.count + " " + g.name;
+      })
+      .join(" · ");
+  }
+
+  function accelListCell(h) {
+    const summary = accelSummaryOf(h);
+    const count = accelCountOf(h);
+    const util = accelUtilOf(h);
+    if (!count && !summary) return "-";
+    const idText = summary || "×" + count;
+    return (
+      '<div class="accel-cell"><div class="accel-id" title="' +
+      escapeHtml(idText) +
+      '">' +
+      escapeHtml(idText) +
+      "</div><div>" +
+      (count ? fmtPct(util) : "-") +
+      "</div></div>"
+    );
   }
 
   function hostAddressCell(h) {
@@ -808,6 +867,8 @@
     const cluster = data.cluster || {};
     const hosts = data.hosts || [];
     let html = "";
+    const clusterSummary =
+      cluster.accel_summary || data.accel_summary || "";
     html +=
       '<p class="muted period-cluster-note">' +
       escapeHtml(data.rollup_note || "集群汇总按样本加权") +
@@ -817,7 +878,11 @@
       (data.host_count || 0) +
       " 有样本 · 共 " +
       (data.sample_count || 0) +
-      " 点</p>";
+      " 点" +
+      (clusterSummary
+        ? " · 加速卡 " + escapeHtml(clusterSummary)
+        : "") +
+      "</p>";
     html += '<div class="section-title">集群汇总</div>';
     html += renderPeriodStatsTable({
       metrics: cluster.metrics,
@@ -840,6 +905,7 @@
       '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
       '<th class="sortable" data-sort="host">主机 / 地址</th>' +
       '<th class="sortable" data-sort="group">资源组</th>' +
+      '<th class="sortable" data-sort="accel_id">加速卡</th>' +
       '<th class="sortable" data-sort="samples">样本</th>' +
       '<th class="sortable" data-sort="cpu_avg">CPU 均</th>' +
       '<th class="sortable" data-sort="cpu_p95">CPU P95</th>' +
@@ -864,8 +930,11 @@
       const row = Object.assign({}, h, {
         address: h.address || live.address,
         group_name: h.group_name || live.group_name,
+        accel_summary: h.accel_summary || live.accel_summary,
+        accel_count: h.accel_count != null ? h.accel_count : live.accel_count,
       });
       const active = h.host_id === selectedId ? " active" : "";
+      const accelId = accelSummaryOf(row) || (accelCountOf(row) ? "×" + accelCountOf(row) : "-");
       html +=
         '<tr data-id="' +
         encodeURIComponent(h.host_id) +
@@ -875,6 +944,10 @@
         hostAddressCell(row) +
         "</td><td>" +
         escapeHtml(row.group_name || "未分组") +
+        '</td><td class="accel-id-cell" title="' +
+        escapeHtml(accelId) +
+        '">' +
+        escapeHtml(accelId) +
         "</td><td>" +
         (h.sample_count || 0) +
         "</td><td>" +
@@ -1032,6 +1105,19 @@
     }
     const pts = hist.points || [];
     let html = '<div class="section-title">时段指标</div>';
+    const liveSummary =
+      (periodStats && periodStats.accel_summary) ||
+      (host && host.accel_summary) ||
+      "";
+    if (liveSummary) {
+      html +=
+        '<p class="accel-inv">' +
+        escapeHtml(liveSummary) +
+        ((periodStats && periodStats.accel_count)
+          ? " · 共 " + periodStats.accel_count + " 张"
+          : "") +
+        "</p>";
+    }
     html += renderPeriodStatsTable(periodStats);
     html += renderPeriodCharts(pts);
     el.periodDetailBody.innerHTML = html;
@@ -1150,9 +1236,16 @@
       ["主机总数", s.host_total],
       ["在线主机", s.host_online],
       ["在线 CPU 核", s.cpu_cores_online],
-      ["加速卡数", (s.npu_cards || 0) + (s.gpu_cards || 0)],
+      ["加速卡数", s.accel_cards != null ? s.accel_cards : (s.npu_cards || 0) + (s.gpu_cards || 0)],
       ["平均 CPU", fmtPct(s.avg_cpu_percent)],
-      ["平均加速卡利用率", fmtPct(s.avg_npu_util_percent || s.avg_gpu_util_percent)],
+      [
+        "平均加速卡利用率",
+        fmtPct(
+          s.avg_accel_util_percent != null
+            ? s.avg_accel_util_percent
+            : s.avg_npu_util_percent || s.avg_gpu_util_percent
+        ),
+      ],
     ];
     el.stats.innerHTML = cards
       .map(
@@ -1193,6 +1286,7 @@
           h.host_id,
           h.address,
           h.group_name,
+          h.accel_summary,
         ]
           .join(" ")
           .toLowerCase();
@@ -1218,10 +1312,6 @@
       .map((h) => {
         const active = h.host_id === selectedId ? " active" : "";
         const overall = (h.anomaly && h.anomaly.overall) || "unknown";
-        const cardCount = (h.npu_count || 0) + (h.gpu_count || 0);
-        const accelVal = h.npu_util_avg != null ? h.npu_util_avg : h.gpu_util_avg;
-        const cardText =
-          cardCount > 0 ? fmtPct(accelVal) : "-";
         const cpuLevel = levelHi(
           h.cpu_percent,
           thresholds.cpu_warn_percent,
@@ -1264,7 +1354,7 @@
           hostDiskCell(h) +
           "</td>" +
           "<td>" +
-          cardText +
+          accelListCell(h) +
           "</td>" +
           "<td>" +
           fmtNum(h.load1, 2) +
@@ -1502,11 +1592,21 @@
       "</div>";
     html += "</div>";
 
-    html += '<div class="section-title">加速卡明细（英伟达 / 华为 / 寒武纪 / 瑞芯微 RKNN）</div>';
+    html +=
+      '<div class="section-title">加速卡明细（英伟达 / AMD / 华为 / 寒武纪 / 瑞芯微 RKNN）</div>';
     if (!cards.length) {
       html +=
-        '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / npu-smi / cnmon / rknpu）</p>';
+        '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / rocm-smi / amd-smi / npu-smi / cnmon / rknpu）</p>';
     } else {
+      const invText = accelSummaryOf(data) || accelListInventory(cards);
+      if (invText) {
+        html +=
+          '<p class="accel-inv">' +
+          escapeHtml(invText) +
+          " · 共 " +
+          cards.length +
+          " 张</p>";
+      }
       html +=
         '<div class="table-wrap"><table class="gpu-table"><thead><tr>' +
         "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存</th><th>温度</th><th>功耗</th>" +

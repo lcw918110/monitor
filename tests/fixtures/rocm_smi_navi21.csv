@@ -1,0 +1,3 @@
+device,GPU use (%),VRAM Total Memory (B),VRAM Total Used Memory (B),Temperature (Sensor edge) (C),Average Graphics Package Power (W),Card Series,Card Model,Card Vendor,Card SKU
+card0,8,17163091968,858154496,42.0,28.5,"Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",0x73bf,"Advanced Micro Devices, Inc. [AMD/ATI]",D5120100
+card1,12,17163091968,1024458752,45.0,31.0,"Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",0x73bf,"Advanced Micro Devices, Inc. [AMD/ATI]",D5120100
