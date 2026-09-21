@@ -278,7 +278,12 @@ def sample_cpu_identity() -> Dict[str, str]:
 
 
 def sample_primary_ip() -> Optional[str]:
-    """本机主要 IPv4（避开回环）。旧 Agent 不上报此字段时，中心仍可用部署清单/来源 IP。"""
+    """本机主要 IPv4（避开回环/链路本地/隧道假 IP）。
+
+    默认路由若走 Clash TUN 等，UDP 探测会得到 ``198.18.0.0/15``
+    （RFC 2544 基准测试网段 / fake-IP），不能当管理地址上报。
+    旧 Agent 仍可能上报该值，中心 ``hostaddr`` 会再过滤。
+    """
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(0.2)
@@ -288,6 +293,9 @@ def sample_primary_ip() -> Optional[str]:
     except OSError:
         return None
     if not ip or ip.startswith("127.") or ip.startswith("0.") or ip.startswith("169.254."):
+        return None
+    # 198.18.0.0/15：Clash TUN / 部分 VPN 假 IP，不是 LAN
+    if ip.startswith("198.18.") or ip.startswith("198.19."):
         return None
     return ip
 

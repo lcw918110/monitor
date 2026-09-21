@@ -308,6 +308,8 @@
   }
 
   function hostAddressCell(h) {
+    // 完整地址由中心 resolve_host_address 给出（部署清单 / host_id 内嵌 IP
+    // 优先于 Agent primary_ip，并跳过 198.18/15 等隧道假 IP）。
     const addr = String(h.address || "").trim();
     const name = String(h.hostname || "").trim();
     const hid = String(h.host_id || "").trim();

@@ -193,6 +193,7 @@ class Storage:
         system = payload.get("system") or {}
         if not isinstance(system, dict):
             system = {}
+        # normalize_ip 会丢掉回环 / 169.254 / 198.18/15（Clash TUN 假 IP）
         stored_ip = (
             normalize_ip(system.get("primary_ip"))
             or normalize_ip(system.get("ipv4"))
