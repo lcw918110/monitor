@@ -18,9 +18,12 @@ if ROOT not in sys.path:
 from center import api as api_mod
 from center.deploy_store import DeployStore
 from center.hostaddr import (
+    is_denied_display_ip,
     is_partial_ipv4,
+    is_rfc1918,
     is_short_hostname,
     normalize_ip,
+    parse_host_id_ip,
     resolve_host_address,
 )
 from center.storage import Storage
@@ -32,19 +35,75 @@ class HostAddrTests(unittest.TestCase):
         self.assertEqual(normalize_ip("::ffff:10.0.0.8"), "10.0.0.8")
         self.assertEqual(normalize_ip("127.0.0.1"), "")
         self.assertEqual(normalize_ip("192.168.15"), "")
+        self.assertEqual(normalize_ip("198.18.0.1"), "")
+        self.assertEqual(normalize_ip("198.19.255.1"), "")
+        self.assertEqual(normalize_ip("169.254.1.1"), "")
+        self.assertTrue(is_denied_display_ip("198.18.0.1"))
+        self.assertFalse(is_denied_display_ip("172.24.26.50"))
+        self.assertTrue(is_rfc1918("172.24.26.50"))
+        self.assertFalse(is_rfc1918("198.18.0.1"))
         self.assertTrue(is_partial_ipv4("192.168.15"))
         self.assertTrue(is_short_hostname("gpu-01"))
         self.assertFalse(is_short_hostname("gpu-01.lab.local"))
         self.assertFalse(is_short_hostname("192.168.15.95"))
 
-    def test_prefer_payload_then_deploy_then_remote(self) -> None:
+    def test_parse_ip_from_host_id(self) -> None:
+        self.assertEqual(parse_host_id_ip("host-172-24-26-50"), "172.24.26.50")
+        self.assertEqual(parse_host_id_ip("host_10_0_0_8"), "10.0.0.8")
+        self.assertEqual(parse_host_id_ip("172.24.26.50"), "172.24.26.50")
+        self.assertEqual(parse_host_id_ip("gpu-01"), "")
+        self.assertEqual(parse_host_id_ip("npu-21"), "")
+        self.assertEqual(parse_host_id_ip("host-198-18-0-1"), "")
+
+    def test_tunnel_primary_prefers_deploy_target(self) -> None:
+        self.assertEqual(
+            resolve_host_address(
+                host_id="host-172-24-26-50",
+                hostname="host-172-24-26-50",
+                payload={"system": {"primary_ip": "198.18.0.1"}},
+                remote_ip="198.18.0.1",
+                deploy_ip="172.24.26.50",
+            ),
+            "172.24.26.50",
+        )
+
+    def test_host_id_embedded_ip_beats_tunnel(self) -> None:
+        self.assertEqual(
+            resolve_host_address(
+                host_id="host-172-24-26-50",
+                hostname="amd-box",
+                payload={"system": {"primary_ip": "198.18.0.1"}},
+                remote_ip="198.18.0.1",
+            ),
+            "172.24.26.50",
+        )
+
+    def test_rfc1918_iface_beats_tunnel_primary(self) -> None:
+        self.assertEqual(
+            resolve_host_address(
+                host_id="gpu-01",
+                hostname="gpu-01",
+                payload={
+                    "system": {
+                        "primary_ip": "198.18.0.1",
+                        "net_ifaces": [
+                            {"name": "Meta", "ip": "198.18.0.1"},
+                            {"name": "eth0", "ipv4": "10.20.30.40"},
+                        ],
+                    }
+                },
+                remote_ip="198.18.0.1",
+            ),
+            "10.20.30.40",
+        )
+
+    def test_normal_host_unchanged(self) -> None:
         self.assertEqual(
             resolve_host_address(
                 host_id="gpu-01",
                 hostname="gpu-01",
                 payload={"system": {"primary_ip": "192.168.15.95"}},
                 remote_ip="10.0.0.1",
-                deploy_ip="10.0.0.2",
             ),
             "192.168.15.95",
         )
@@ -71,6 +130,17 @@ class HostAddrTests(unittest.TestCase):
                 hostname="gpu-01",
             ),
             "",
+        )
+        # 部署清单优先于 Agent 上报的 LAN IP
+        self.assertEqual(
+            resolve_host_address(
+                host_id="gpu-01",
+                hostname="gpu-01",
+                payload={"system": {"primary_ip": "192.168.15.95"}},
+                remote_ip="10.0.0.1",
+                deploy_ip="10.0.0.2",
+            ),
+            "10.0.0.2",
         )
 
 
@@ -128,6 +198,37 @@ class HostListAddressGroupTests(unittest.TestCase):
         self._post("npu-21", hostname="npu-21")
         _, data = api_mod.handle_hosts_list(self.storage)
         self.assertEqual(data["hosts"][0]["address"], "10.20.30.40")
+
+    def test_tunnel_primary_uses_deploy_lan_in_list_and_period(self) -> None:
+        deploy = DeployStore(self.db)
+        deploy.add_target(
+            {
+                "ip": "172.24.26.50",
+                "host_id": "host-172-24-26-50",
+                "hostname": "host-172-24-26-50",
+            }
+        )
+        self._post(
+            "host-172-24-26-50",
+            hostname="host-172-24-26-50",
+            system={"cpu_percent": 4, "primary_ip": "198.18.0.1"},
+            remote_ip="198.18.0.1",
+        )
+        _, data = api_mod.handle_hosts_list(self.storage)
+        self.assertEqual(data["hosts"][0]["address"], "172.24.26.50")
+        code, period = api_mod.handle_cluster_period_stats(self.storage, "minutes=60")
+        self.assertEqual(code, 200)
+        self.assertEqual(period["hosts"][0]["address"], "172.24.26.50")
+
+    def test_normal_lan_primary_still_shown(self) -> None:
+        self._post(
+            "gpu-01",
+            hostname="gpu-01",
+            system={"cpu_percent": 2, "primary_ip": "192.168.15.95"},
+            remote_ip="10.0.0.1",
+        )
+        _, data = api_mod.handle_hosts_list(self.storage)
+        self.assertEqual(data["hosts"][0]["address"], "192.168.15.95")
 
     def test_groups_assign_filter_persist(self) -> None:
         self._post("h1", hostname="h1", remote_ip="10.0.0.1")
