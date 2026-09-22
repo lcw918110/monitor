@@ -1299,7 +1299,12 @@
     );
   }
 
-  function renderHosts(hosts) {
+  
+  function offlineMetricCell() {
+    return '<span class="muted" title="主机离线，不展示实时指标">—</span>';
+  }
+
+function renderHosts(hosts) {
     allHosts = hosts || [];
     const view = filteredHosts();
     el.hostCount.textContent = "显示 " + view.length + " / " + allHosts.length;
@@ -1343,23 +1348,27 @@
           typeTag(h.host_type) +
           "</td>" +
           "<td>" +
-          metricSpan(fmtPct(h.cpu_percent), cpuLevel) +
+          (h.online
+            ? metricSpan(fmtPct(h.cpu_percent), cpuLevel)
+            : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          metricPct(
-            h.mem_percent,
-            thresholds.mem_warn_percent,
-            thresholds.mem_critical_percent
-          ) +
+          (h.online
+            ? metricPct(
+                h.mem_percent,
+                thresholds.mem_warn_percent,
+                thresholds.mem_critical_percent
+              )
+            : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          hostDiskCell(h) +
+          (h.online ? hostDiskCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          accelListCell(h) +
+          (h.online ? accelListCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          fmtNum(h.load1, 2) +
+          (h.online ? fmtNum(h.load1, 2) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
           fmtTime(h.last_seen) +
@@ -1447,7 +1456,10 @@
     html +=
       '<p class="muted"><a class="link" href="#period" id="gotoPeriodTab">查看该机时段统计</a></p>';
 
-    html += '<div class="section-title">CPU / 基础资源（实时用量 + 额定/总量）</div>';
+    html +=
+      '<div class="section-title">CPU / 基础资源（' +
+      (data.online ? "实时用量" : "末次快照，非实时") +
+      " + 额定/总量）</div>';
     html += '<div class="kv">';
     html +=
       '<div class="k">地址</div><div class="v">' +
