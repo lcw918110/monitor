@@ -1459,7 +1459,7 @@ function renderHosts(hosts) {
     html +=
       '<div class="section-title">CPU / 基础资源（' +
       (data.online ? "实时用量" : "末次快照，非实时") +
-      " + 额定/总量）</div>';
+      " + 额定/总量）</div>";
     html += '<div class="kv">';
     html +=
       '<div class="k">地址</div><div class="v">' +
