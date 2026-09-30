@@ -101,15 +101,6 @@
     return Number(v).toFixed(digits == null ? 1 : digits);
   }
 
-  function rtRated(realtimeText, ratedText) {
-    return (
-      '<span class="rt-tag">实时</span> ' +
-      realtimeText +
-      ' <span class="rt-tag">额定</span> ' +
-      ratedText
-    );
-  }
-
   function fmtTime(ts) {
     if (!ts) return "-";
     const d = new Date(Number(ts) * 1000);
@@ -211,6 +202,7 @@
     if (key === "cpu_percent") return numOrNull(h.cpu_percent);
     if (key === "mem_percent") return numOrNull(h.mem_percent);
     if (key === "disk_percent") return numOrNull(h.disk_percent);
+    if (key === "disk_count") return numOrNull(h.disk_count);
     if (key === "accel") return accelIdentityText(h).toLowerCase();
     if (key === "accel_util") return numOrNull(accelUtilOf(h));
     if (key === "load1") return numOrNull(h.load1);
@@ -1132,16 +1124,17 @@
   }
 
   function hostDiskCell(h) {
-    const pct = metricPct(
+    return metricPct(
       h.disk_percent,
       thresholds.disk_warn_percent,
       thresholds.disk_critical_percent
     );
-    const n = Number(h.disk_count);
-    if (n > 1) {
-      return pct + ' <span class="muted">· ' + n + "盘</span>";
-    }
-    return pct;
+  }
+
+  function hostDiskCountCell(h) {
+    const n = numOrNull(h.disk_count);
+    if (n == null) return "-";
+    return String(n);
   }
 
   function diskEntries(sys) {
@@ -1155,31 +1148,8 @@
       if (dp) return dp;
       return String(a.mount || "").localeCompare(String(b.mount || ""));
     });
-    const count = disks.length;
-    const maxDisk = disks[0];
-    let usageText = rtRated(
-      fmtNum(sys.disk_used_gb, 2) + " GB",
-      fmtNum(sys.disk_total_gb, 2) + " GB"
-    );
-    let extra = "";
-    if (count > 1) {
-      usageText =
-        fmtNum(sys.disk_used_gb, 1) +
-        "/" +
-        fmtNum(sys.disk_total_gb, 1) +
-        " GB";
-      const mnt = maxDisk && maxDisk.mount ? maxDisk.mount : "";
-      extra =
-        '<div class="muted">' +
-        count +
-        " 挂载" +
-        (mnt ? " · 最满 " + escapeHtml(mnt) : "") +
-        "</div>";
-    }
     let html =
-      '<div class="k">磁盘</div><div class="v">' +
-      usageText +
-      " " +
+      '<div class="k">磁盘利用率</div><div class="v">' +
       metricPct(
         sys.disk_percent,
         thresholds.disk_warn_percent,
@@ -1187,32 +1157,40 @@
       ) +
       " " +
       bar(sys.disk_percent) +
-      extra;
-    if (count > 1) {
-      html += '<div class="disk-list">';
-      disks.forEach((d) => {
-        const sub = [d.device, d.fstype].filter(Boolean).join(" · ");
-        html +=
-          '<div class="disk-row"><div class="disk-mount">' +
-          escapeHtml(d.mount || "-") +
-          (sub ? '<div class="muted">' + escapeHtml(sub) + "</div>" : "") +
-          '</div><div class="disk-usage">' +
-          fmtNum(d.used_gb, 1) +
-          "/" +
-          fmtNum(d.total_gb, 1) +
-          " GB " +
-          metricPct(
-            d.percent,
-            thresholds.disk_warn_percent,
-            thresholds.disk_critical_percent
-          ) +
-          " " +
-          bar(d.percent) +
-          "</div></div>";
-      });
-      html += "</div>";
-    }
-    html += "</div>";
+      "</div>";
+    html +=
+      '<div class="k">磁盘容量</div><div class="v">' +
+      '<span class="rt-tag">已用</span> ' +
+      fmtNum(sys.disk_used_gb, 2) +
+      " GB " +
+      '<span class="rt-tag">总量</span> ' +
+      fmtNum(sys.disk_total_gb, 2) +
+      " GB</div>";
+    if (!disks.length) return html;
+    html += '<div class="spec-block"><div class="spec-label">挂载</div><div class="disk-list">';
+    html +=
+      '<div class="disk-row disk-head"><span>挂载</span><span>容量</span><span>利用率</span></div>';
+    disks.forEach((d) => {
+      const sub = [d.device, d.fstype].filter(Boolean).join(" · ");
+      html +=
+        '<div class="disk-row"><div class="disk-mount">' +
+        escapeHtml(d.mount || "-") +
+        (sub ? '<div class="muted">' + escapeHtml(sub) + "</div>" : "") +
+        '</div><div class="disk-cap">' +
+        fmtNum(d.used_gb, 1) +
+        "/" +
+        fmtNum(d.total_gb, 1) +
+        ' GB</div><div class="disk-usage">' +
+        metricPct(
+          d.percent,
+          thresholds.disk_warn_percent,
+          thresholds.disk_critical_percent
+        ) +
+        " " +
+        bar(d.percent) +
+        "</div></div>";
+    });
+    html += "</div></div>";
     return html;
   }
 
@@ -1318,7 +1296,7 @@ function renderHosts(hosts) {
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
       el.hostBody.innerHTML =
-        '<tr><td colspan="12" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="13" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
       return;
     }
     el.hostBody.innerHTML = view
@@ -1369,6 +1347,9 @@ function renderHosts(hosts) {
           "</td>" +
           "<td>" +
           (h.online ? hostDiskCell(h) : offlineMetricCell()) +
+          "</td>" +
+          "<td>" +
+          hostDiskCountCell(h) +
           "</td>" +
           "<td>" +
           accelIdentityCell(h) +
@@ -1482,27 +1463,32 @@ function renderHosts(hosts) {
       '<div class="k">资源组</div><div class="v">' +
       escapeHtml(data.group_name || "未分组") +
       "</div>";
-    const cpuFreqRt =
-      sys.cpu_freq_mhz != null
-        ? " · " + fmtNum(sys.cpu_freq_mhz, 0) + " MHz"
-        : "";
-    const cpuFreqRated =
-      sys.cpu_freq_max_mhz != null
-        ? " · " + fmtNum(sys.cpu_freq_max_mhz, 0) + " MHz"
-        : "";
     html +=
-      '<div class="k">CPU</div><div class="v">' +
-      rtRated(
-        metricPct(
-          sys.cpu_percent,
-          thresholds.cpu_warn_percent,
-          thresholds.cpu_critical_percent
-        ) + cpuFreqRt,
-        (sys.cpu_count ?? "-") + " 核" + cpuFreqRated
+      '<div class="k">CPU 利用率</div><div class="v">' +
+      metricPct(
+        sys.cpu_percent,
+        thresholds.cpu_warn_percent,
+        thresholds.cpu_critical_percent
       ) +
       " " +
       bar(sys.cpu_percent) +
       "</div>";
+    html +=
+      '<div class="k">CPU 核数</div><div class="v">' +
+      (sys.cpu_count != null && sys.cpu_count !== "" ? sys.cpu_count : "-") +
+      " 核</div>";
+    if (sys.cpu_freq_mhz != null) {
+      html +=
+        '<div class="k">CPU 频率</div><div class="v">' +
+        fmtNum(sys.cpu_freq_mhz, 0) +
+        " MHz</div>";
+    }
+    if (sys.cpu_freq_max_mhz != null) {
+      html +=
+        '<div class="k">CPU 额定频率</div><div class="v">' +
+        fmtNum(sys.cpu_freq_max_mhz, 0) +
+        " MHz</div>";
+    }
     if (sys.cpu_model) {
       html +=
         '<div class="k">处理器</div><div class="v">' +
@@ -1515,37 +1501,26 @@ function renderHosts(hosts) {
       " · " +
       escapeHtml(sys.os_name || "-") +
       "</div>";
-    let loadRated = "";
-    if (sys.cpu_count) {
-      const l1 = Number(sys.load1);
-      if (!Number.isNaN(l1)) {
-        loadRated =
-          " （相对额定 " +
-          sys.cpu_count +
-          " 核约 " +
-          fmtPct((l1 / Number(sys.cpu_count)) * 100) +
-          "）";
-      } else {
-        loadRated = " （额定 " + sys.cpu_count + " 核）";
-      }
-    }
     html +=
       '<div class="k">负载</div><div class="v">' +
-      '<span class="rt-tag">实时</span> 1m=' +
+      "1m=" +
       (sys.load1 ?? "-") +
       " · 5m=" +
       (sys.load5 ?? "-") +
       " · 15m=" +
       (sys.load15 ?? "-") +
-      loadRated +
       "</div>";
+    if (sys.cpu_count) {
+      const l1 = Number(sys.load1);
+      if (!Number.isNaN(l1)) {
+        html +=
+          '<div class="k">负载占核数</div><div class="v">' +
+          fmtPct((l1 / Number(sys.cpu_count)) * 100) +
+          "</div>";
+      }
+    }
     html +=
-      '<div class="k">内存</div><div class="v">' +
-      rtRated(
-        fmtNum(sys.mem_used_mb, 1) + " MB",
-        fmtNum(sys.mem_total_mb, 1) + " MB"
-      ) +
-      " " +
+      '<div class="k">内存利用率</div><div class="v">' +
       metricPct(
         sys.mem_percent,
         thresholds.mem_warn_percent,
@@ -1554,6 +1529,14 @@ function renderHosts(hosts) {
       " " +
       bar(sys.mem_percent) +
       "</div>";
+    html +=
+      '<div class="k">内存容量</div><div class="v">' +
+      '<span class="rt-tag">已用</span> ' +
+      fmtNum(sys.mem_used_mb, 1) +
+      " MB " +
+      '<span class="rt-tag">总量</span> ' +
+      fmtNum(sys.mem_total_mb, 1) +
+      " MB</div>";
     html += renderDiskBlock(sys);
     const netUtil = Math.max(
       Number(sys.net_rx_percent) || 0,
@@ -1568,43 +1551,41 @@ function renderHosts(hosts) {
       netRated += "（主链路 " + fmtMbps(sys.net_link_mbps) + " Mbps）";
     }
     html +=
-      '<div class="k">网络</div><div class="v">' +
-      rtRated(
-        "入 " +
-          fmtMbps(sys.net_rx_mbps) +
-          " / 出 " +
-          fmtMbps(sys.net_tx_mbps) +
-          " Mbps",
-        netRated
-      );
+      '<div class="k">网络吞吐</div><div class="v">入 ' +
+      fmtMbps(sys.net_rx_mbps) +
+      " / 出 " +
+      fmtMbps(sys.net_tx_mbps) +
+      " Mbps</div>";
+    html += '<div class="k">额定带宽</div><div class="v">' + netRated + "</div>";
     if (sys.net_rx_percent != null || sys.net_tx_percent != null) {
       html +=
-        " 利用率 入 " +
+        '<div class="k">网络利用率</div><div class="v">入 ' +
         fmtPct(sys.net_rx_percent) +
         " · 出 " +
-        fmtPct(sys.net_tx_percent);
+        fmtPct(sys.net_tx_percent) +
+        " " +
+        bar(netUtil) +
+        "</div>";
     }
-    html += " " + bar(netUtil);
     const ifaces = sys.net_ifaces || [];
     if (ifaces.length) {
       html +=
-        '<div class="iface-list">' +
-        ifaces
-          .map((n) => {
-            const spd =
-              n.speed_mbps != null ? fmtMbps(n.speed_mbps) + " Mbps" : "速率未知";
-            return (
-              escapeHtml(n.name || "?") +
-              " " +
-              (n.up ? "UP" : "DOWN") +
-              " " +
-              spd
-            );
-          })
-          .join(" · ") +
-        "</div>";
+        '<div class="spec-block"><div class="spec-label">网卡</div>' +
+        '<table class="iface-table"><thead><tr><th>名称</th><th>状态</th><th>速率</th></tr></thead><tbody>';
+      ifaces.forEach((n) => {
+        const spd =
+          n.speed_mbps != null ? fmtMbps(n.speed_mbps) + " Mbps" : "速率未知";
+        html +=
+          "<tr><td>" +
+          escapeHtml(n.name || "?") +
+          "</td><td>" +
+          (n.up ? "UP" : "DOWN") +
+          "</td><td>" +
+          spd +
+          "</td></tr>";
+      });
+      html += "</tbody></table></div>";
     }
-    html += "</div>";
     html +=
       '<div class="k">运行时长</div><div class="v">' +
       fmtUptime(sys.uptime_sec) +
@@ -1632,7 +1613,7 @@ function renderHosts(hosts) {
       }
       html +=
         '<div class="table-wrap"><table class="gpu-table"><thead><tr>' +
-        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>利用率</th><th>内存</th><th>温度</th><th>功耗</th>" +
+        "<th>#</th><th>厂商</th><th>名称</th><th>Health</th><th>核数</th><th>利用率</th><th>频率</th><th>额定频率</th><th>显存利用率</th><th>显存</th><th>温度</th><th>功耗</th><th>功耗上限</th>" +
         "</tr></thead><tbody>";
       const uw = thresholds.accel_util_warn_percent || thresholds.npu_util_warn_percent;
       const tw = thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c;
@@ -1648,10 +1629,10 @@ function renderHosts(hosts) {
         ) {
           memPct = (Number(n.mem_used_mb) * 100) / Number(n.mem_total_mb);
         }
-        let utilExtra = "";
+        let coreUtil = "";
         if (n.cores && n.cores.length) {
-          utilExtra =
-            " <span class=\"muted\">(" +
+          coreUtil =
+            '<div class="muted">分核 ' +
             n.cores
               .map(
                 (c) =>
@@ -1661,36 +1642,34 @@ function renderHosts(hosts) {
                   (c.util_percent == null ? "-" : Number(c.util_percent).toFixed(0) + "%")
               )
               .join(" ") +
-            ")</span>";
+            "</div>";
         }
-        if (n.core_count) {
-          utilExtra +=
-            ' <span class="muted">额定 ' + n.core_count + " 核</span>";
-        }
-        if (n.freq_mhz != null || n.freq_max_mhz != null) {
-          utilExtra +=
-            ' <span class="muted">' +
-            (n.freq_mhz != null
-              ? "实时 " + Number(n.freq_mhz).toFixed(0) + " MHz"
-              : "") +
-            (n.freq_max_mhz != null
-              ? " / 额定 " + Number(n.freq_max_mhz).toFixed(0) + " MHz"
-              : "") +
-            "</span>";
-        }
-        let powerText = "-";
-        if (n.power_w != null || n.power_limit_w != null) {
-          if (n.power_limit_w != null) {
-            powerText =
-              "实时 " +
-              (n.power_w != null ? fmtNum(n.power_w, 1) : "-") +
-              " / 额定 " +
-              fmtNum(n.power_limit_w, 1) +
-              " W";
-          } else {
-            powerText = fmtNum(n.power_w, 1) + " W";
-          }
-        }
+        const coreN =
+          n.core_count != null && n.core_count !== ""
+            ? n.core_count
+            : n.cores && n.cores.length
+              ? n.cores.length
+              : null;
+        const freqText =
+          n.freq_mhz != null && !Number.isNaN(Number(n.freq_mhz))
+            ? Number(n.freq_mhz).toFixed(0) + " MHz"
+            : "-";
+        const freqMaxText =
+          n.freq_max_mhz != null && !Number.isNaN(Number(n.freq_max_mhz))
+            ? Number(n.freq_max_mhz).toFixed(0) + " MHz"
+            : "-";
+        const memCap =
+          n.mem_used_mb == null && n.mem_total_mb == null
+            ? "-"
+            : fmtNum(n.mem_used_mb, 0) + " / " + fmtNum(n.mem_total_mb, 0) + " MB";
+        const powerText =
+          n.power_w != null && !Number.isNaN(Number(n.power_w))
+            ? fmtNum(n.power_w, 1) + " W"
+            : "-";
+        const powerLimitText =
+          n.power_limit_w != null && !Number.isNaN(Number(n.power_limit_w))
+            ? fmtNum(n.power_limit_w, 1) + " W"
+            : "-";
         html +=
           "<tr><td>" +
           (n.index ?? "-") +
@@ -1701,21 +1680,28 @@ function renderHosts(hosts) {
           "</td><td>" +
           escapeHtml(n.health || "-") +
           "</td><td>" +
+          (coreN == null ? "-" : coreN) +
+          "</td><td>" +
           metricPct(n.util_percent, uw, null) +
-          utilExtra +
           " " +
           bar(n.util_percent) +
+          coreUtil +
+          "</td><td>" +
+          freqText +
+          "</td><td>" +
+          freqMaxText +
           "</td><td>" +
           metricPct(memPct, mw, mc) +
           " " +
-          rtRated(
-            fmtNum(n.mem_used_mb, 0) + " MB",
-            fmtNum(n.mem_total_mb, 0) + " MB"
-          ) +
+          bar(memPct) +
+          "</td><td>" +
+          memCap +
           "</td><td>" +
           metricTemp(n.temp_c, tw, tc) +
           "</td><td>" +
           powerText +
+          "</td><td>" +
+          powerLimitText +
           "</td></tr>";
       });
       html += "</tbody></table></div>";
