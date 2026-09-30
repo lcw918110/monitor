@@ -254,19 +254,14 @@ html, body {
 
 .muted { color: var(--muted); font-size: 12px; }
 
-.accel-cell {
-  min-width: 128px;
-  max-width: 240px;
-  line-height: 1.3;
-}
-
-.accel-cell .accel-id,
+.accel-id,
 .accel-id-cell {
   font-size: 12px;
   white-space: normal;
   overflow: visible;
   word-break: break-word;
   max-width: 240px;
+  line-height: 1.3;
 }
 
 .accel-inv {

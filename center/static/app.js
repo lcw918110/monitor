@@ -13,7 +13,7 @@
     cpu_percent: true,
     mem_percent: true,
     disk_percent: true,
-    accel: true,
+    accel_util: true,
     load1: true,
     last_seen: true,
     samples: true,
@@ -211,9 +211,8 @@
     if (key === "cpu_percent") return numOrNull(h.cpu_percent);
     if (key === "mem_percent") return numOrNull(h.mem_percent);
     if (key === "disk_percent") return numOrNull(h.disk_percent);
-    if (key === "accel") {
-      return numOrNull(accelUtilOf(h));
-    }
+    if (key === "accel") return accelIdentityText(h).toLowerCase();
+    if (key === "accel_util") return numOrNull(accelUtilOf(h));
     if (key === "load1") return numOrNull(h.load1);
     if (key === "last_seen") return numOrNull(h.last_seen);
     return null;
@@ -290,21 +289,28 @@
       .join(" · ");
   }
 
-  function accelListCell(h) {
+  function accelIdentityText(h) {
     const summary = accelSummaryOf(h);
+    if (summary) return summary;
     const count = accelCountOf(h);
-    const util = accelUtilOf(h);
-    if (!count && !summary) return "-";
-    const idText = summary || "×" + count;
+    return count ? "×" + count : "";
+  }
+
+  function accelIdentityCell(h) {
+    const idText = accelIdentityText(h);
+    if (!idText) return "-";
     return (
-      '<div class="accel-cell"><div class="accel-id" title="' +
+      '<div class="accel-id" title="' +
       escapeHtml(idText) +
       '">' +
       escapeHtml(idText) +
-      "</div><div>" +
-      (count ? fmtPct(util) : "-") +
-      "</div></div>"
+      "</div>"
     );
+  }
+
+  function accelUtilCell(h) {
+    if (!accelCountOf(h)) return "-";
+    return fmtPct(accelUtilOf(h));
   }
 
   function hostAddressCell(h) {
@@ -1312,7 +1318,7 @@ function renderHosts(hosts) {
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
       el.hostBody.innerHTML =
-        '<tr><td colspan="11" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="12" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
       return;
     }
     el.hostBody.innerHTML = view
@@ -1365,7 +1371,10 @@ function renderHosts(hosts) {
           (h.online ? hostDiskCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          (h.online ? accelListCell(h) : offlineMetricCell()) +
+          accelIdentityCell(h) +
+          "</td>" +
+          "<td>" +
+          (h.online ? accelUtilCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
           (h.online ? fmtNum(h.load1, 2) : offlineMetricCell()) +
