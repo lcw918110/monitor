@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.4.0**
+当前版本：**v1.5.0**
 
 运行环境：
 
@@ -20,10 +20,12 @@
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
-- **详情统计**：监测台分 **「实时监控」** / **「时段统计」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总
+- **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载等排序；主机列优先显示**完整 IP**（部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）
 - **资源组**：在实时监控页创建分组、给主机分配、按组筛选；数据在中心 SQLite，重启保留，**不必升级 Agent**
-- **部署**：中心「客户端部署」页或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`（唯一产品路径；禁止笔记本旁路 scp/sshpass）
+- **实时与规格分栏**：主机列表把加速卡型号数量和加速卡使用率、磁盘汇总百分比和磁盘数分成不同列。离线主机不把最后一次快照的数字当成当前利用率
+- **历史保留**：`retention_days`（示例默认 7，可按环境改成更长，例如 40）。超期样本由中心清理；诊断报告若被保留期裁短，会在抬头标明
+- **部署**：中心「客户端部署」页 `/deploy.html` 或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`（唯一产品路径）。笔记本上用 sshpass/scp 装 Agent 的做法已废弃，不要再写进操作步骤
 
 > 批量导入只保留 **Excel/CSV**（已去掉与之重合的「文本清单」入口）。
 
@@ -215,7 +217,15 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/anomaly` | 异常判定汇总 |
 | GET | `/api/v1/export/hosts.csv` | 导出当前主机快照 |
 | GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表 |
+| GET | `/api/v1/reports/preview?period=day\|week\|month` | 诊断报告时间窗预览（不计算） |
+| POST | `/api/v1/reports/generate` | 生成日/周/月诊断报告并写入 SQLite |
+| GET | `/api/v1/reports` | 已保存的诊断报告列表 |
+| GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
+| GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
+| GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页） |
+
+诊断报告与其它监测台接口相同，页面直接访问，不另加 Token。`token` 只在 `POST /api/v1/metrics` 校验 Agent 上报。报告 v1 仅手动生成，没有内置定时任务。口径与空闲阈值见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
 
 异常阈值见中心配置中的 `anomaly` 段（示例见 `config/center.example.json`）。
 
@@ -231,6 +241,7 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/08-cpu-npu-focus.md` | 加速卡与部署说明 |
 | `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
+| `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
 | **`docs/10-roadmap.md`** | **下一步待办（服务器实装 / 框架化 / 拓扑图 / 容量验证）** |
 
 ## 下一步（摘要）
@@ -245,5 +256,5 @@ tail -n 50 .deploy-agent/run/agent.log
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd tests.test_period_util tests.test_reports
 ```

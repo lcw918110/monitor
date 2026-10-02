@@ -1,5 +1,21 @@
 # 简易多机监控系统 — 软件需求规格说明书（SRS）
 
+## 实现现状（v1.5，与代码冲突时以本节为准）
+
+下面这些已经在产品里，文档和操作步骤按此描述，不再把它们写成待办或旁路：
+
+- 主机类型是 `auto` | `cpu` | `gpu`（gpu 表示各类加速卡）。旧值 `app`→cpu、`npu`→gpu 仅兼容
+- 加速卡：英伟达、AMD（`rocm-smi` / `amd-smi`）、华为昇腾、寒武纪、瑞芯微 RKNN。列表展示 `accel_summary`（厂商 + 型号 + 数量），与「加速卡使用率」分列
+- 多挂载 `disks[]`：列表一条汇总百分比另加磁盘数；详情展开分盘。见 `docs/12-disk-mounts.md`
+- 主机列表可排序；地址优先部署清单或 host_id 中的完整 IP，跳过 `198.18.0.0/15` 隧道假 IP
+- 资源组只存在中心 SQLite，实时页可筛选
+- 监测台页签：实时监控、时段统计（`docs/11-period-utilization.md`）、使用诊断（`docs/13-diagnostic-reports.md`）
+- 离线主机不把末次快照数字显示成实时利用率
+- `retention_days` 可配（示例 7，生产可设为 40）
+- Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` 安装。笔记本 sshpass + scp 旁路已废弃
+
+下文若仍出现 `app` 主机类型或「本期不做历史分析」，只代表起草时的范围。
+
 | 文档版本 | 1.0 |
 | 编制日期 | 2026-07-27 |
 | 状态 | 已确认开发基线 |
@@ -115,6 +131,7 @@
 | FR-03-04 | 页面自动刷新（可配置间隔，默认 15s） | P1 |
 | FR-03-05 | 提供只读 JSON API 供页面调用 | P0 |
 | FR-UTIL-PERIOD | 按时间段统计单机与集群利用率（相对 `minutes` + 绝对 `from_ts`/`to_ts`；avg/min/max/p95/busy_ratio；CSV） | P1 |
+| FR-DIAG-REPORT | 中心本地生成日/周/月使用诊断报告，入库后预览与下载（Markdown / 排行 CSV） | P1 |
 
 ### 3.4 主机识别与在线判定（FR-04）
 
@@ -122,7 +139,7 @@
 | --- | --- | --- |
 | FR-04-01 | 以 `host_id`（可配置，默认 hostname）唯一标识主机 | P0 |
 | FR-04-02 | 超过阈值（默认 90s）未上报判定为离线 | P0 |
-| FR-04-03 | 主机类型：`gpu` / `app` / `auto`（auto 根据是否采到 GPU 判定） | P0 |
+| FR-04-03 | 主机类型：`auto` / `cpu` / `gpu`（gpu=加速卡；旧值 `app`→cpu、`npu`→gpu） | P0 |
 
 ---
 
@@ -195,7 +212,10 @@
 | GET | `/api/v1/hosts` | 主机列表 |
 | GET | `/api/v1/hosts/{host_id}` | 主机详情 |
 | GET | `/api/v1/stats` | 集群统计 |
-| GET | `/` | Web 控制台 |
+| GET | `/` | Web 控制台（实时监控 / 时段统计 / 使用诊断） |
+| POST | `/api/v1/reports/generate` | 生成并保存诊断报告 |
+| GET | `/api/v1/reports` 与 `/api/v1/reports/{id}` | 列表与详情（含 Markdown） |
+| GET | `/api/v1/reports/{id}/markdown` 与 `.../rankings.csv` | 下载 |
 
 ---
 
@@ -204,7 +224,7 @@
 - 告警通知、邮件/企微推送
 - 分布式高可用中心端、多租户
 - 容器/K8s 深度监控、应用 APM
-- 长期时序分析与复杂图表引擎
+- 长期时序分析与复杂图表引擎（日/周/月诊断报告只做固定口径的文字报告，见 `docs/13-diagnostic-reports.md`，不替代图表引擎）
 - 自动发现与无 Agent 监控
 
 ---

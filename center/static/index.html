@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.4.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.5.0</p>
       </div>
     </div>
     <div class="top-meta">
@@ -27,6 +27,7 @@
   <nav class="tabs" role="tablist" aria-label="监测台页签">
     <button type="button" class="tab-btn active" role="tab" id="tabBtnRealtime" data-tab="realtime" aria-selected="true" aria-controls="viewRealtime">实时监控</button>
     <button type="button" class="tab-btn" role="tab" id="tabBtnPeriod" data-tab="period" aria-selected="false" aria-controls="viewPeriod">时段统计</button>
+    <button type="button" class="tab-btn" role="tab" id="tabBtnReports" data-tab="reports" aria-selected="false" aria-controls="viewReports">使用诊断</button>
   </nav>
 
   <div id="viewRealtime" class="tab-view" role="tabpanel" aria-labelledby="tabBtnRealtime">
@@ -125,6 +126,39 @@
         </div>
         <div id="periodDetailBody" class="detail-body">
           <p class="empty">点选左侧主机，查看该机时段指标与趋势</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div id="viewReports" class="tab-view" role="tabpanel" aria-labelledby="tabBtnReports" hidden>
+    <section class="period-toolbar" aria-label="使用诊断">
+      <h2>使用诊断</h2>
+      <div class="filters" id="reportControls">
+        <button type="button" class="period-btn active" data-report-period="day">日报</button>
+        <button type="button" class="period-btn" data-report-period="week">周报</button>
+        <button type="button" class="period-btn" data-report-period="month">月报</button>
+        <button type="button" class="btn" id="btnGenerateReport">生成并保存</button>
+        <span class="muted" id="reportWindowHint"></span>
+      </div>
+    </section>
+    <div class="report-layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>已保存</h2>
+          <span class="muted">打开不会重算</span>
+        </div>
+        <div id="reportList" class="report-list">
+          <p class="muted">加载报告列表…</p>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>预览</h2>
+          <span id="reportActions" class="report-actions"></span>
+        </div>
+        <div id="reportPreview" class="report-preview">
+          <p class="empty">选择日报、周报或月报后生成。结果写入中心数据库，再次打开直接读库存。</p>
         </div>
       </section>
     </div>
