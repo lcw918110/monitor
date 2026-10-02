@@ -12,8 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
+from center import __version__
 from center import api as api_mod
 from center import deploy_api
+from center import reports as reports_mod
 from center.deploy_runner import DeployRunner
 from center.deploy_store import DeployStore
 from center.storage import Storage
@@ -111,7 +113,7 @@ def make_handler(
     drunner = deploy_runner
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "MonitorCenter/1.3"
+        server_version = "MonitorCenter/" + __version__
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print("[%s] %s" % (self.log_date_time_string(), fmt % args), flush=True)
@@ -338,10 +340,74 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
+            if path == "/api/v1/reports/preview":
+                code, payload = reports_mod.handle_report_preview(
+                    storage, query=parsed.query
+                )
+                self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/reports":
+                code, payload = reports_mod.handle_list_reports(
+                    storage, query=parsed.query
+                )
+                self._send_json(code, payload)
+                return
+
+            if path.startswith("/api/v1/reports/"):
+                rest = path[len("/api/v1/reports/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    self._send_json(404, {"ok": False, "error": "未找到接口"})
+                    return
+                try:
+                    report_id = int(parts[0])
+                except ValueError:
+                    self._send_json(400, {"ok": False, "error": "非法 report id"})
+                    return
+                if len(parts) == 1:
+                    code, payload = reports_mod.handle_get_report(storage, report_id)
+                    self._send_json(code, payload)
+                    return
+                if len(parts) == 2 and parts[1] == "markdown":
+                    code, payload = reports_mod.handle_report_markdown(storage, report_id)
+                    if code != 200:
+                        self._send_json(code, payload)
+                        return
+                    data = payload["markdown"].encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                    self.send_header(
+                        "Content-Disposition",
+                        'attachment; filename="%s"' % payload["filename"],
+                    )
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                if len(parts) == 2 and parts[1] == "rankings.csv":
+                    code, payload = reports_mod.handle_report_csv(storage, report_id)
+                    if code != 200:
+                        self._send_json(code, payload)
+                        return
+                    data = payload["csv"].encode("utf-8-sig")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv; charset=utf-8")
+                    self.send_header(
+                        "Content-Disposition",
+                        'attachment; filename="%s"' % payload["filename"],
+                    )
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                self._send_json(404, {"ok": False, "error": "未找到接口"})
+                return
+
             if path == "/api/v1/health":
                 self._send_json(
                     200,
-                    {"ok": True, "version": "1.3.1", "name": "简易多机监控"},
+                    {"ok": True, "version": __version__, "name": "简易多机监控"},
                 )
                 return
 
@@ -351,6 +417,17 @@ def make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             body = self._read_body()
+
+            if path == "/api/v1/reports/generate":
+                code, payload = reports_mod.handle_generate_report(
+                    storage,
+                    body,
+                    query=parsed.query,
+                    busy_thresholds=busy_defaults,
+                    anomaly_thresholds=thresholds,
+                )
+                self._send_json(code, payload)
+                return
 
             if path == "/api/v1/metrics":
                 remote_ip = ""

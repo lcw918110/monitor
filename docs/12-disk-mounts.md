@@ -46,7 +46,7 @@ Agent 采集本机**本地真实文件系统**的多个挂载点，中心端列�
 
 单盘时三个数字仍互相匹配，与旧版 `os.statvfs(disk_path)` 一致。
 
-异常判定使用上述 `disk_percent`（或 `disks[]` 中的更大值），文案带上最满挂载路径，例如 `磁盘 /data 使用偏高：88.0%`。时段统计 / 历史趋势仍只用汇总 `disk_percent`，不把分盘列表写入 `metrics_history`。
+异常判定使用上述 `disk_percent`（或 `disks[]` 中的更大值），文案带上最满挂载路径，例如 `磁盘 /data 使用偏高：88.0%`。时段统计的 avg/P95 仍只用汇总 `disk_percent`。`metrics_history` 会额外留下精简挂载（`mount`、`percent`、`used_gb`、`total_gb`，不含 device/fstype），供使用诊断报告在对应时间窗里指出最满挂载；旧数据没有该字段时报告写「挂载样本不足」。
 
 ## 挂载过滤
 

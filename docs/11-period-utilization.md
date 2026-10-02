@@ -122,6 +122,8 @@ curl -s -o period-stats.csv "http://127.0.0.1:8080/api/v1/export/period-stats.cs
 
 无数据时先灌演示点：`python3 scripts/demo_seed.py --url http://127.0.0.1:8080/api/v1/metrics`。
 
+日/周/月使用诊断报告复用本节的样本加权与繁忙阈值，另外规定空闲线为 5%，见 `docs/13-diagnostic-reports.md`。诊断报告不改变本接口的默认查询上限。
+
 ## 存储
 
 `metrics_history` 压缩字段在原有趋势键上**只增不删**：`net_rated_mbps`、`net_rx_percent`、`net_tx_percent`、`mem_total_mb`、`disk_total_gb`。不写入网卡列表，避免撑库。未改 Agent 昇腾解析。
