@@ -3,7 +3,7 @@
   let selectedId = null;
   let allHosts = [];
   let resourceGroups = [];
-  let currentTab = "realtime"; // realtime | period
+  let currentTab = "realtime"; // realtime | period | reports
   let hostSortKey = "";
   let hostSortDir = "desc";
   let periodSortKey = "";
@@ -79,9 +79,18 @@
     periodDetailBody: document.getElementById("periodDetailBody"),
     viewRealtime: document.getElementById("viewRealtime"),
     viewPeriod: document.getElementById("viewPeriod"),
+    viewReports: document.getElementById("viewReports"),
     tabBtnRealtime: document.getElementById("tabBtnRealtime"),
     tabBtnPeriod: document.getElementById("tabBtnPeriod"),
+    tabBtnReports: document.getElementById("tabBtnReports"),
+    reportList: document.getElementById("reportList"),
+    reportPreview: document.getElementById("reportPreview"),
+    reportActions: document.getElementById("reportActions"),
+    reportWindowHint: document.getElementById("reportWindowHint"),
+    btnGenerateReport: document.getElementById("btnGenerateReport"),
   };
+  let reportPeriod = "day";
+  let activeReportId = null;
 
   function fmtPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
@@ -632,14 +641,17 @@
   }
 
   function tabFromHash() {
-    return location.hash === "#period" ? "period" : "realtime";
+    if (location.hash === "#period") return "period";
+    if (location.hash === "#reports") return "reports";
+    return "realtime";
   }
 
   function applyTabVisibility(next) {
-    currentTab = next === "period" ? "period" : "realtime";
+    currentTab = next === "period" || next === "reports" ? next : "realtime";
     if (el.viewRealtime) el.viewRealtime.hidden = currentTab !== "realtime";
     if (el.viewPeriod) el.viewPeriod.hidden = currentTab !== "period";
-    [el.tabBtnRealtime, el.tabBtnPeriod].forEach((btn) => {
+    if (el.viewReports) el.viewReports.hidden = currentTab !== "reports";
+    [el.tabBtnRealtime, el.tabBtnPeriod, el.tabBtnReports].forEach((btn) => {
       if (!btn) return;
       const on = btn.getAttribute("data-tab") === currentTab;
       btn.classList.toggle("active", on);
@@ -648,11 +660,11 @@
   }
 
   function setTab(name, opts) {
-    const next = name === "period" ? "period" : "realtime";
+    const next = name === "period" || name === "reports" ? name : "realtime";
     const fromHash = opts && opts.fromHash;
     applyTabVisibility(next);
     if (!fromHash) {
-      const hash = next === "period" ? "#period" : "#realtime";
+      const hash = "#" + next;
       if (location.hash !== hash) {
         if (history.replaceState) {
           history.replaceState(null, "", hash);
@@ -664,6 +676,9 @@
     if (next === "period") {
       loadPeriodUtil();
       if (selectedId) loadPeriodHostDetail(selectedId);
+    } else if (next === "reports") {
+      loadReportList();
+      refreshReportWindowHint();
     } else if (selectedId) {
       loadDetail(selectedId);
     }
@@ -1752,11 +1767,189 @@ function renderHosts(hosts) {
       if (currentTab === "period") {
         await loadPeriodUtil();
         if (selectedId) await loadPeriodHostDetail(selectedId);
+      } else if (currentTab === "reports") {
+        // 诊断预览来自已入库报告，定时刷新不重算、不打断阅读
       } else if (selectedId) {
         await loadDetail(selectedId);
       }
     } catch (e) {
       console.error(e);
+    }
+  }
+
+  function fmtReportTime(ts) {
+    if (ts == null || Number.isNaN(Number(ts))) return "-";
+    try {
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(new Date(Number(ts) * 1000));
+    } catch (e) {
+      return String(ts);
+    }
+  }
+
+  function renderReportDocument(report) {
+    if (!el.reportPreview) return;
+    const sections = (report && report.payload && report.payload.sections) || [];
+    let html = "<h3>" + escapeHtml(report.title || "使用诊断") + "</h3>";
+    if (!sections.length && report.markdown) {
+      html += "<pre>" + escapeHtml(report.markdown) + "</pre>";
+    }
+    sections.forEach((sec) => {
+      html += "<h3>" + escapeHtml(sec.title || "") + "</h3>";
+      (sec.paragraphs || []).forEach((p) => {
+        html += "<p>" + escapeHtml(p) + "</p>";
+      });
+      (sec.tables || []).forEach((table) => {
+        if (table.caption) {
+          html += '<p class="report-caption">' + escapeHtml(table.caption) + "</p>";
+        }
+        const headers = table.headers || [];
+        html += "<div class='table-wrap'><table><thead><tr>";
+        headers.forEach((h) => {
+          html += "<th>" + escapeHtml(h) + "</th>";
+        });
+        html += "</tr></thead><tbody>";
+        (table.rows || []).forEach((row) => {
+          html += "<tr>";
+          headers.forEach((_, i) => {
+            html += "<td>" + escapeHtml(row[i] == null ? "" : row[i]) + "</td>";
+          });
+          html += "</tr>";
+        });
+        html += "</tbody></table></div>";
+      });
+      (sec.notes || []).forEach((n) => {
+        html += '<p class="muted">' + escapeHtml(n) + "</p>";
+      });
+    });
+    el.reportPreview.innerHTML = html;
+    if (el.reportActions) {
+      const id = report.id;
+      el.reportActions.innerHTML =
+        '<a class="link" href="/api/v1/reports/' +
+        id +
+        '/markdown">下载 Markdown</a>' +
+        '<a class="link" href="/api/v1/reports/' +
+        id +
+        '/rankings.csv">下载排行 CSV</a>';
+    }
+  }
+
+  function renderReportList(reports) {
+    if (!el.reportList) return;
+    if (!reports.length) {
+      el.reportList.innerHTML =
+        '<p class="muted">还没有报告。选择周期后点「生成并保存」。</p>';
+      return;
+    }
+    el.reportList.innerHTML = reports
+      .map((r) => {
+        const active = Number(r.id) === Number(activeReportId) ? " active" : "";
+        const clamp = r.clamped ? " · 已按保留期裁剪" : "";
+        return (
+          '<button type="button" class="report-item' +
+          active +
+          '" data-report-id="' +
+          r.id +
+          '"><strong>' +
+          escapeHtml(r.title || r.period_type || "报告") +
+          '</strong><span class="muted">保存于 ' +
+          escapeHtml(fmtReportTime(r.created_at)) +
+          clamp +
+          "</span></button>"
+        );
+      })
+      .join("");
+    Array.from(el.reportList.querySelectorAll("[data-report-id]")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        loadReport(btn.getAttribute("data-report-id"));
+      });
+    });
+  }
+
+  async function loadReportList() {
+    if (!el.reportList) return;
+    try {
+      const res = await fetch("/api/v1/reports");
+      const data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || "列表失败");
+      renderReportList(data.reports || []);
+    } catch (e) {
+      el.reportList.innerHTML =
+        '<p class="empty">报告列表加载失败：' + escapeHtml(e.message) + "</p>";
+    }
+  }
+
+  async function loadReport(id) {
+    activeReportId = id;
+    if (!el.reportPreview) return;
+    el.reportPreview.innerHTML = '<p class="muted">读取已保存报告…</p>';
+    try {
+      const res = await fetch("/api/v1/reports/" + encodeURIComponent(id));
+      const data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || "读取失败");
+      renderReportDocument(data.report || {});
+      const listed = el.reportList
+        ? Array.from(el.reportList.querySelectorAll("[data-report-id]"))
+        : [];
+      listed.forEach((btn) => {
+        btn.classList.toggle("active", btn.getAttribute("data-report-id") === String(id));
+      });
+    } catch (e) {
+      el.reportPreview.innerHTML =
+        '<p class="empty">读取报告失败：' + escapeHtml(e.message) + "</p>";
+    }
+  }
+
+  async function refreshReportWindowHint() {
+    if (!el.reportWindowHint) return;
+    try {
+      const res = await fetch(
+        "/api/v1/reports/preview?period=" + encodeURIComponent(reportPeriod)
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || "窗口预览失败");
+      let text = (data.label || "") + " " + (data.range_text || "");
+      if (data.clamped) text += "（将被保留期裁剪）";
+      if (data.window_error) text += "（" + data.window_error + "）";
+      el.reportWindowHint.textContent = text;
+    } catch (e) {
+      el.reportWindowHint.textContent = e.message || "";
+    }
+  }
+
+  async function generateReport() {
+    if (!el.btnGenerateReport) return;
+    el.btnGenerateReport.disabled = true;
+    if (el.reportPreview) {
+      el.reportPreview.innerHTML = "<p class=\"muted\">正在按原始历史样本计算并入库…</p>";
+    }
+    try {
+      const res = await fetch("/api/v1/reports/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period: reportPeriod }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || "生成失败");
+      const report = data.report || {};
+      activeReportId = report.id;
+      await loadReportList();
+      if (report.id) await loadReport(report.id);
+    } catch (e) {
+      if (el.reportPreview) {
+        el.reportPreview.innerHTML =
+          '<p class="empty">生成失败：' + escapeHtml(e.message) + "</p>";
+      }
+    } finally {
+      el.btnGenerateReport.disabled = false;
     }
   }
 
@@ -1795,16 +1988,32 @@ function renderHosts(hosts) {
       });
     });
   }
-  [el.tabBtnRealtime, el.tabBtnPeriod].forEach((btn) => {
+  [el.tabBtnRealtime, el.tabBtnPeriod, el.tabBtnReports].forEach((btn) => {
     if (!btn) return;
     btn.addEventListener("click", () => setTab(btn.getAttribute("data-tab")));
   });
+  Array.from(document.querySelectorAll("[data-report-period]")).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      reportPeriod = btn.getAttribute("data-report-period") || "day";
+      Array.from(document.querySelectorAll("[data-report-period]")).forEach((b) => {
+        b.classList.toggle("active", b === btn);
+      });
+      refreshReportWindowHint();
+    });
+  });
+  if (el.btnGenerateReport) {
+    el.btnGenerateReport.addEventListener("click", generateReport);
+  }
   window.addEventListener("hashchange", () => {
     const name = tabFromHash();
     if (name !== currentTab) setTab(name, { fromHash: true });
   });
   renderPeriodControls();
   applyTabVisibility(tabFromHash());
+  if (tabFromHash() === "reports") {
+    loadReportList();
+    refreshReportWindowHint();
+  }
   refresh();
   setInterval(refresh, REFRESH_MS);
 })();

@@ -51,6 +51,29 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
+def _slim_disk_history(system: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """历史里只留挂载、利用率、容量，供诊断报告指出最满挂载。
+
+    没有 disks[] 时返回 None（旧 Agent 不写该键）。device/fstype 不入库。
+    """
+    raw = system.get("disks")
+    if not isinstance(raw, list):
+        return None
+    slim: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        slim.append(
+            {
+                "mount": item.get("mount") or "",
+                "percent": _to_float(item.get("percent")),
+                "used_gb": _to_float(item.get("used_gb")),
+                "total_gb": _to_float(item.get("total_gb")),
+            }
+        )
+    return slim
+
+
 def _ratio_percent(part: Any, total: Any) -> Optional[float]:
     p = _to_float(part)
     t = _to_float(total)
@@ -167,6 +190,19 @@ class Storage:
                     );
                     CREATE INDEX IF NOT EXISTS idx_host_group_members_gid
                         ON host_group_members(group_id);
+                    CREATE TABLE IF NOT EXISTS diagnostic_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        period_type TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        requested_from_ts INTEGER NOT NULL,
+                        requested_to_ts INTEGER NOT NULL,
+                        clamped INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL,
+                        markdown TEXT NOT NULL,
+                        payload TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_diag_reports_created
+                        ON diagnostic_reports(created_at DESC, id DESC);
                     """
                 )
                 cols = {
@@ -242,30 +278,34 @@ class Storage:
             rx_pct = _ratio_percent(system.get("net_rx_mbps"), rated)
         if tx_pct is None:
             tx_pct = _ratio_percent(system.get("net_tx_mbps"), rated)
+        system_out: Dict[str, Any] = {
+            "cpu_percent": system.get("cpu_percent"),
+            "cpu_count": system.get("cpu_count"),
+            "cpu_freq_mhz": system.get("cpu_freq_mhz"),
+            "cpu_freq_max_mhz": system.get("cpu_freq_max_mhz"),
+            "mem_percent": system.get("mem_percent"),
+            "mem_used_mb": system.get("mem_used_mb"),
+            "mem_total_mb": system.get("mem_total_mb"),
+            "disk_percent": system.get("disk_percent"),
+            "disk_used_gb": system.get("disk_used_gb"),
+            "disk_total_gb": system.get("disk_total_gb"),
+            "load1": system.get("load1"),
+            "load5": system.get("load5"),
+            "load15": system.get("load15"),
+            "net_rx_mbps": system.get("net_rx_mbps"),
+            "net_tx_mbps": system.get("net_tx_mbps"),
+            "net_rated_mbps": rated,
+            "net_link_mbps": system.get("net_link_mbps"),
+            "net_rx_percent": rx_pct,
+            "net_tx_percent": tx_pct,
+        }
+        slim_disks = _slim_disk_history(system)
+        if slim_disks is not None:
+            system_out["disks"] = slim_disks
         return {
             "host_id": payload.get("host_id"),
             "timestamp": payload.get("timestamp"),
-            "system": {
-                "cpu_percent": system.get("cpu_percent"),
-                "cpu_count": system.get("cpu_count"),
-                "cpu_freq_mhz": system.get("cpu_freq_mhz"),
-                "cpu_freq_max_mhz": system.get("cpu_freq_max_mhz"),
-                "mem_percent": system.get("mem_percent"),
-                "mem_used_mb": system.get("mem_used_mb"),
-                "mem_total_mb": system.get("mem_total_mb"),
-                "disk_percent": system.get("disk_percent"),
-                "disk_used_gb": system.get("disk_used_gb"),
-                "disk_total_gb": system.get("disk_total_gb"),
-                "load1": system.get("load1"),
-                "load5": system.get("load5"),
-                "load15": system.get("load15"),
-                "net_rx_mbps": system.get("net_rx_mbps"),
-                "net_tx_mbps": system.get("net_tx_mbps"),
-                "net_rated_mbps": rated,
-                "net_link_mbps": system.get("net_link_mbps"),
-                "net_rx_percent": rx_pct,
-                "net_tx_percent": tx_pct,
-            },
+            "system": system_out,
             "npus": [
                 {
                     "index": n.get("index"),
@@ -997,6 +1037,7 @@ class Storage:
         rated_fallback: Optional[Dict[str, Any]] = None,
         window: Optional[Dict[str, Any]] = None,
         include_series: bool = False,
+        max_rows: int = PERIOD_MAX_ROWS,
     ) -> Dict[str, Any]:
         """对时间窗内全部历史点做平均/最低/最高/P95/繁忙占比统计。"""
         if window is None:
@@ -1022,8 +1063,9 @@ class Storage:
             rated_fallback = self._rated_fallback_from_payload(
                 (host or {}).get("payload")
             )
+        row_cap = max(1, int(max_rows))
         rows = self._fetch_history_rows(
-            host_id, int(window["from_ts"]), int(window["to_ts"])
+            host_id, int(window["from_ts"]), int(window["to_ts"]), max_rows=row_cap
         )
         series, first_ts, last_ts, parsed = self._series_from_rows(
             rows, rated_fallback=rated_fallback
@@ -1065,6 +1107,7 @@ class Storage:
             "window": window,
             "busy_thresholds": thresholds,
             "metrics": self._metrics_from_series(series, thresholds),
+            "history_truncated": len(rows) >= row_cap,
         }
         if include_series:
             result["_series"] = series
@@ -1078,6 +1121,7 @@ class Storage:
         host_ids: Optional[List[str]] = None,
         busy_thresholds: Optional[Dict[str, float]] = None,
         window: Optional[Dict[str, Any]] = None,
+        max_rows: int = PERIOD_MAX_ROWS,
     ) -> Dict[str, Any]:
         """多机时段利用：每主机聚合 + 样本加权集群汇总。"""
         if window is None:
@@ -1099,6 +1143,7 @@ class Storage:
         host_rows: List[Dict[str, Any]] = []
         total_samples = 0
         hosts_with_samples = 0
+        history_truncated = False
         for host in hosts:
             hid = host["host_id"]
             rated_fallback = None
@@ -1114,6 +1159,7 @@ class Storage:
                 rated_fallback=rated_fallback,
                 window=window,
                 include_series=True,
+                max_rows=max_rows,
             )
             series = stats.pop("_series", {}) or {}
             for key in PERIOD_METRIC_KEYS:
@@ -1121,12 +1167,15 @@ class Storage:
             total_samples += int(stats.get("sample_count") or 0)
             if stats.get("sample_count"):
                 hosts_with_samples += 1
+            if stats.get("history_truncated"):
+                history_truncated = True
             host_rows.append(
                 {
                     "host_id": hid,
                     "hostname": host.get("hostname") or hid,
                     "host_type": host.get("host_type"),
                     "online": host.get("online"),
+                    "last_seen": host.get("last_seen"),
                     "address": host.get("address") or "",
                     "group_id": host.get("group_id"),
                     "group_name": host.get("group_name"),
@@ -1137,6 +1186,7 @@ class Storage:
                     "from_ts": stats.get("from_ts"),
                     "to_ts": stats.get("to_ts"),
                     "metrics": stats.get("metrics") or {},
+                    "history_truncated": bool(stats.get("history_truncated")),
                 }
             )
 
@@ -1153,6 +1203,7 @@ class Storage:
             "host_count": len(host_rows),
             "hosts_with_samples": hosts_with_samples,
             "sample_count": total_samples,
+            "history_truncated": history_truncated,
             "from_ts": window["from_ts"],
             "to_ts": window["to_ts"],
             "accel_count": cluster_identity.get("count") or 0,
@@ -1166,6 +1217,155 @@ class Storage:
                 "accel_inventory": cluster_identity.get("inventory") or [],
             },
             "hosts": host_rows,
+        }
+
+    def fullest_disk_mount(
+        self,
+        host_id: str,
+        from_ts: int,
+        to_ts: int,
+        max_rows: int = PERIOD_MAX_ROWS,
+    ) -> Optional[Dict[str, Any]]:
+        """窗口内历史点里利用率最高的挂载。没有 disks[] 时返回 None，不编造。"""
+        rows = self._fetch_history_rows(
+            host_id, int(from_ts), int(to_ts), max_rows=max(1, int(max_rows))
+        )
+        best: Optional[Dict[str, Any]] = None
+        samples_with_disks = 0
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            system = payload.get("system") or {}
+            disks = system.get("disks")
+            if not isinstance(disks, list) or not disks:
+                continue
+            samples_with_disks += 1
+            ts = int(row["ts"])
+            for item in disks:
+                if not isinstance(item, dict):
+                    continue
+                pct = _to_float(item.get("percent"))
+                if pct is None:
+                    continue
+                candidate = {
+                    "mount": item.get("mount") or "",
+                    "percent": pct,
+                    "used_gb": _to_float(item.get("used_gb")),
+                    "total_gb": _to_float(item.get("total_gb")),
+                    "ts": ts,
+                    "samples_with_disks": 0,
+                }
+                if best is None or pct > float(best["percent"]) or (
+                    pct == float(best["percent"]) and ts >= int(best["ts"])
+                ):
+                    best = candidate
+        if best is None:
+            return None
+        best["samples_with_disks"] = samples_with_disks
+        return best
+
+    def save_diagnostic_report(
+        self,
+        period_type: str,
+        title: str,
+        requested_from_ts: int,
+        requested_to_ts: int,
+        clamped: bool,
+        markdown: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        now = int(time.time())
+        raw = json.dumps(payload, ensure_ascii=False)
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO diagnostic_reports (
+                        period_type, title, requested_from_ts, requested_to_ts,
+                        clamped, created_at, markdown, payload
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        period_type,
+                        title,
+                        int(requested_from_ts),
+                        int(requested_to_ts),
+                        1 if clamped else 0,
+                        now,
+                        markdown,
+                        raw,
+                    ),
+                )
+                conn.commit()
+                report_id = int(cur.lastrowid)
+            finally:
+                conn.close()
+        saved = self.get_diagnostic_report(report_id)
+        return saved or {"id": report_id}
+
+    def list_diagnostic_reports(self, limit: int = 50) -> List[Dict[str, Any]]:
+        cap = max(1, min(int(limit or 50), 200))
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT id, period_type, title, requested_from_ts, requested_to_ts,
+                           clamped, created_at
+                    FROM diagnostic_reports
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (cap,),
+                ).fetchall()
+            finally:
+                conn.close()
+        return [
+            {
+                "id": int(row["id"]),
+                "period_type": row["period_type"],
+                "title": row["title"],
+                "requested_from_ts": int(row["requested_from_ts"]),
+                "requested_to_ts": int(row["requested_to_ts"]),
+                "clamped": bool(row["clamped"]),
+                "created_at": int(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def get_diagnostic_report(self, report_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, period_type, title, requested_from_ts, requested_to_ts,
+                           clamped, created_at, markdown, payload
+                    FROM diagnostic_reports WHERE id=?
+                    """,
+                    (int(report_id),),
+                ).fetchone()
+            finally:
+                conn.close()
+        if not row:
+            return None
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "id": int(row["id"]),
+            "period_type": row["period_type"],
+            "title": row["title"],
+            "requested_from_ts": int(row["requested_from_ts"]),
+            "requested_to_ts": int(row["requested_to_ts"]),
+            "clamped": bool(row["clamped"]),
+            "created_at": int(row["created_at"]),
+            "markdown": row["markdown"] or "",
+            "payload": payload,
         }
 
     def export_hosts_rows(self) -> List[Dict[str, Any]]:

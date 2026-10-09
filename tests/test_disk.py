@@ -243,8 +243,12 @@ class CenterCompatTests(unittest.TestCase):
         self.assertEqual(len(disks), 2)
         self.assertEqual(disks[0]["mount"], "/data")
         compact = Storage._compact_history_payload(payload)
-        self.assertNotIn("disks", compact["system"])
         self.assertEqual(compact["system"]["disk_percent"], 90.0)
+        slim = compact["system"]["disks"]
+        self.assertEqual(slim[0]["mount"], "/data")
+        self.assertEqual(slim[0]["percent"], 90.0)
+        self.assertNotIn("device", slim[0])
+        self.assertNotIn("fstype", slim[0])
 
     def test_anomaly_mentions_fullest_mount(self) -> None:
         result = judge_host_payload(

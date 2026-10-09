@@ -2,7 +2,7 @@
 
 | 文档版本 | 1.0 |
 | 编制日期 | 2026-07-28 |
-| 对应基线 | README v1.4.0 |
+| 对应基线 | README v1.5.0 |
 
 状态约定：`todo` / `doing` / `done` / `blocked`
 
@@ -11,10 +11,11 @@
 ## 当前已交付（摘要）
 
 - Center + Agent，Python 3 标准库；SQLite 存储；中文监测台 + 客户端部署页
-- 采集：系统资源 + 加速卡（英伟达 / AMD / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
+- 采集：系统资源 + 多挂载磁盘 `disks[]` + 加速卡（英伟达 / AMD / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN），列表用 `accel_summary`
 - 主机类型：`auto` | `cpu` | `gpu`
-- 异常阈值着色；主机详情 **时间段统计**（1h/2h/6h/24h/7d）+ 趋势图
-- 部署：Excel/CSV 导入、SSH（密码需中心机 `sshpass`，或私钥）、配置地址自动探查；Agent 默认目录 `/opt/monitor-agent`（Center 仍为 `/opt/monitor`）
+- 监测台三页签：实时监控（排序、完整 IP、资源组、规格与利用率分列、离线不展示实时数字）、时段统计、使用诊断（日/周/月报告入库后预览与下载）
+- `retention_days` 可配。展示地址优先清单 / host_id，跳过 `198.18.0.0/15`
+- 部署：只走 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。Excel/CSV 导入；密码登录需要**中心机**的 `sshpass`（或改用私钥）。Agent 默认 `/opt/monitor-agent`，Center 默认 `/opt/monitor`。笔记本 sshpass/scp 装 Agent 已废弃
 - 本地守护：`scripts/local_up.sh` / `local_down.sh`
 
 ---
@@ -34,7 +35,7 @@
 
 **验收要点**：跨机上报、SSH 部署成功/失败信息可读、进程重启后自启（systemd 或守护）、Token（若启用）生效。
 
-**依赖**：只走中心「客户端部署」或中心机 `deploy_fleet.sh`；目标机 SSH 可达；防火墙放行中心端口；密码登录需中心机 `sshpass`；非 root 勿用 `/opt/monitor-agent`。
+**依赖**：只走中心「客户端部署」或中心机 `deploy_fleet.sh`；目标机 SSH 可达；防火墙放行中心端口；密码登录需中心机 `sshpass`（不要在笔记本上另做 scp 安装）；非 root 写 `/opt/monitor-agent` 时走产品路径里的 sudo。
 
 ---
 

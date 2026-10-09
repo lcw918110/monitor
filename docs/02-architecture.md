@@ -27,7 +27,7 @@
 ┌────────────────────────────▼─────────────────────────────┐
 │                     Center（中心端）                        │
 │  HTTP Router → API / Deploy API → Storage (SQLite)       │
-│  Static Web：监测台（实时监控 / 时段统计页签）· 部署页      │
+│  Static Web：实时监控 / 时段统计 / 使用诊断 · 部署页        │
 └────────────────────────────▲─────────────────────────────┘
                              │ POST /api/v1/metrics
         ┌────────────────────┼────────────────────┐
@@ -47,10 +47,11 @@
 | 中心服务入口 | `center/server.py` | HTTP 服务、路由、静态资源 |
 | 存储层 | `center/storage.py` | SQLite：主机快照、历史、时段聚合、清理 |
 | 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
-| 展示地址 | `center/hostaddr.py` | 列表/详情/时段统计的完整 IP：部署清单 → host_id 内嵌 IP → RFC1918；跳过 `198.18/15` 隧道假 IP |
+| 诊断报告 | `center/reports.py` | 日/周/月窗口、闲忙口径、Markdown；结果表 `diagnostic_reports` |
+| 展示地址 | `center/hostaddr.py` | 列表/详情/时段统计/诊断报告的完整 IP：部署清单 → host_id 内嵌 IP → RFC1918；跳过 `198.18/15` 隧道假 IP |
 | 异常判定 | `center/anomaly.py` | 阈值着色判定 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
-| Web UI | `center/static/*` | 监测台（实时监控 / 时段统计页签）、部署页 |
+| Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html` |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
 | 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
@@ -65,8 +66,10 @@
 ## 4. 数据与容量（概要）
 
 - **hosts**：每机最新完整 payload  
-- **metrics_history**：压缩历史点；默认保留约 7 天（`retention_days`）  
-- **部署库**：与监测库可同机；目标清单、任务日志、探查结果  
+- **metrics_history**：压缩历史点，保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘
+- **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON），读取不重算
+- **resource_groups** / **host_group_members**：中心侧资源组
+- **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路  
 
 容量与并发适合规模见路线图 **N4**（待压测验证）。框架化扩展指标见 **N2**。
 
@@ -78,4 +81,5 @@
 - 设计与测试：`docs/03-design-and-test.md`
 - 部署与加速卡：`docs/08-cpu-npu-focus.md`
 - 多挂载磁盘：`docs/12-disk-mounts.md`
+- 使用诊断报告：`docs/13-diagnostic-reports.md`
 - 下一步：`docs/10-roadmap.md`

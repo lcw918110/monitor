@@ -22,6 +22,7 @@
 | O14 | 网页 SSH 部署与 Excel 导入 | done | deploy 页；密码/私钥；自动探查 |
 | O15 | 主机详情时间段统计 | done | `/period-stats` + 1h～7d 切换 |
 | O16 | 时段利用（绝对窗/集群/P95） | done | `docs/11-period-utilization.md` |
+| O17 | 日/周/月使用诊断报告 | done | `docs/13-diagnostic-reports.md`；空闲阈值 5% |
 
 ## 需人工决策（历史）
 

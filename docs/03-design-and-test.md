@@ -59,6 +59,16 @@
 
 见 `docs/11-period-utilization.md`。相对窗口 `minutes` 保持兼容；绝对窗口 `from_ts`/`to_ts`（Unix 秒）成对使用并裁剪到保留期。集群汇总为**样本加权**（合并各机窗口内样本后再聚合）。
 
+### 1.6 使用诊断报告 `/api/v1/reports`
+
+见 `docs/13-diagnostic-reports.md`。
+
+- `GET /api/v1/reports/preview?period=day|week|month`：只解析 Asia/Shanghai 半开窗口
+- `POST /api/v1/reports/generate`：按原始历史聚合后插入 `diagnostic_reports`
+- `GET /api/v1/reports`、`GET /api/v1/reports/{id}`：读库存。`{id}/markdown` 与 `{id}/rankings.csv` 为下载
+- 空闲判定：在线且样本足够时，CPU 平均 <5% 且繁忙 <5%；有加速卡则同样 <5%。高负荷为繁忙占比 ≥40% 或 P95 ≥85%（CPU 或加速卡）。磁盘不进闲忙
+- 与监测台其它 GET 一样不校验 Agent Token
+
 ---
 
 ## 2. Agent 调度设计
@@ -79,11 +89,13 @@ loop:
 
 ## 3. Web 页面信息架构
 
-1. **顶部**：产品名 + 刷新时间 + 集群统计卡片
-2. **中部**：主机表格（可点击）
-3. **右侧/下方**：选中主机详情（系统 + GPU 表）
+1. **顶部**：产品名 + 刷新 + 页签（实时监控 / 时段统计 / 使用诊断）+ 客户端部署入口
+2. **实时监控**：异常汇总、集群卡片、主机表（可排序、按资源组筛选）。列把规格和实时利用率分开：加速卡型号数量 | 加速卡使用率；磁盘% | 磁盘数。离线行不填实时数字
+3. **时段统计**：集群与各主机的平均 / P95 / 繁忙占比，可导出 CSV
+4. **使用诊断**：生成并预览已入库的日/周/月报告，下载 Markdown 与排行 CSV
+5. **主机详情**：在线时展示实时用量与分盘；离线时标明末次快照不是实时
 
-风格：清晰运维控制台，中文标签，数字突出；避免花哨装饰。主机列表磁盘只显示一条汇总；分盘列表仅出现在详情。口径见 `docs/12-disk-mounts.md`。
+风格：清晰运维控制台，中文标签，数字突出。磁盘汇总口径见 `docs/12-disk-mounts.md`。地址口径见 `center/hostaddr.py`。
 
 ---
 
@@ -100,6 +112,9 @@ loop:
 | TC-UI-02 | 点击主机 | 详情切换正确 |
 | TC-ONLINE-01 | 停止上报 > offline_seconds | online=false |
 | TC-RET-01 | 写入超期历史后触发清理 | 旧记录删除 |
+| TC-REPORT-01 | 生成日报后删除原始历史再 GET | 正文与入库时一致，不重算 |
+| TC-REPORT-02 | CPU 平均 14% 或加速卡平均 9% | 不算基本不用（阈值 5%） |
+| TC-REPORT-03 | 已有日报文本再生成月报 | 月报正文不包含该日报标记 |
 
 ---
 
