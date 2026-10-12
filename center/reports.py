@@ -9,6 +9,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
@@ -21,6 +23,14 @@ from center.storage import PERIOD_MAX_ROWS, Storage
 SHANGHAI = timezone(timedelta(hours=8))
 
 PERIOD_LABELS = {"day": "日报", "week": "周报", "month": "月报"}
+SOURCE_LABELS = {"scheduled": "定时", "manual": "手动"}
+_WINDOW_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_EXCLUSION_METRIC_LABELS = (
+    ("cpu_percent", "CPU"),
+    ("mem_percent", "内存"),
+    ("disk_percent", "磁盘"),
+    ("accel_util_avg", "加速卡"),
+)
 
 # 基本不用已从旧模板的 CPU<15% / 加速卡<10% 收紧到 5%。
 IDLE_AVG_LT = 5.0
@@ -128,6 +138,154 @@ def report_period_bounds(period: str, now: Optional[int] = None) -> Dict[str, An
         "range_text": _range_text(from_ts, to_ts),
         "compare_range_text": _range_text(compare_from, compare_to),
         "timezone": "Asia/Shanghai",
+    }
+
+
+def _source_label(source: Optional[str]) -> str:
+    return SOURCE_LABELS.get(source or "manual", "手动")
+
+
+def report_window_for_date(
+    period: str, window_date: str, now_ts: int
+) -> Dict[str, Any]:
+    """由用户选择的日期得到已结束的半开窗口。
+
+    day：该自然日。week：该日所在的周一 00:00～下周一 00:00。
+    month：该日所在自然月。窗口结束时刻晚于 now_ts 时拒绝。
+    """
+    if period not in PERIOD_LABELS:
+        raise ValueError("period 必须是 day、week 或 month")
+    match = _WINDOW_DATE_RE.match((window_date or "").strip())
+    if not match:
+        raise ValueError("window_date 必须是 YYYY-MM-DD（Asia/Shanghai）")
+    year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    try:
+        chosen = datetime(year, month, day, tzinfo=SHANGHAI)
+    except ValueError:
+        raise ValueError("window_date 不是合法日期")
+    if period == "day":
+        start = chosen
+        end = chosen + timedelta(days=1)
+        compare_end = start
+        compare_start = start - timedelta(days=1)
+    elif period == "week":
+        start = chosen - timedelta(days=chosen.weekday())
+        end = start + timedelta(days=7)
+        compare_end = start
+        compare_start = start - timedelta(days=7)
+    else:
+        start = chosen.replace(day=1)
+        end = _add_months(start, 1)
+        compare_end = start
+        compare_start = _add_months(start, -1)
+    from_ts = int(start.timestamp())
+    to_ts = int(end.timestamp())
+    if to_ts > int(now_ts):
+        raise ValueError("该窗口尚未结束，不能生成")
+    compare_from = int(compare_start.timestamp())
+    compare_to = int(compare_end.timestamp())
+    return {
+        "period": period,
+        "label": PERIOD_LABELS[period],
+        "from_ts": from_ts,
+        "to_ts": to_ts,
+        "compare_from_ts": compare_from,
+        "compare_to_ts": compare_to,
+        "range_text": _range_text(from_ts, to_ts),
+        "compare_range_text": _range_text(compare_from, compare_to),
+        "timezone": "Asia/Shanghai",
+        "window_date": "%04d-%02d-%02d" % (year, month, day),
+    }
+
+
+def resolve_report_bounds(
+    period: str,
+    now: Optional[int] = None,
+    window_date: Optional[str] = None,
+    clock: Optional[int] = None,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """解析报告窗口。成功 (None, bounds)；失败 (error, {}) 或 (error, bounds)。"""
+    clock_ts = int(clock if clock is not None else time.time())
+    try:
+        if window_date:
+            bounds = report_window_for_date(period, str(window_date), clock_ts)
+        else:
+            bounds = report_period_bounds(
+                period, now=now if now is not None else clock_ts
+            )
+    except ValueError as exc:
+        return str(exc), {}
+    if int(bounds["to_ts"]) > clock_ts:
+        return "该窗口尚未结束，不能生成", bounds
+    return None, bounds
+
+
+def _exclusion_sentence(excluded: Optional[Dict[str, Any]]) -> str:
+    data = excluded or {}
+    try:
+        count = int(data.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return "利用率样本均在 0～100% 以内，没有因越界被排除。"
+    by_metric = data.get("by_metric") or {}
+    metric_bits: List[str] = []
+    for key, label in _EXCLUSION_METRIC_LABELS:
+        try:
+            n = int(by_metric.get(key) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n:
+            metric_bits.append("%s %d 条" % (label, n))
+    hosts = list(data.get("hosts") or [])
+    host_bits: List[str] = []
+    for host in hosts[:8]:
+        if not isinstance(host, dict):
+            continue
+        label = host.get("address") or host.get("hostname") or host.get("host_id") or "未知主机"
+        try:
+            n = int(host.get("count") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        host_bits.append("%s %d 条" % (label, n))
+    extra = ""
+    if len(hosts) > 8:
+        extra = "，另有 %d 台" % (len(hosts) - 8)
+    metric_text = ("（%s）" % "、".join(metric_bits)) if metric_bits else ""
+    where = "、".join(host_bits) if host_bits else "主机未标明"
+    return (
+        "已排除超出 0～100%% 的利用率样本 %d 条%s，不进入平均、P95 和繁忙占比。涉及主机：%s%s。"
+        % (count, metric_text, where, extra)
+    )
+
+
+def _failed_report_doc(
+    bounds: Dict[str, Any], error: str, generated_at: int, source: str
+) -> Dict[str, Any]:
+    title = "使用诊断%s（%s）" % (bounds["label"], bounds["range_text"])
+    markdown = (
+        "# %s\n\n生成失败：%s\n\n实际生成时刻（Asia/Shanghai）%s。来源：%s。\n"
+        % (title, error, _fmt_ts(generated_at), _source_label(source))
+    )
+    return {
+        "period": bounds["period"],
+        "label": bounds["label"],
+        "title": title,
+        "timezone": "Asia/Shanghai",
+        "requested_from_ts": bounds["from_ts"],
+        "requested_to_ts": bounds["to_ts"],
+        "compare_from_ts": bounds.get("compare_from_ts"),
+        "compare_to_ts": bounds.get("compare_to_ts"),
+        "range_text": bounds["range_text"],
+        "compare_range_text": bounds.get("compare_range_text"),
+        "clamped": False,
+        "generated_at": int(generated_at),
+        "source": source,
+        "status": "failed",
+        "error": error,
+        "sections": [],
+        "rankings": [],
+        "markdown": markdown,
     }
 
 
@@ -495,16 +653,31 @@ def build_report(
     busy_thresholds: Optional[Dict[str, float]] = None,
     anomaly_thresholds: Optional[Dict[str, Any]] = None,
     min_samples: int = REPORT_MIN_SAMPLES,
+    window_date: Optional[str] = None,
+    generated_at: Optional[int] = None,
+    clock: Optional[int] = None,
+    source: str = "manual",
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """计算一份报告。成功返回 (None, doc)，失败返回 (error, None)。不写库。"""
-    try:
-        bounds = report_period_bounds(period, now=now)
-    except ValueError as exc:
-        return str(exc), None
-    now_ts = int(now if now is not None else datetime.now(SHANGHAI).timestamp())
-    err, window = _query_window(storage, bounds["from_ts"], bounds["to_ts"], now_ts)
+    """计算一份报告。成功返回 (None, doc)。不写库。
+
+    now / as_of 只决定「今天」落在哪一天。generated_at 是实际计算时刻，
+    与 as_of、窗口边界分开。clock 用来裁保留期，默认墙钟，不跟 as_of 走。
+    窗口已解析但查不到数据时，返回 (error, 失败稿)，调用方可以入库。
+    """
+    if source not in ("manual", "scheduled"):
+        source = "manual"
+    clock_ts = int(clock if clock is not None else time.time())
+    gen_ts = int(generated_at if generated_at is not None else clock_ts)
+    bounds_err, bounds = resolve_report_bounds(
+        period, now=now, window_date=window_date, clock=clock_ts
+    )
+    if bounds_err and not bounds:
+        return bounds_err, None
+    if bounds_err:
+        return bounds_err, _failed_report_doc(bounds, bounds_err, gen_ts, source)
+    err, window = _query_window(storage, bounds["from_ts"], bounds["to_ts"], clock_ts)
     if err:
-        return err, None
+        return err, _failed_report_doc(bounds, err, gen_ts, source)
     busy = dict(busy_thresholds or {})
     if not busy:
         from center.storage import DEFAULT_BUSY_THRESHOLDS
@@ -522,7 +695,7 @@ def build_report(
 
     current = _cluster(storage, window, busy)
     compare_err, compare_window = _query_window(
-        storage, bounds["compare_from_ts"], bounds["compare_to_ts"], now_ts
+        storage, bounds["compare_from_ts"], bounds["compare_to_ts"], clock_ts
     )
     previous: Optional[Dict[str, Any]] = None
     compare_note = ""
@@ -690,15 +863,17 @@ def build_report(
     sections.append(head)
 
     overview = _section("2. 总览")
-    rate = (100.0 * online_n / total) if total else None
+    seen = int(current.get("hosts_with_samples") or 0)
+    seen_rate = (100.0 * seen / total) if total else None
     overview["paragraphs"] = [
-        "在线 %d / 共 %d（%s）。离线 %d 台。在线率按生成时刻判定；离线主机不把末次快照当成实时用量。"
+        "窗口在线率 %d / %d（%s）。窗口内至少有一条历史上报即计入；没有单独的在线心跳，采样中断算未上报。"
         % (
-            online_n,
+            seen,
             total,
-            ("%.1f%%" % rate) if rate is not None else "样本不足",
-            len(offline_hosts),
+            ("%.1f%%" % seen_rate) if seen_rate is not None else "样本不足",
         ),
+        "生成时刻在线 %d、离线 %d。闲忙里的「离线」和「基本不用」仍按生成时刻是否在线，不回溯窗口内状态。离线主机不把末次快照当成实时用量。"
+        % (online_n, len(offline_hosts)),
         _delta_sentence(current, previous),
         "Top 风险：" + _top_risk(
             len(offline_hosts),
@@ -709,6 +884,10 @@ def build_report(
     ]
     if compare_note:
         overview["notes"].append(compare_note)
+    if previous and int((previous.get("excluded_samples") or {}).get("count") or 0):
+        overview["notes"].append(
+            "上一周期：" + _exclusion_sentence(previous.get("excluded_samples"))
+        )
     _add_table(
         overview,
         ["指标", "平均", "P95", "最高", "繁忙占比", "样本数"],
@@ -729,6 +908,7 @@ def build_report(
         current.get("rollup_note")
         or "集群汇总为样本加权。",
         "简评里的高负荷 / 偏低只对 CPU 与加速卡使用闲忙阈值；磁盘、内存、load1 单独看。",
+        _exclusion_sentence(current.get("excluded_samples")),
     ]
     _add_table(
         util,
@@ -1028,13 +1208,16 @@ def build_report(
 
     appendix = _section("9. 附录")
     appendix["paragraphs"] = [
-        "集群样本数 %s，有样本主机 %s / %s。生成计算时刻（Asia/Shanghai）%s。"
+        "集群样本数 %s，有样本主机 %s / %s。实际生成时刻（Asia/Shanghai）%s。来源：%s。"
         % (
             current.get("sample_count") or 0,
             current.get("hosts_with_samples") or 0,
             total,
-            _fmt_ts(now_ts),
+            _fmt_ts(gen_ts),
+            _source_label(source),
         ),
+        _exclusion_sentence(current.get("excluded_samples")),
+        "已保存的诊断报告写在 diagnostic_reports，retention_days 只清理 metrics_history，不会删除本报告。",
         "实际查询闭区间（整数秒）：%s～%s。请求半开窗口：%s。"
         % (_fmt_ts(actual_from), _fmt_ts(actual_to_inclusive), bounds["range_text"]),
         "单机读取上限 %d 行。%s"
@@ -1141,8 +1324,16 @@ def build_report(
             "disk_warn": disk_warn,
             "disk_critical": disk_critical,
             "poles": "cpu_and_accel_only",
+            "util_percent_min": 0,
+            "util_percent_max": 100,
+            "online_rate": "window_has_samples",
         },
-        "generated_at": now_ts,
+        "generated_at": gen_ts,
+        "source": source,
+        "status": "ok",
+        "error": None,
+        "excluded_samples": current.get("excluded_samples")
+        or {"count": 0, "by_metric": {}, "hosts": []},
         "sample_count": current.get("sample_count") or 0,
         "history_truncated": bool(current.get("history_truncated")),
         "sections": sections,
@@ -1173,15 +1364,21 @@ def _parse_as_of(raw: Any) -> Tuple[Optional[int], Optional[str]]:
 def handle_report_preview(storage: Storage, query: str = "") -> Tuple[int, Dict[str, Any]]:
     qs = parse_qs(query or "")
     period = ((qs.get("period") or ["day"])[0] or "day").strip()
+    window_date = ((qs.get("window_date") or [None])[0] or "").strip() or None
     as_of, err = _parse_as_of((qs.get("as_of") or [None])[0])
     if err:
         return 400, {"ok": False, "error": err}
-    try:
-        bounds = report_period_bounds(period, now=as_of)
-    except ValueError as exc:
-        return 400, {"ok": False, "error": str(exc)}
-    now_ts = int(as_of if as_of is not None else datetime.now(SHANGHAI).timestamp())
-    win_err, window = _query_window(storage, bounds["from_ts"], bounds["to_ts"], now_ts)
+    clock_ts = int(time.time())
+    bounds_err, bounds = resolve_report_bounds(
+        period, now=as_of, window_date=window_date, clock=clock_ts
+    )
+    if not bounds:
+        return 400, {"ok": False, "error": bounds_err or "无法解析窗口"}
+    win_err, window = _query_window(
+        storage, bounds["from_ts"], bounds["to_ts"], clock_ts
+    )
+    if bounds_err and not win_err:
+        win_err = bounds_err
     return 200, {
         "ok": True,
         "period": bounds["period"],
@@ -1242,7 +1439,16 @@ def handle_generate_report(
     query: str = "",
     busy_thresholds: Optional[Dict[str, float]] = None,
     anomaly_thresholds: Optional[Dict[str, Any]] = None,
+    source: str = "manual",
+    replace: bool = True,
+    generated_at: Optional[int] = None,
+    clock: Optional[int] = None,
 ) -> Tuple[int, Dict[str, Any]]:
+    """生成并按窗口去重入库。HTTP 调用保持 source=manual、replace=True。
+
+    请求体里的 source 不采用，避免页面把报告标成定时。
+    as_of 只选「上一个完整周期」；window_date 指定已结束的那一天/那一周/那一月。
+    """
     data: Dict[str, Any] = {}
     if body:
         try:
@@ -1254,26 +1460,47 @@ def handle_generate_report(
         data = parsed
     qs = parse_qs(query or "")
     period = str(data.get("period") or (qs.get("period") or ["day"])[0] or "day").strip()
+    window_date_raw = data.get("window_date", (qs.get("window_date") or [None])[0])
+    window_date = str(window_date_raw).strip() if window_date_raw else None
     as_of_raw = data.get("as_of", (qs.get("as_of") or [None])[0])
     as_of, err = _parse_as_of(as_of_raw)
     if err:
         return 400, {"ok": False, "error": err}
+    if source not in ("manual", "scheduled"):
+        source = "manual"
     build_err, doc = build_report(
         storage,
         period,
         now=as_of,
         busy_thresholds=busy_thresholds,
         anomaly_thresholds=anomaly_thresholds,
+        window_date=window_date,
+        generated_at=generated_at,
+        clock=clock,
+        source=source,
     )
-    if build_err or not doc:
+    if not doc:
         return 400, {"ok": False, "error": build_err or "无法生成报告"}
     saved = storage.save_diagnostic_report(
         period_type=doc["period"],
         title=doc["title"],
         requested_from_ts=int(doc["requested_from_ts"]),
         requested_to_ts=int(doc["requested_to_ts"]),
-        clamped=bool(doc["clamped"]),
-        markdown=doc["markdown"],
+        clamped=bool(doc.get("clamped")),
+        markdown=doc.get("markdown") or "",
         payload=doc,
+        source=doc.get("source") or source,
+        status=doc.get("status") or "ok",
+        error=doc.get("error"),
+        generated_at=doc.get("generated_at"),
+        replace=bool(replace),
     )
+    if saved.get("action") == "skipped":
+        return 200, {"ok": True, "skipped": True, "report": saved}
+    if doc.get("status") == "failed" or build_err:
+        return 400, {
+            "ok": False,
+            "error": doc.get("error") or build_err or "无法生成报告",
+            "report": saved,
+        }
     return 200, {"ok": True, "report": saved}

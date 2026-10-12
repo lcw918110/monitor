@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.5.0**
+当前版本：**v1.6.0**
 
 运行环境：
 
@@ -24,7 +24,7 @@
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载等排序；主机列优先显示**完整 IP**（部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）
 - **资源组**：在实时监控页创建分组、给主机分配、按组筛选；数据在中心 SQLite，重启保留，**不必升级 Agent**
 - **实时与规格分栏**：主机列表把加速卡型号数量和加速卡使用率、磁盘汇总百分比和磁盘数分成不同列。离线主机不把最后一次快照的数字当成当前利用率
-- **历史保留**：`retention_days`（示例默认 7，可按环境改成更长，例如 40）。超期样本由中心清理；诊断报告若被保留期裁短，会在抬头标明
+- **历史保留**：`retention_days`（示例默认 7，可按环境改成更长，例如 40）。超期样本由中心清理；**已生成的诊断报告不删**。诊断报告若被保留期裁短，会在抬头标明
 - **部署**：中心「客户端部署」页 `/deploy.html` 或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`（唯一产品路径）。笔记本上用 sshpass/scp 装 Agent 的做法已废弃，不要再写进操作步骤
 
 > 批量导入只保留 **Excel/CSV**（已去掉与之重合的「文本清单」入口）。
@@ -82,6 +82,8 @@ chmod +x scripts/*.sh
 
 成功后打开：`http://<中心IP>:8080/`  
 客户端部署页（**推荐装 Agent 的方式**）：`http://<中心IP>:8080/deploy.html`
+
+已有中心升级到带内置诊断调度的版本：在中心机再跑一次 `deploy_center.sh`。它同步代码、保留已有 `config/center.json` 和 `data/`，然后重启服务。`report_schedule` 可以不写，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补。不要删库。Agent 安装方式不变。
 
 非 root 时 Center 默认装到 `~/monitor`，并以守护进程后台运行（不依赖当前终端）。
 
@@ -218,14 +220,14 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/export/hosts.csv` | 导出当前主机快照 |
 | GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表 |
 | GET | `/api/v1/reports/preview?period=day\|week\|month` | 诊断报告时间窗预览（不计算） |
-| POST | `/api/v1/reports/generate` | 生成日/周/月诊断报告并写入 SQLite |
+| POST | `/api/v1/reports/generate` | 生成日/周/月诊断报告；同一窗口覆盖已有一行。正文可带 `window_date` 或 `as_of` |
 | GET | `/api/v1/reports` | 已保存的诊断报告列表 |
 | GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
 | GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页） |
 
-诊断报告与其它监测台接口相同，页面直接访问，不另加 Token。`token` 只在 `POST /api/v1/metrics` 校验 Agent 上报。报告 v1 仅手动生成，没有内置定时任务。口径与空闲阈值见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
+诊断报告与其它监测台接口相同，页面直接访问，不另加 Token。`token` 只在 `POST /api/v1/metrics` 校验 Agent 上报。中心进程按 `report_schedule` 自动生成上一完整周期（默认日报 00:10、周报周一 00:20、月报每月 1 日 00:30，上海时间），错过不补。口径、去重、`generated_at` 与越界样本见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
 
 异常阈值见中心配置中的 `anomaly` 段（示例见 `config/center.example.json`）。
 

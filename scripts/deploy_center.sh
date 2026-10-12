@@ -88,6 +88,12 @@ if [[ ! -f "$CFG" ]]; then
   "offline_seconds": ${OFFLINE_SECONDS},
   "retention_days": 7,
   "cleanup_interval_seconds": 3600,
+  "report_schedule": {
+    "enabled": true,
+    "daily": {"enabled": true, "hour": 0, "minute": 10},
+    "weekly": {"enabled": true, "hour": 0, "minute": 20},
+    "monthly": {"enabled": true, "hour": 0, "minute": 30}
+  },
   "anomaly": {
     "cpu_warn_percent": 80,
     "cpu_critical_percent": 95,

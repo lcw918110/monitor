@@ -87,10 +87,12 @@
     reportPreview: document.getElementById("reportPreview"),
     reportActions: document.getElementById("reportActions"),
     reportWindowHint: document.getElementById("reportWindowHint"),
+    reportWindowDate: document.getElementById("reportWindowDate"),
     btnGenerateReport: document.getElementById("btnGenerateReport"),
   };
   let reportPeriod = "day";
   let activeReportId = null;
+  let activeReport = null;
 
   function fmtPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
@@ -139,7 +141,16 @@
     return m + "分";
   }
 
+  function utilOutOfRange(pct) {
+    if (pct === null || pct === undefined || pct === "") return false;
+    const n = Number(pct);
+    return Number.isNaN(n) || n < 0 || n > 100;
+  }
+
   function bar(pct) {
+    if (utilOutOfRange(pct)) {
+      return '<div class="bar" title="无效"></div>';
+    }
     const v = Math.max(0, Math.min(100, Number(pct) || 0));
     return (
       '<div class="bar" title="' +
@@ -537,6 +548,7 @@
   }
 
   function metricPct(v, warn, crit) {
+    if (utilOutOfRange(v)) return metricSpan("无效", "bad");
     return metricSpan(fmtPct(v), levelHi(v, warn, crit));
   }
 
@@ -1794,10 +1806,47 @@ function renderHosts(hosts) {
     }
   }
 
+  function shanghaiYMD(offsetDays) {
+    const shifted = new Date(Date.now() + 8 * 3600 * 1000 + (offsetDays || 0) * 86400000);
+    return shifted.toISOString().slice(0, 10);
+  }
+
+  function defaultReportWindowDate(period) {
+    if (period === "month") {
+      const today = shanghaiYMD(0).split("-").map(Number);
+      return new Date(Date.UTC(today[0], today[1] - 2, 1)).toISOString().slice(0, 10);
+    }
+    if (period === "week") {
+      const today = shanghaiYMD(0).split("-").map(Number);
+      const utc = new Date(Date.UTC(today[0], today[1] - 1, today[2]));
+      const sinceMon = (utc.getUTCDay() + 6) % 7;
+      const start = new Date(Date.UTC(today[0], today[1] - 1, today[2] - sinceMon - 7));
+      return start.toISOString().slice(0, 10);
+    }
+    return shanghaiYMD(-1);
+  }
+
+  function reportSourceLabel(source) {
+    return source === "scheduled" ? "定时" : "手动";
+  }
+
   function renderReportDocument(report) {
     if (!el.reportPreview) return;
+    activeReport = report || null;
     const sections = (report && report.payload && report.payload.sections) || [];
+    const failed = report && report.status === "failed";
     let html = "<h3>" + escapeHtml(report.title || "使用诊断") + "</h3>";
+    html +=
+      '<p class="muted">' +
+      escapeHtml(reportSourceLabel(report.source)) +
+      " · " +
+      (failed ? "失败" : "成功") +
+      " · 实际生成 " +
+      escapeHtml(fmtReportTime(report.generated_at || report.created_at)) +
+      "</p>";
+    if (failed && report.error) {
+      html += '<p class="empty">失败原因：' + escapeHtml(report.error) + "</p>";
+    }
     if (!sections.length && report.markdown) {
       html += "<pre>" + escapeHtml(report.markdown) + "</pre>";
     }
@@ -1833,12 +1882,26 @@ function renderHosts(hosts) {
     if (el.reportActions) {
       const id = report.id;
       el.reportActions.innerHTML =
+        '<button type="button" class="btn" id="btnRegenReport">重新生成</button>' +
         '<a class="link" href="/api/v1/reports/' +
         id +
         '/markdown">下载 Markdown</a>' +
         '<a class="link" href="/api/v1/reports/' +
         id +
         '/rankings.csv">下载排行 CSV</a>';
+      const regen = document.getElementById("btnRegenReport");
+      if (regen) {
+        regen.addEventListener("click", () => {
+          const from = Number(report.requested_from_ts);
+          const windowDate = Number.isNaN(from)
+            ? el.reportWindowDate && el.reportWindowDate.value
+            : new Date(from * 1000 + 8 * 3600 * 1000).toISOString().slice(0, 10);
+          generateReport({
+            period: report.period_type || reportPeriod,
+            windowDate: windowDate,
+          });
+        });
+      }
     }
   }
 
@@ -1853,6 +1916,16 @@ function renderHosts(hosts) {
       .map((r) => {
         const active = Number(r.id) === Number(activeReportId) ? " active" : "";
         const clamp = r.clamped ? " · 已按保留期裁剪" : "";
+        const failed = r.status === "failed";
+        const badge =
+          '<span class="report-badge' +
+          (failed ? " bad" : "") +
+          '">' +
+          escapeHtml(reportSourceLabel(r.source)) +
+          " · " +
+          (failed ? "失败" : "成功") +
+          "</span>";
+        const reason = failed && r.error ? " · " + r.error : "";
         return (
           '<button type="button" class="report-item' +
           active +
@@ -1860,9 +1933,12 @@ function renderHosts(hosts) {
           r.id +
           '"><strong>' +
           escapeHtml(r.title || r.period_type || "报告") +
-          '</strong><span class="muted">保存于 ' +
-          escapeHtml(fmtReportTime(r.created_at)) +
+          "</strong>" +
+          badge +
+          '<span class="muted">生成于 ' +
+          escapeHtml(fmtReportTime(r.generated_at || r.created_at)) +
           clamp +
+          escapeHtml(reason) +
           "</span></button>"
         );
       })
@@ -1910,10 +1986,15 @@ function renderHosts(hosts) {
 
   async function refreshReportWindowHint() {
     if (!el.reportWindowHint) return;
+    const date =
+      el.reportWindowDate && el.reportWindowDate.value
+        ? el.reportWindowDate.value
+        : "";
     try {
-      const res = await fetch(
-        "/api/v1/reports/preview?period=" + encodeURIComponent(reportPeriod)
-      );
+      let url =
+        "/api/v1/reports/preview?period=" + encodeURIComponent(reportPeriod);
+      if (date) url += "&window_date=" + encodeURIComponent(date);
+      const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error((data && data.error) || "窗口预览失败");
       let text = (data.label || "") + " " + (data.range_text || "");
@@ -1925,24 +2006,37 @@ function renderHosts(hosts) {
     }
   }
 
-  async function generateReport() {
+  async function generateReport(opts) {
     if (!el.btnGenerateReport) return;
+    const period = (opts && opts.period) || reportPeriod;
+    const windowDate =
+      (opts && opts.windowDate) ||
+      (el.reportWindowDate && el.reportWindowDate.value) ||
+      "";
     el.btnGenerateReport.disabled = true;
+    const regen = document.getElementById("btnRegenReport");
+    if (regen) regen.disabled = true;
     if (el.reportPreview) {
       el.reportPreview.innerHTML = "<p class=\"muted\">正在按原始历史样本计算并入库…</p>";
     }
     try {
+      const body = { period: period };
+      if (windowDate) body.window_date = windowDate;
       const res = await fetch("/api/v1/reports/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ period: reportPeriod }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error((data && data.error) || "生成失败");
-      const report = data.report || {};
-      activeReportId = report.id;
-      await loadReportList();
-      if (report.id) await loadReport(report.id);
+      const report = (data && data.report) || {};
+      if (report.id) {
+        activeReportId = report.id;
+        await loadReportList();
+        await loadReport(report.id);
+      }
+      if (!res.ok && !report.id) {
+        throw new Error((data && data.error) || "生成失败");
+      }
     } catch (e) {
       if (el.reportPreview) {
         el.reportPreview.innerHTML =
@@ -1998,11 +2092,18 @@ function renderHosts(hosts) {
       Array.from(document.querySelectorAll("[data-report-period]")).forEach((b) => {
         b.classList.toggle("active", b === btn);
       });
+      if (el.reportWindowDate) {
+        el.reportWindowDate.value = defaultReportWindowDate(reportPeriod);
+      }
       refreshReportWindowHint();
     });
   });
+  if (el.reportWindowDate) {
+    el.reportWindowDate.value = defaultReportWindowDate(reportPeriod);
+    el.reportWindowDate.addEventListener("change", refreshReportWindowHint);
+  }
   if (el.btnGenerateReport) {
-    el.btnGenerateReport.addEventListener("click", generateReport);
+    el.btnGenerateReport.addEventListener("click", () => generateReport());
   }
   window.addEventListener("hashchange", () => {
     const name = tabFromHash();

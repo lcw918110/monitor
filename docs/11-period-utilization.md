@@ -124,6 +124,8 @@ curl -s -o period-stats.csv "http://127.0.0.1:8080/api/v1/export/period-stats.cs
 
 日/周/月使用诊断报告复用本节的样本加权与繁忙阈值，另外规定空闲线为 5%，见 `docs/13-diagnostic-reports.md`。诊断报告不改变本接口的默认查询上限。
 
+CPU / 内存 / 磁盘 / 加速卡利用率若小于 0 或大于 100（或非有限数），不进入 avg / P95 / 繁忙占比。单机与集群响应带 `excluded_samples`（条数和分指标计数）。这不改变合法样本的口径。
+
 ## 存储
 
 `metrics_history` 压缩字段在原有趋势键上**只增不删**：`net_rated_mbps`、`net_rx_percent`、`net_tx_percent`、`mem_total_mb`、`disk_total_gb`。不写入网卡列表，避免撑库。未改 Agent 昇腾解析。

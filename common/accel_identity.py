@@ -247,7 +247,11 @@ def accel_utils(cards: Iterable[Dict[str, Any]]) -> List[float]:
         try:
             if card.get("util_percent") is None:
                 continue
-            vals.append(float(card["util_percent"]))
+            num = float(card["util_percent"])
         except (TypeError, ValueError):
             continue
+        # 与诊断报告相同：0～100 以外不参与平均（NaN 的自比较为假）
+        if num != num or num < 0.0 or num > 100.0:
+            continue
+        vals.append(num)
     return vals

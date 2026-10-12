@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.5.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.6.0</p>
       </div>
     </div>
     <div class="top-meta">
@@ -138,10 +138,14 @@
         <button type="button" class="period-btn active" data-report-period="day">日报</button>
         <button type="button" class="period-btn" data-report-period="week">周报</button>
         <button type="button" class="period-btn" data-report-period="month">月报</button>
+        <label class="report-date" for="reportWindowDate">窗口日期
+          <input type="date" id="reportWindowDate" />
+        </label>
         <button type="button" class="btn" id="btnGenerateReport">生成并保存</button>
         <span class="muted" id="reportWindowHint"></span>
       </div>
     </section>
+    <p class="report-schedule-note muted" id="reportScheduleNote">中心按配置自动生成上一完整周期（默认每日 00:10、每周一 00:20、每月 1 日 00:30，上海时间）。错过不补。同一窗口只保留一份，重新生成会覆盖。</p>
     <div class="report-layout">
       <section class="panel">
         <div class="panel-head">

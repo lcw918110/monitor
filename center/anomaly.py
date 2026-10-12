@@ -42,6 +42,15 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
+def _percent_out_of_range(value: Optional[float]) -> bool:
+    """利用率只接受 0～100%。NaN 与越界都不拿来和阈值比。"""
+    if value is None:
+        return False
+    if value != value:
+        return True
+    return value < 0.0 or value > 100.0
+
+
 def _disk_alert(system: Dict[str, Any]) -> Tuple[Optional[float], str]:
     """告警用磁盘利用率：优先 disks[] 中的最大值（带挂载路径），否则 top-level disk_percent。"""
     worst: Optional[float] = None
@@ -144,7 +153,18 @@ def judge_host_payload(
     load1 = _num(system.get("load1"))
     cores = _num(system.get("cpu_count")) or 1
 
-    if cpu is not None:
+    if _percent_out_of_range(cpu):
+        cpu_score = max(cpu_score, 1)
+        findings.append(
+            {
+                "resource": "cpu",
+                "level": "warn",
+                "code": "cpu_util_invalid",
+                "message": "CPU 利用率超出 0～100%%：%.1f%%，不计入高低负荷" % cpu,
+                "value": cpu,
+            }
+        )
+    elif cpu is not None:
         crit = _num(th["cpu_critical_percent"]) or 95
         warn = _num(th["cpu_warn_percent"]) or 80
         if cpu >= crit:
@@ -186,7 +206,18 @@ def judge_host_payload(
             )
 
     mem = _num(system.get("mem_percent"))
-    if mem is not None:
+    if _percent_out_of_range(mem):
+        sys_score = max(sys_score, 1)
+        findings.append(
+            {
+                "resource": "mem",
+                "level": "warn",
+                "code": "mem_util_invalid",
+                "message": "内存利用率超出 0～100%%：%.1f%%，不计入高低负荷" % mem,
+                "value": mem,
+            }
+        )
+    elif mem is not None:
         m_crit = _num(th["mem_critical_percent"]) or 95
         m_warn = _num(th["mem_warn_percent"]) or 85
         if mem >= m_crit:
@@ -213,7 +244,19 @@ def judge_host_payload(
             )
 
     disk, disk_mount = _disk_alert(system)
-    if disk is not None:
+    if _percent_out_of_range(disk):
+        sys_score = max(sys_score, 1)
+        findings.append(
+            {
+                "resource": "disk",
+                "level": "warn",
+                "code": "disk_util_invalid",
+                "message": "磁盘利用率超出 0～100%%：%.1f%%，不计入高低负荷" % disk,
+                "value": disk,
+                "mount": disk_mount or None,
+            }
+        )
+    elif disk is not None:
         d_crit = _num(th["disk_critical_percent"]) or 95
         d_warn = _num(th["disk_warn_percent"]) or 85
         prefix = ("磁盘 %s " % disk_mount) if disk_mount else "磁盘"
@@ -275,7 +318,19 @@ def judge_host_payload(
             )
 
         util = _num(n.get("util_percent"))
-        if util is not None and util >= util_warn:
+        if _percent_out_of_range(util):
+            score = max(score, 1)
+            card_findings.append(
+                {
+                    "resource": "accel",
+                    "level": "warn",
+                    "code": "accel_util_invalid",
+                    "message": "%s#%s 利用率超出 0～100%%：%.1f%%，已忽略"
+                    % (vendor, idx, util),
+                    "value": util,
+                }
+            )
+        elif util is not None and util >= util_warn:
             score = max(score, 1)
             card_findings.append(
                 {
