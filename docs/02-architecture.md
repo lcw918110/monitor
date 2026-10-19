@@ -60,13 +60,13 @@
 | AMD GPU 采集 | `agent/metrics/amd.py` | `rocm-smi` 优先，`amd-smi` 回退 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
-| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/deploy_ssh.sh` 端口/重试 |
+| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/unit_env.sh` 重写 systemd 单元时保留自定义 `Environment=`；`scripts/lib/deploy_ssh.sh` 端口/重试 |
 
 ---
 
 ## 4. 数据与容量（概要）
 
-- **hosts**：每机最新完整 payload  
+- **hosts**：每机最新完整 payload。可空列 `hidden` / `hidden_at` / `asset_meta`（手工资产 JSON）。NULL 视为未隐藏。迁移只加列，不重写 `metrics_history`
 - **metrics_history**：压缩历史点，保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘
 - **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组

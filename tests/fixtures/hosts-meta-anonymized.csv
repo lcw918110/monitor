@@ -1,0 +1,5 @@
+分类,名称,负责人,用途,IP地址,硬盘/型号,内存,CPU,宿主机,GPU,备注,是否资源监控,用户名,密码
+虚拟机,vm-demo-a,甲,开发环境,10.1.0.11,216.22 GB,16 GB,8,10.1.0.2,,示例备注,是,root,CREDENTIAL-SHOULD-NOT-LEAK-9f3a
+固定资产,gpu-demo-b,乙,模型验证,10.1.0.64,"示例服务器 EIS-2208、资产号 DEMO-001",64 GB,16,,两张示例加速卡,,是,admin,CREDENTIAL-SHOULD-NOT-LEAK-9f3a
+虚拟机,no-such-host,丙,未接入,10.9.9.9,100 GB,8 GB,4,,,,否,user,CREDENTIAL-SHOULD-NOT-LEAK-9f3a
+,缺IP的一行,丁,跳过,,500G,4 GB,2,,,,否,user,CREDENTIAL-SHOULD-NOT-LEAK-9f3a

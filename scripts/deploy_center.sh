@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/unit_env.sh
+source "$ROOT/scripts/lib/unit_env.sh"
 INSTALL_DIR="${INSTALL_DIR:-/opt/monitor}"
 PORT="${PORT:-8080}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
@@ -129,10 +131,8 @@ chmod +x "$INSTALL_DIR/run/start_center.sh"
 UNIT_INSTALLED=0
 if [[ "$NO_SYSTEMD" -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
   UNIT=/etc/systemd/system/monitor-center.service
-  LD_ENV_LINE=""
-  if [[ -n "${PY_LD_LIBRARY_PATH:-}" ]]; then
-    LD_ENV_LINE="Environment=LD_LIBRARY_PATH=${PY_LD_LIBRARY_PATH}"
-  fi
+  # 先读已有单元，保留 PATH 等自定义 Environment=，再覆盖文件。
+  ENV_BLOCK="$(collect_preserved_environment "$UNIT" "$INSTALL_DIR" "${PY_LD_LIBRARY_PATH:-}")"
   cat > "$UNIT" <<EOF
 [Unit]
 Description=简易多机监控中心端
@@ -141,8 +141,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-Environment=PYTHONPATH=$INSTALL_DIR
-${LD_ENV_LINE}
+${ENV_BLOCK}
 ExecStart=$PY -m center --config $CFG
 Restart=on-failure
 RestartSec=3

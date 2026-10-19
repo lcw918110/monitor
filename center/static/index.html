@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.6.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.7.0</p>
       </div>
     </div>
     <div class="top-meta">
@@ -39,7 +39,7 @@
         <div class="panel-head">
           <h2>主机资源</h2>
           <div class="filters">
-            <input id="filterQ" type="search" placeholder="搜索主机 / 地址..." />
+            <input id="filterQ" type="search" placeholder="搜索主机 / 地址 / 负责人 / 用途..." />
             <select id="filterType">
               <option value="">全部类型</option>
               <option value="cpu">CPU</option>
@@ -57,7 +57,13 @@
               <option value="">全部资源组</option>
               <option value="__none__">未分组</option>
             </select>
+            <select id="filterOwner">
+              <option value="">全部负责人</option>
+              <option value="__none__">未填负责人</option>
+            </select>
             <button type="button" id="btnGroups" class="btn btn-sm">管理分组</button>
+            <button type="button" id="btnHidden" class="btn btn-sm">已隐藏</button>
+            <button type="button" id="btnImport" class="btn btn-sm">导入资产</button>
             <span class="muted" id="hostCount"></span>
           </div>
         </div>
@@ -69,6 +75,19 @@
           </div>
           <div class="group-chip-list" id="groupList"></div>
         </div>
+        <div class="group-panel" id="hiddenPanel" hidden>
+          <p class="muted">已隐藏的主机不计入在线/离线统计，也不进入之后的诊断报告。历史仍在，可恢复。</p>
+          <div id="hiddenList"><p class="muted">加载中…</p></div>
+        </div>
+        <div class="group-panel" id="importPanel" hidden>
+          <div class="group-panel-row">
+            <input id="importFile" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            <button type="button" id="btnImportPreview" class="btn btn-sm">预览匹配</button>
+            <button type="button" id="btnImportApply" class="btn btn-sm" disabled>写入匹配行</button>
+            <span class="muted">按 IP 匹配已有主机。用户名、密码列会被忽略，不会入库。</span>
+          </div>
+          <div id="importResult"></div>
+        </div>
         <div class="table-wrap">
           <table id="hostTable">
             <thead>
@@ -77,6 +96,8 @@
                 <th class="sortable" data-sort="status">资源判定</th>
                 <th class="sortable" data-sort="host">主机 / 地址</th>
                 <th class="sortable" data-sort="group">资源组</th>
+                <th class="sortable" data-sort="owner">负责人</th>
+                <th class="sortable" data-sort="purpose">用途</th>
                 <th class="sortable" data-sort="type">类型</th>
                 <th class="sortable" data-sort="cpu_percent">CPU%</th>
                 <th class="sortable" data-sort="mem_percent">内存%</th>

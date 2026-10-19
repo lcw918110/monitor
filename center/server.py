@@ -159,7 +159,9 @@ def make_handler(
             path = unquote(parsed.path)
 
             if path == "/api/v1/hosts":
-                code, payload = api_mod.handle_hosts_list(storage, thresholds=thresholds)
+                code, payload = api_mod.handle_hosts_list(
+                    storage, thresholds=thresholds, query=parsed.query
+                )
                 self._send_json(code, payload)
                 return
 
@@ -465,15 +467,39 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
-            if path.startswith("/api/v1/hosts/") and path.endswith("/group"):
+            if path == "/api/v1/hosts/meta/import":
+                code, payload = api_mod.handle_host_meta_import(
+                    storage, body, query=parsed.query
+                )
+                self._send_json(code, payload)
+                return
+
+            if path.startswith("/api/v1/hosts/") and (
+                path.endswith("/group")
+                or path.endswith("/meta")
+                or path.endswith("/hide")
+                or path.endswith("/restore")
+            ):
                 rest = path[len("/api/v1/hosts/") :].strip("/")
                 parts = rest.split("/") if rest else []
-                if len(parts) != 2 or parts[1] != "group" or not parts[0]:
+                if len(parts) != 2 or not parts[0] or ".." in parts[0]:
                     self._send_json(400, {"ok": False, "error": "非法 host_id"})
                     return
-                code, payload = api_mod.handle_host_assign_group(
-                    storage, parts[0], body
-                )
+                host_id, action = parts
+                if action == "group":
+                    code, payload = api_mod.handle_host_assign_group(
+                        storage, host_id, body
+                    )
+                elif action == "meta":
+                    code, payload = api_mod.handle_host_meta_update(
+                        storage, host_id, body
+                    )
+                elif action == "hide":
+                    code, payload = api_mod.handle_host_hide(
+                        storage, host_id, body, deploy_store=dstore
+                    )
+                else:
+                    code, payload = api_mod.handle_host_restore(storage, host_id)
                 self._send_json(code, payload)
                 return
 
@@ -555,6 +581,20 @@ def make_handler(
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path.startswith("/api/v1/hosts/"):
+                rest = path[len("/api/v1/hosts/") :].strip("/")
+                parts = rest.split("/") if rest else []
+                if len(parts) != 1 or not parts[0] or ".." in parts[0]:
+                    self._send_json(400, {"ok": False, "error": "非法 host_id"})
+                    return
+                code, payload = api_mod.handle_host_delete(
+                    storage,
+                    parts[0],
+                    query=parsed.query,
+                    deploy_store=dstore,
+                )
+                self._send_json(code, payload)
+                return
             if path.startswith("/api/v1/groups/"):
                 raw_id = path[len("/api/v1/groups/") :].strip("/")
                 try:

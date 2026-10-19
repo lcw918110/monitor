@@ -85,7 +85,7 @@ GET /api/v1/hosts/{id}/history?from_ts=...&to_ts=...&limit=240
 
 ## 集群汇总口径（样本加权）
 
-**合并所有主机在窗口内的原始样本后再算 avg / p95 / busy_ratio**；min/max 取全局最低/最高。
+**合并未隐藏主机在窗口内的原始样本后再算 avg / p95 / busy_ratio**；min/max 取全局最低/最高。已隐藏主机不进入 `GET /api/v1/period-stats`。单机 `period-stats` 仍可按 id 读取，包括已隐藏的。各主机行带手工 `owner` / `purpose`。
 
 因此上报更密、在线更久的主机权重大。若改成「先按机平均再对主机等权平均」，两台机（3 个 20% 点 vs 1 个 80% 点）会得到 50% 而不是 35%。本实现取 35%。
 

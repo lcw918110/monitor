@@ -173,11 +173,22 @@ def handle_metrics_post(
     return 200, {"ok": True}
 
 
+def _query_flag(qs: Dict[str, List[str]], key: str) -> bool:
+    raw = (qs.get(key) or [""])[0]
+    return str(raw).strip().lower() in ("1", "true", "yes")
+
+
 def handle_hosts_list(
     storage: Storage,
     thresholds: Optional[Dict[str, Any]] = None,
+    query: str = "",
 ) -> Tuple[int, Dict[str, Any]]:
-    hosts = storage.list_hosts()
+    qs = parse_qs(query or "")
+    hidden_only = _query_flag(qs, "hidden")
+    include_hidden = _query_flag(qs, "include_hidden")
+    hosts = storage.list_hosts(
+        include_hidden=include_hidden, hidden_only=hidden_only
+    )
     rank = {"critical": 0, "warn": 1, "unknown": 2, "normal": 3}
     for h in hosts:
         detail = storage.get_host(h["host_id"])
@@ -421,11 +432,29 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         "net_rx_mbps",
         "net_tx_mbps",
         "net_rated_mbps",
+        "owner",
+        "purpose",
+        "asset_name",
+        "asset_cpu",
+        "asset_memory",
+        "asset_disk",
+        "asset_gpu",
+        "asset_model",
+        "asset_notes",
     ]
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        asset = row.get("asset") or {}
+        flat = dict(row)
+        flat["asset_name"] = asset.get("name") or ""
+        flat["asset_cpu"] = asset.get("cpu") or ""
+        flat["asset_memory"] = asset.get("memory") or ""
+        flat["asset_disk"] = asset.get("disk") or ""
+        flat["asset_gpu"] = asset.get("gpu") or ""
+        flat["asset_model"] = asset.get("model") or ""
+        flat["asset_notes"] = asset.get("notes") or ""
+        writer.writerow(flat)
     return 200, buf.getvalue()
 
 
@@ -493,3 +522,147 @@ def handle_host_assign_group(
         code = 404 if err in ("主机不存在", "资源组不存在") else 400
         return code, {"ok": False, "error": err}
     return 200, {"ok": True, **(info or {})}
+
+
+def _parse_json_object(body: bytes) -> Tuple[Optional[str], Dict[str, Any]]:
+    if not body:
+        return None, {}
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "请求体必须是合法 JSON", {}
+    if not isinstance(data, dict):
+        return "JSON 根节点必须是对象", {}
+    return None, data
+
+
+def _linked_deploy_targets(deploy_store: Any, host: Dict[str, Any]) -> List[int]:
+    if deploy_store is None or not host:
+        return []
+    from center.hostmeta import target_matches_host
+
+    removed: List[int] = []
+    try:
+        targets = deploy_store.list_targets()
+    except Exception:  # noqa: BLE001
+        return []
+    for target in targets:
+        if not target_matches_host(host, target):
+            continue
+        try:
+            tid = int(target.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if deploy_store.delete_target(tid):
+            removed.append(tid)
+    return removed
+
+
+def handle_host_meta_update(
+    storage: Storage, host_id: str, body: bytes
+) -> Tuple[int, Dict[str, Any]]:
+    from center.hostmeta import sanitize_asset_patch
+
+    err, data = _parse_json_object(body)
+    if err:
+        return _bad_request(err)
+    err, patch = sanitize_asset_patch(data, allow_clear=True)
+    if err:
+        return _bad_request(err)
+    if not patch:
+        return _bad_request("没有可更新的资产字段")
+    err, asset = storage.update_host_asset(host_id, patch)
+    if err:
+        code = 404 if err == "主机不存在" else 400
+        return code, {"ok": False, "error": err}
+    return 200, {"ok": True, "host_id": host_id, "asset": asset}
+
+
+def handle_host_hide(
+    storage: Storage,
+    host_id: str,
+    body: bytes,
+    deploy_store: Any = None,
+) -> Tuple[int, Dict[str, Any]]:
+    err, data = _parse_json_object(body)
+    if err:
+        return _bad_request(err)
+    host = storage.get_host(host_id)
+    if not host:
+        return 404, {"ok": False, "error": "主机不存在"}
+    err, info = storage.set_host_hidden(host_id, True)
+    if err:
+        return 404, {"ok": False, "error": err}
+    removed: List[int] = []
+    if data.get("remove_deploy_target"):
+        removed = _linked_deploy_targets(deploy_store, host)
+    return 200, {"ok": True, **(info or {}), "removed_deploy_targets": removed}
+
+
+def handle_host_restore(storage: Storage, host_id: str) -> Tuple[int, Dict[str, Any]]:
+    err, info = storage.set_host_hidden(host_id, False)
+    if err:
+        code = 404 if err == "主机不存在" else 400
+        return code, {"ok": False, "error": err}
+    return 200, {"ok": True, **(info or {})}
+
+
+def handle_host_delete(
+    storage: Storage,
+    host_id: str,
+    query: str = "",
+    deploy_store: Any = None,
+) -> Tuple[int, Dict[str, Any]]:
+    qs = parse_qs(query or "")
+    confirm = (qs.get("confirm") or [""])[0].strip().lower()
+    if confirm != "delete":
+        return 400, {
+            "ok": False,
+            "error": "硬删除需要查询参数 confirm=delete",
+        }
+    host = storage.get_host(host_id)
+    if not host:
+        return 404, {"ok": False, "error": "主机不存在"}
+    removed: List[int] = []
+    if _query_flag(qs, "remove_deploy_target"):
+        removed = _linked_deploy_targets(deploy_store, host)
+    err, info = storage.purge_host(host_id)
+    if err:
+        return 404, {"ok": False, "error": err}
+    return 200, {"ok": True, **(info or {}), "removed_deploy_targets": removed}
+
+
+def handle_host_meta_import(
+    storage: Storage,
+    body: bytes,
+    query: str = "",
+) -> Tuple[int, Dict[str, Any]]:
+    from center.hostmeta import decode_import_body, iter_import_patches, plan_import
+
+    qs = parse_qs(query or "")
+    err, rows, body_apply = decode_import_body(body)
+    if err:
+        return _bad_request(err)
+    apply = _query_flag(qs, "apply") or body_apply
+    hosts = storage.list_hosts(include_hidden=True)
+    err, plan = plan_import(hosts, rows)
+    if err:
+        payload = {"ok": False, "error": err}
+        payload.update(plan or {})
+        return 400, payload
+    result: Dict[str, Any] = {
+        "ok": True,
+        "apply": bool(apply),
+        "ignored_columns": plan.get("ignored_columns") or [],
+        "matched": plan.get("matched") or [],
+        "unmatched": plan.get("unmatched") or [],
+        "ambiguous": plan.get("ambiguous") or [],
+        "skipped": plan.get("skipped") or [],
+        "summary": plan.get("summary") or {},
+    }
+    if apply:
+        applied = storage.apply_asset_patches(list(iter_import_patches(plan)))
+        result["applied"] = applied
+        result["summary"] = dict(result["summary"])
+        result["summary"]["updated"] = len(applied.get("updated") or [])
+    return 200, result

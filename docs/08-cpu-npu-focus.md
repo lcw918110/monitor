@@ -46,7 +46,7 @@
 - 单机：`GET /api/v1/hosts/{id}/period-stats?minutes=120`（仍可用）；亦可 `from_ts`/`to_ts`
 - 集群：`GET /api/v1/period-stats?minutes=120`
 - UI：监测台顶部页签 **「实时监控」** / **「时段统计」** / **「使用诊断」**。时段页含时间窗、繁忙阈值、集群汇总、各主机表与单机趋势；可导出 CSV。实时页的离线主机不显示末次快照利用率。使用诊断见 `docs/13-diagnostic-reports.md`（中心按时生成，也可按窗口补生成；结果入库）。
-- 主机列表：完整 IP、列头排序、资源组筛选；加速卡列是型号与数量（`accel_summary`），旁边单独一列使用率。
+- 主机列表：完整 IP、列头排序、资源组筛选、负责人 / 用途列（可排序，可按负责人筛选）。加速卡列是型号与数量（`accel_summary`），旁边单独一列使用率。详情里手工资产和采集规格并排，采集不覆盖手工文字。已隐藏主机不在列表和统计里。
 - 历史保留 `retention_days` 可配。诊断月报需要足够长的保留期，不够时报告抬头写明裁剪。清理不删除已生成的诊断报告。
 
 ## 自动化部署行为
@@ -60,7 +60,7 @@
 
 1. 同步代码到安装目录  
 2. 若不存在则生成 `center.json`（含 anomaly 阈值）  
-3. root + systemd → 安装 `monitor-center.service` 并 enable  
+3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已有中心更稳妥的做法是 `scripts/lib/sync_tree.sh` 同步代码后重启，而不是重写单元。
 4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）  
 5. 轮询 `/api/v1/health` 直至成功  
 6. 同步后校验 `$INSTALL_DIR/agent/__init__.py`（中心树必须带 agent 包，供后续打包下发）  

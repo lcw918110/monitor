@@ -11,6 +11,12 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from center.hostaddr import normalize_ip, resolve_host_address
+from center.hostmeta import (
+    collected_hardware,
+    dump_asset_meta,
+    host_match_ips,
+    parse_asset_meta,
+)
 from common.accel_identity import (
     accel_utils,
     cards_from_payload,
@@ -238,6 +244,14 @@ class Storage:
                 }
                 if "last_remote_ip" not in cols:
                     conn.execute("ALTER TABLE hosts ADD COLUMN last_remote_ip TEXT")
+                # 不加 NOT NULL DEFAULT：SQLite 3.37 之前非空默认值会重写整表。
+                # NULL 表示未隐藏。只改 hosts，不动 metrics_history。
+                if "hidden" not in cols:
+                    conn.execute("ALTER TABLE hosts ADD COLUMN hidden INTEGER")
+                if "hidden_at" not in cols:
+                    conn.execute("ALTER TABLE hosts ADD COLUMN hidden_at INTEGER")
+                if "asset_meta" not in cols:
+                    conn.execute("ALTER TABLE hosts ADD COLUMN asset_meta TEXT")
                 # 诊断报告列只做加法。不改 metrics_history，避免在大库上重写历史上报。
                 diag_cols = {
                     r[1]
@@ -481,9 +495,11 @@ class Storage:
                 rows = conn.execute(
                     """
                     SELECT g.id, g.name, g.created_at,
-                           COUNT(m.host_id) AS host_count
+                           COUNT(h.host_id) AS host_count
                     FROM resource_groups g
                     LEFT JOIN host_group_members m ON m.group_id = g.id
+                    LEFT JOIN hosts h
+                      ON h.host_id = m.host_id AND COALESCE(h.hidden, 0) = 0
                     GROUP BY g.id
                     ORDER BY g.name COLLATE NOCASE
                     """
@@ -663,7 +679,63 @@ class Storage:
             ),
         }
 
-    def list_hosts(self) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _row_flag(row: sqlite3.Row, key: str, default: int = 0) -> int:
+        try:
+            value = row[key]
+        except (IndexError, KeyError):
+            return default
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _decorate_host_item(
+        self,
+        item: Dict[str, Any],
+        row: sqlite3.Row,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        asset = parse_asset_meta(self._row_text(row, "asset_meta"))
+        hidden = self._row_flag(row, "hidden") == 1
+        hidden_at = self._row_optional_int(row, "hidden_at")
+        item["hidden"] = hidden
+        item["hidden_at"] = hidden_at
+        item["asset"] = asset
+        item["owner"] = asset.get("owner") or ""
+        item["purpose"] = asset.get("purpose") or ""
+        item["hardware"] = collected_hardware(payload)
+        item["ips"] = host_match_ips(item, payload)
+        return item
+
+    @staticmethod
+    def _row_text(row: sqlite3.Row, key: str) -> str:
+        try:
+            value = row[key]
+        except (IndexError, KeyError):
+            return ""
+        return "" if value is None else str(value)
+
+    @staticmethod
+    def _row_optional_int(row: sqlite3.Row, key: str) -> Optional[int]:
+        try:
+            value = row[key]
+        except (IndexError, KeyError):
+            return None
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def list_hosts(
+        self,
+        include_hidden: bool = False,
+        hidden_only: bool = False,
+    ) -> List[Dict[str, Any]]:
         now = int(time.time())
         with self._lock:
             conn = self._connect()
@@ -671,7 +743,7 @@ class Storage:
                 rows = conn.execute(
                     """
                     SELECT host_id, hostname, host_type, last_seen, last_payload,
-                           last_remote_ip
+                           last_remote_ip, hidden, hidden_at, asset_meta
                     FROM hosts ORDER BY host_id
                     """
                 ).fetchall()
@@ -682,6 +754,11 @@ class Storage:
 
         result: List[Dict[str, Any]] = []
         for row in rows:
+            hidden = self._row_flag(row, "hidden") == 1
+            if hidden_only and not hidden:
+                continue
+            if hidden and not include_hidden and not hidden_only:
+                continue
             payload = json.loads(row["last_payload"])
             item = {
                 "host_id": row["host_id"],
@@ -699,6 +776,7 @@ class Storage:
                 group_map=group_map,
                 remote_ip=row["last_remote_ip"],
             )
+            self._decorate_host_item(item, row, payload)
             result.append(item)
         return result
 
@@ -709,7 +787,7 @@ class Storage:
                 row = conn.execute(
                     """
                     SELECT host_id, hostname, host_type, last_seen, last_payload,
-                           created_at, last_remote_ip
+                           created_at, last_remote_ip, hidden, hidden_at, asset_meta
                     FROM hosts WHERE host_id=?
                     """,
                     (host_id,),
@@ -742,7 +820,118 @@ class Storage:
             group_map=group_map,
             remote_ip=row["last_remote_ip"],
         )
+        self._decorate_host_item(item, row, payload)
         return item
+
+    def update_host_asset(
+        self, host_id: str, patch: Dict[str, str]
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """合并手工资产字段。patch 里的空字符串会清空。不上报路径调用。"""
+        hid = str(host_id or "").strip()
+        if not hid:
+            return "host_id 不能为空", None
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT asset_meta FROM hosts WHERE host_id=?", (hid,)
+                ).fetchone()
+                if not row:
+                    return "主机不存在", None
+                asset = parse_asset_meta(row["asset_meta"])
+                for key, value in patch.items():
+                    if key in asset:
+                        asset[key] = value
+                conn.execute(
+                    "UPDATE hosts SET asset_meta=? WHERE host_id=?",
+                    (dump_asset_meta(asset), hid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return None, asset
+
+    def apply_asset_patches(
+        self, patches: List[Tuple[str, Dict[str, str]]]
+    ) -> Dict[str, Any]:
+        """按顺序合并。同一 host_id 后面的补丁覆盖前面的。不新建主机。"""
+        updated: List[str] = []
+        missing: List[str] = []
+        with self._lock:
+            conn = self._connect()
+            try:
+                for host_id, patch in patches:
+                    hid = str(host_id or "").strip()
+                    if not hid or not patch:
+                        continue
+                    row = conn.execute(
+                        "SELECT asset_meta FROM hosts WHERE host_id=?", (hid,)
+                    ).fetchone()
+                    if not row:
+                        missing.append(hid)
+                        continue
+                    asset = parse_asset_meta(row["asset_meta"])
+                    for key, value in patch.items():
+                        if key in asset and str(value or "").strip():
+                            asset[key] = str(value).strip()
+                    conn.execute(
+                        "UPDATE hosts SET asset_meta=? WHERE host_id=?",
+                        (dump_asset_meta(asset), hid),
+                    )
+                    updated.append(hid)
+                conn.commit()
+            finally:
+                conn.close()
+        return {"updated": updated, "missing": missing}
+
+    def set_host_hidden(
+        self, host_id: str, hidden: bool
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        hid = str(host_id or "").strip()
+        if not hid:
+            return "host_id 不能为空", None
+        now = int(time.time())
+        flag = 1 if hidden else 0
+        hidden_at: Optional[int] = now if hidden else None
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE hosts SET hidden=?, hidden_at=? WHERE host_id=?",
+                    (flag, hidden_at, hid),
+                )
+                conn.commit()
+                if cur.rowcount <= 0:
+                    return "主机不存在", None
+            finally:
+                conn.close()
+        return None, {"host_id": hid, "hidden": bool(hidden), "hidden_at": hidden_at}
+
+    def purge_host(self, host_id: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """删主机行、历史上报和分组关系。调用方必须先确认。"""
+        hid = str(host_id or "").strip()
+        if not hid:
+            return "host_id 不能为空", None
+        with self._lock:
+            conn = self._connect()
+            try:
+                exists = conn.execute(
+                    "SELECT host_id FROM hosts WHERE host_id=?", (hid,)
+                ).fetchone()
+                if not exists:
+                    return "主机不存在", None
+                hist = conn.execute(
+                    "DELETE FROM metrics_history WHERE host_id=?", (hid,)
+                )
+                conn.execute(
+                    "DELETE FROM host_group_members WHERE host_id=?", (hid,)
+                )
+                conn.execute("DELETE FROM hosts WHERE host_id=?", (hid,))
+                conn.commit()
+                history_rows = int(hist.rowcount or 0)
+            finally:
+                conn.close()
+        return None, {"host_id": hid, "history_rows": history_rows}
 
     def cluster_stats(self) -> Dict[str, Any]:
         hosts = self.list_hosts()
@@ -1294,6 +1483,8 @@ class Storage:
                     "address": host.get("address") or "",
                     "group_id": host.get("group_id"),
                     "group_name": host.get("group_name"),
+                    "owner": host.get("owner") or "",
+                    "purpose": host.get("purpose") or "",
                     "accel_count": host.get("accel_count") or 0,
                     "accel_summary": host.get("accel_summary") or "",
                     "accel_inventory": host.get("accel_inventory") or [],
