@@ -57,6 +57,7 @@ def _captured(cmd, env, timeout):
     """按 UTF-8 解码。macOS 上 LANG=C 时 universal_newlines 会把中文输出解成 UnicodeDecodeError。"""
     return subprocess.run(
         cmd,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding="utf-8",
@@ -192,6 +193,8 @@ class UpgradeCenterTests(unittest.TestCase):
             "--keep-backups",
             "2",
         ]
+        if extra:
+            cmd.extend(extra)
         return _captured(cmd, env or self.base_env, 90)
 
     def _ld_bound_python(self, libdir):
@@ -255,7 +258,10 @@ class UpgradeCenterTests(unittest.TestCase):
         if os.path.isdir(os.path.join(ROOT, ".git")) and shutil.which("git"):
             extract = tempfile.mkdtemp(prefix="upgrade-src-")
             self.addCleanup(shutil.rmtree, extract, True)
-            archive = subprocess.check_output(["git", "-C", ROOT, "archive", "HEAD"])
+            archive = subprocess.check_output(
+                ["git", "-C", ROOT, "archive", "HEAD"],
+                stdin=subprocess.DEVNULL,
+            )
             subprocess.run(["tar", "-x", "-C", extract], input=archive, check=True)
             script = os.path.join(extract, "scripts", "upgrade_center.sh")
             self.assertTrue(os.path.isfile(script), script)
@@ -370,6 +376,7 @@ class UpgradeCenterTests(unittest.TestCase):
             ],
             encoding="utf-8",
             errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         hosts, hist = conn_hosts.split()
         self.assertEqual(hosts, "1")
@@ -403,6 +410,100 @@ class UpgradeCenterTests(unittest.TestCase):
         if os.path.isfile(self.syslog):
             with open(self.syslog, encoding="utf-8") as fh:
                 self.assertNotIn("restart", fh.read())
+
+    def _assert_install_untouched(self, inode, live) -> None:
+        with open(os.path.join(self.install, "build-id.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "old-marker")
+        with open(os.path.join(self.install, "config", "center.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["marker"], "KEEP-ME")
+        self.assertEqual(os.stat(os.path.join(self.install, "data", "monitor.db")).st_ino, inode)
+        with open(live, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "live\n")
+        names = os.listdir(self.tmp)
+        self.assertFalse(any(name.startswith("monitor-backup-") for name in names))
+        self.assertFalse(any(name.startswith("monitor-failed-") for name in names))
+        if os.path.isfile(self.syslog):
+            with open(self.syslog, encoding="utf-8") as fh:
+                self.assertNotIn("restart", fh.read())
+
+    def test_check_only_passes_without_mutating_install(self) -> None:
+        live = os.path.join(self.install, "data", "live-only.txt")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        db = os.path.join(self.install, "data", "monitor.db")
+        inode = os.stat(db).st_ino
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(["--check-only"])
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("[ok] 新包测试通过", proc.stdout)
+        self.assertIn("检查通过（未改动安装目录）", proc.stdout)
+        self.assertIn(sys.executable, proc.stdout)
+        self.assertNotIn("同步代码", proc.stdout)
+        self.assertNotIn("备份到", proc.stdout)
+        self._assert_install_untouched(inode, live)
+
+    def test_check_only_failed_tests_do_not_mutate(self) -> None:
+        live = os.path.join(self.install, "data", "live-only.txt")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        inode = os.stat(os.path.join(self.install, "data", "monitor.db")).st_ino
+        self._package(
+            {"build-id.txt": "brand-new-marker\n", "tests/test_boom.py": _boom_test()}
+        )
+        proc = self._run(["--check-only"])
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("未改动安装目录", proc.stdout)
+        self.assertNotIn("检查通过", proc.stdout)
+        self._assert_install_untouched(inode, live)
+
+    def test_check_only_presync_does_not_read_open_stdin(self) -> None:
+        """测试如果去读继承来的 stdin，管道不关就会一直堵住。"""
+        reader = textwrap.dedent(
+            """
+            import sys
+            import unittest
+
+            class Stdin(unittest.TestCase):
+                def test_stdin_is_devnull(self):
+                    self.assertEqual(sys.stdin.read(1), "")
+            """
+        )
+        live = os.path.join(self.install, "data", "live-only.txt")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        inode = os.stat(os.path.join(self.install, "data", "monitor.db")).st_ino
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_stdin.py": reader})
+        proc = subprocess.Popen(
+            [
+                "bash",
+                os.path.join(ROOT, "scripts", "upgrade_center.sh"),
+                self.pkg,
+                "--dir",
+                self.install,
+                "--sha",
+                "abc123",
+                "--check-only",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=self.base_env,
+        )
+        try:
+            rc = proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+            self.fail("pre-sync tests blocked on open stdin:\n" + out)
+        out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stdin:
+            proc.stdin.close()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("检查通过（未改动安装目录）", out)
+        self._assert_install_untouched(inode, live)
 
     def test_health_rollback_keeps_data_and_failed_tree(self) -> None:
         live = os.path.join(self.install, "data", "live-only.txt")
@@ -518,6 +619,7 @@ class PushSshTests(unittest.TestCase):
                 args,
                 cwd=repo,
                 env=git_env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 encoding="utf-8",
@@ -652,3 +754,74 @@ class PushSshTests(unittest.TestCase):
             log = fh.read()
         self.assertIn("mkdir -p '/opt/monitor/vendor/python'", log)
         self.assertIn("tar -xf - -C '/opt/monitor/vendor/python'", log)
+        mkdir_lines = [ln for ln in log.splitlines() if "mkdir -p" in ln]
+        tar_lines = [ln for ln in log.splitlines() if "tar -xf -" in ln]
+        self.assertTrue(mkdir_lines)
+        self.assertTrue(all(ln.startswith("-n ") for ln in mkdir_lines), log)
+        self.assertTrue(tar_lines)
+        self.assertTrue(all(not ln.startswith("-n ") for ln in tar_lines), log)
+
+    def test_check_only_dry_run_uses_ssh_n(self) -> None:
+        proc = self._run_push(["--check-only", "root@center", "HEAD"], self.env)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SSH=ssh\n", proc.stdout)
+        self.assertIn("CHECK_ONLY=1", proc.stdout)
+        self.assertIn("UPGRADE=ssh -n", proc.stdout)
+        self.assertIn("REMOTE=--check-only", proc.stdout)
+        self.assertIn("BUNDLES=skip", proc.stdout)
+        self.assertNotIn("sshpass", proc.stdout)
+
+    def test_check_only_dry_run_sshpass_keeps_n_after_ssh(self) -> None:
+        self.env["SSHPASS"] = "secret-token"
+        proc = self._run_push(["--check-only", "root@center", "HEAD"], self.env)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SSH=sshpass -e ssh", proc.stdout)
+        self.assertIn("UPGRADE=sshpass -e ssh -n", proc.stdout)
+        self.assertIn("REMOTE=--check-only", proc.stdout)
+        self.assertNotIn("secret-token", proc.stdout)
+
+    @unittest.skipIf(
+        sys.platform == "darwin",
+        "macOS bsdtar 往管道里写 AppleDouble 扩展头时退出码和 Linux 不一致；推包已设置 COPYFILE_DISABLE=1，并在 tar 支持时加 --no-xattrs / --disable-copyfile。此用例在 Darwin 上跳过",
+    )
+    def test_push_bundles_ignores_open_stdin(self) -> None:
+        local = os.path.join(self.tmp, "local-bundles")
+        os.makedirs(local)
+        with open(os.path.join(local, "cpython.tar.gz"), "wb") as fh:
+            fh.write(b"bundle")
+        env = dict(self.env)
+        env.pop("MONITOR_PUSH_DRY", None)
+        proc = subprocess.Popen(
+            [
+                "bash",
+                os.path.join(ROOT, "scripts", "push_python_bundles.sh"),
+                "--ssh-cmd",
+                os.path.join(self.bin, "fake-ssh"),
+                "root@center",
+                local,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+        try:
+            rc = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+            self.fail("bundle push blocked on open stdin:\n" + out)
+        out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stdin:
+            proc.stdin.close()
+        self.assertEqual(rc, 0, out)
+        with open(self.log, encoding="utf-8") as fh:
+            log = fh.read()
+        self.assertIn("mkdir -p '/opt/monitor/vendor/python'", log)
+        self.assertTrue(
+            any(ln.startswith("-n ") and "mkdir -p" in ln for ln in log.splitlines()),
+            log,
+        )

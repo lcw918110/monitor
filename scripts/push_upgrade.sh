@@ -3,13 +3,18 @@
 # 中心执行的是这次包里的 scripts/upgrade_center.sh，不是 /opt/monitor 里的旧脚本。
 #
 # 用法:
-#   scripts/push_upgrade.sh [--ssh-cmd CMD] <user@center-host> [git-ref]
+#   scripts/push_upgrade.sh [--check-only] [--ssh-cmd CMD] <user@center-host> [git-ref]
 # 例:
 #   scripts/push_upgrade.sh root@10.0.0.8 HEAD
 #   SSHPASS='***' scripts/push_upgrade.sh root@10.0.0.8 HEAD
+#   scripts/push_upgrade.sh --check-only root@10.0.0.8 HEAD
 #
 # 本地 vendor/python（或 MONITOR_PUSH_BUNDLE_DIR）里如果有 *.tar.gz，
 # 会先在中心 mkdir -p /opt/monitor/vendor/python 再同步过去。
+# --check-only 仍把代码包上传到 /tmp，并在中心跑同步前测试和磁盘预检，
+# 不把便携包写入现场目录，也不备份、不同步、不重启。
+# 不喂数据的 ssh 走 monitor_ssh_exec（ssh -n 且 </dev/null）。
+# git archive 和 tar 管道仍把包体送给远端，不加 -n。
 # MONITOR_PUSH_DRY=1 只打印将要使用的 SSH 命令，不连接。
 # 干跑时 git rev-parse 失败（例如 git archive 解出来的目录没有 .git）不退出，SHA 记为 unknown。
 set -euo pipefail
@@ -21,21 +26,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET=""
 REF="HEAD"
 REF_SET=0
+CHECK_ONLY=0
 MONITOR_SSH_CMD_OVERRIDE="${MONITOR_SSH_CMD_OVERRIDE:-}"
 
 usage() {
   cat <<EOF
-用法: $0 [--ssh-cmd CMD] <user@center-host> [git-ref]
+用法: $0 [--check-only] [--ssh-cmd CMD] <user@center-host> [git-ref]
 例:   $0 root@10.0.0.8 HEAD
       SSHPASS='***' $0 root@10.0.0.8 HEAD
+      $0 --check-only root@10.0.0.8 HEAD
 
 默认使用 ssh。设置了 SSHPASS 且本机有 sshpass 时改为 sshpass -e ssh。
 --ssh-cmd 完全替换 SSH 命令（此时不再自动包 sshpass）。
+--check-only 上传到 /tmp 后只跑同步前测试和磁盘预检，退出 0/1，不改 /opt/monitor。
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --check-only)
+      CHECK_ONLY=1
+      shift
+      ;;
     --ssh-cmd)
       MONITOR_SSH_CMD_OVERRIDE="${2:-}"
       shift 2
@@ -111,7 +123,13 @@ if [[ "${MONITOR_PUSH_DRY:-}" == "1" ]]; then
   printf 'SSH=%s\n' "${SSH_ARGV[*]}"
   printf 'TARGET=%s\n' "$TARGET"
   printf 'SHA=%s\n' "$SHA"
-  if [[ "$bundle_found" == "1" ]]; then
+  printf 'CHECK_ONLY=%s\n' "$CHECK_ONLY"
+  # 不喂数据的升级 ssh。-n 不放进 SSH=，否则 git archive 管道会被掐掉。
+  printf 'UPGRADE=%s -n\n' "${SSH_ARGV[*]}"
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    printf 'REMOTE=--check-only\n'
+    printf 'BUNDLES=skip\n'
+  elif [[ "$bundle_found" == "1" ]]; then
     printf 'BUNDLES=sync\n'
     printf 'MKDIR=%s\n' "$BUNDLE_REMOTE"
   else
@@ -120,7 +138,9 @@ if [[ "${MONITOR_PUSH_DRY:-}" == "1" ]]; then
   exit 0
 fi
 
-if [[ "$bundle_found" == "1" ]]; then
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  echo "[info] --check-only：不把便携包写入 ${BUNDLE_REMOTE}"
+elif [[ "$bundle_found" == "1" ]]; then
   echo "==> 同步便携 Python 到 ${TARGET}:${BUNDLE_REMOTE}"
   if ! monitor_push_bundles "$TARGET" "$BUNDLE_DIR" "$BUNDLE_REMOTE"; then
     echo "同步便携 Python 失败" >&2
@@ -134,4 +154,8 @@ echo "==> 打包 ${REF} (${SHA}) 并上传到 ${TARGET}:${REMOTE_DIR}"
 git archive --format=tar.gz "$REF" | "${SSH_ARGV[@]}" "$TARGET" "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR' && tar -xzf - -C '$REMOTE_DIR'"
 
 echo "==> 在中心执行新包里的 upgrade_center.sh"
-"${SSH_ARGV[@]}" "$TARGET" "bash '$REMOTE_DIR/scripts/upgrade_center.sh' '$REMOTE_DIR' --sha '$SHA' --dir /opt/monitor"
+remote_cmd="bash '$REMOTE_DIR/scripts/upgrade_center.sh' '$REMOTE_DIR' --sha '$SHA' --dir /opt/monitor"
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  remote_cmd="$remote_cmd --check-only"
+fi
+monitor_ssh_exec "$TARGET" "$remote_cmd"

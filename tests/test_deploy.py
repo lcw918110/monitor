@@ -297,6 +297,7 @@ class SyncTreeTests(unittest.TestCase):
         ).format(root=ROOT, src=src, dst=dst)
         return subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -469,6 +470,7 @@ class FleetScriptTests(unittest.TestCase):
         ).format(root=ROOT)
         proc = subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -529,6 +531,7 @@ class RemoteDirAndSshpassTests(unittest.TestCase):
         )
         proc = subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -639,6 +642,7 @@ class SshPipeUploadTests(unittest.TestCase):
         ).format(root=ROOT)
         proc = subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -713,6 +717,7 @@ class PackageTreeTests(unittest.TestCase):
         ).format(root=ROOT)
         proc = subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -741,6 +746,7 @@ class PackageTreeTests(unittest.TestCase):
             ).format(root=ROOT, src=src, dst=dst)
             proc = subprocess.run(
                 ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -789,6 +795,7 @@ class PackageTreeTests(unittest.TestCase):
             ).format(root=ROOT, src=src, dst=dst)
             proc = subprocess.run(
                 ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -825,6 +832,7 @@ class PackageTreeTests(unittest.TestCase):
             ).format(root=ROOT, dst=dst)
             proc = subprocess.run(
                 ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -840,7 +848,7 @@ class PackageTreeTests(unittest.TestCase):
         proc = None
         try:
             os.makedirs(os.path.join(dst, "run"))
-            proc = subprocess.Popen(["sleep", "30"])
+            proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
             with open(os.path.join(dst, "run", "agent.pid"), "w", encoding="utf-8") as f:
                 f.write(str(proc.pid))
             script = textwrap.dedent(
@@ -853,6 +861,7 @@ class PackageTreeTests(unittest.TestCase):
             ).format(root=ROOT, dst=dst)
             out = subprocess.run(
                 ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -882,6 +891,7 @@ class PackageTreeTests(unittest.TestCase):
             ).format(root=ROOT, src=src, dst=dst)
             proc = subprocess.run(
                 ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -924,6 +934,7 @@ class PackageTreeTests(unittest.TestCase):
     def _run_bash(self, script: str) -> "subprocess.CompletedProcess[str]":
         return subprocess.run(
             ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
