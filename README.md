@@ -5,13 +5,13 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.8.0**
+当前版本：**v1.9.0**
 
 运行环境：
 
 | 角色 | Python |
 | --- | --- |
-| **Agent（采集端）** | **3.6+**（部署时优先复用本机已有解释器，没有再用 apt/yum/dnf 安装） |
+| **Agent（采集端）** | **3.6+**。采集代码没有 `from __future__ import annotations`，下限不是 3.7。Ubuntu 16.04 自带 3.5.2 不够；系统解释器和 apt/yum 都失败后，用中心上的便携 CPython 3.10（glibc ≥ 2.17） |
 | Center（中心端） | 3.8+ |
 
 ## 定位
@@ -130,9 +130,43 @@ Agent 安装目录：
 # 可选: --host-id gpu01 --token 'your-secret' --interval 15 --dir /opt/monitor-agent
 ```
 
-脚本会：解析 Python（先复用本机 `PYTHON_BIN` / `python3.x` / `/usr/local/python3.*`，均需 ≥3.6；都没有且为 root 时再 apt/yum/dnf 安装 python3）→ 同步文件（**优先 rsync**，没有则 **tar 管道** 或 **cp -a**）→ 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。
+脚本会：解析 Python（先复用本机 `PYTHON_BIN` / `python3.x` / `/usr/local/python3.*`，均需 ≥3.6；都没有且为 root 时再 apt/yum/dnf 安装 python3；安装失败不中断，继续尝试便携包）→ 同步文件（**优先 rsync**，没有则 **tar 管道** 或 **cp -a**）→ 写配置 → 探测加速卡工具 → 单次上报自检 → systemd 或守护进程常驻。systemd 和 `run/start_agent.sh` 使用最终选定的解释器。
 
-内网常见情况：只有 3.6、PATH 里的 `python3` 过旧但 `/usr/local/python3.12` 可用、或完全没有 python3——脚本按「先复用、再安装」处理。自定义前缀若缺 libpython，会自动加上 `LD_LIBRARY_PATH`。
+内网常见情况：只有 3.6、PATH 里的 `python3` 过旧但 `/usr/local/python3.12` 可用、或完全没有 python3——脚本按「先复用、再安装、再便携包」处理。自定义前缀若缺 libpython，会自动加上 `LD_LIBRARY_PATH`。apt 在 Ubuntu 16.04 上若被 `appstreamcli` 打断，同样进入便携包，而不是停在 `python_install_fail`。
+
+### 离线放置便携 Python
+
+在**有互联网**的机器上下载（不要把约 26MB 的 tar.gz 提交进 git）：
+
+```bash
+scripts/fetch_python_bundle.sh --dest vendor/python
+# 校验通过后，把整个目录拷到中心：
+scp -r vendor/python/ <中心>:/opt/monitor/vendor/python/
+```
+
+固定包是 python-build-standalone `20241016` 的 **install_only**（不是 musl / stripped / `gnu_2_28`），glibc ≥ 2.17，含 x86_64 与 aarch64。中心按目标机 `uname -m` 选择。目录也可在 `config/center.json` 里改：
+
+```json
+"deploy": { "python_bundles": "/opt/monitor/vendor/python" }
+```
+
+中心升级不会删掉这个目录里的 tar.gz。目标机没有合适解释器时，网页部署和 `deploy_fleet.sh` 都会把包上传到远端再解压：root 解到 `/usr/local/monitor-python`，否则解到安装目录下的 `python/`。
+
+### 升级已安装的中心
+
+不要在中心上手写 `cp`、`git archive` 或 `systemctl restart`。在工作站执行（中心上跑的是**这次包里**的脚本）：
+
+```bash
+scripts/push_upgrade.sh root@<中心> HEAD
+```
+
+它等价于把该 git 版本解到中心 `/tmp/monitor-upgrade-src`，然后执行：
+
+```bash
+bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src --sha <该版本 sha> --dir /opt/monitor
+```
+
+脚本会做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启、检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少，再在安装树上跑测试。任一步失败会自动回滚。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。
 
 批量：
 
@@ -157,8 +191,13 @@ cp config/hosts.example.txt config/hosts.txt
 | `sshpass_missing` | 密码部署但**中心机**未安装 `sshpass`（请安装或改用密钥，不要从笔记本旁路） |
 | `sudo_required` | 非 root 写入 `/opt/...` 时 sudo 不可用（先 `sudo -n`，否则同一 SSH 密码 `sudo -S`） |
 | `key_missing` | 填写的私钥文件在中心机上不存在 |
-| `no_python` | 目标机没有可用 Python ≥ 3.6 |
-| `python_install_fail` | 自动安装 python3 失败（CentOS 7 默认 yum 镜像 EOL/404；会再试 `vault.centos.org/7.9.2009`） |
+| `no_python` | 目标机没有可用 Python ≥ 3.6，且没有传入便携包 |
+| `python_install_fail` | 自动安装 python3 失败，且便携包也不可用（CentOS 7 默认 yum 镜像 EOL/404；会再试 `vault.centos.org/7.9.2009`） |
+| `python_bundle_missing` | 中心没有该架构的便携包，或远端没收到文件 |
+| `python_bundle_checksum` | sha256 与清单不一致 |
+| `python_bundle_arch` | `uname -m` 不在 x86_64 / aarch64 |
+| `python_bundle_extract` | 解压失败，或包里没有 `bin/python3` |
+| `python_bundle_exec` | 解压后的解释器无法启动或仍低于 3.6 |
 | `sync_tool_missing` | 同步文件失败（rsync 优先，缺失则 tar / cp 仍都不可用） |
 | `package_incomplete` | 中心树或缺包导致目标没有 `agent/`（产品打的是采集端包，不是整棵 center 树；`--once` 前会校验 `agent/__init__.py`） |
 | `dir_not_writable` | SSH 已通但安装目录不可写（非 root 用 `~/monitor-agent`） |
@@ -199,8 +238,9 @@ cp config/hosts.example.txt config/hosts.txt
 | `INSTALL_DIR: unbound variable` | 已修复：在线部署只用 `REMOTE_DIR`；请更新中心代码后重试 |
 | 清演示数据重来 | `./scripts/local_down.sh` 后删除 `.deploy-center/data/monitor.db*`（及 wal/shm），再 `local_up.sh`；不要跑 `demo_seed.py` |
 | 配置报错退出 | 看终端 `[配置错误]`；从 `config/*.example.json` 复制为 `center.json` / `agent.json` |
-| 部署报「未找到可用的 Python >= 3.6」 | 设置 `PYTHON_BIN` 指向本机解释器，或安装 `python3`；`/usr/local/python3.x` 会被自动探测 |
-| 部署报 `python_install_fail` / yum 404 | CentOS 7 官方镜像已 EOL。产品路径会改用 `vault.centos.org/7.9.2009`（os+updates+extras）装 python3；仍失败则预装 python3≥3.6 或自行改 yum baseurl |
+| 部署报「未找到可用的 Python >= 3.6」 | 设置 `PYTHON_BIN`，或安装 `python3`，或按上面的步骤把便携包放到中心。Ubuntu 16.04 的 3.5 低于 Agent 下限 |
+| 部署报 `python_install_fail` / yum 404 | CentOS 7 官方镜像已 EOL。产品路径会改用 `vault.centos.org/7.9.2009`（os+updates+extras）装 python3；仍失败则使用便携包，或预装 python3≥3.6 |
+| 部署报 `python_bundle_*` | 看短码：缺文件、校验、架构、解压或无法启动。apt 失败本身不会挡住便携包 |
 | `error while loading shared libraries: libpython` | 已处理：使用 `/usr/local/python3.x` 时脚本会设置 `LD_LIBRARY_PATH`；请更新脚本后重装 Agent |
 | macOS 无加速卡工具 | 正常，卡数为 0；仍会上报 CPU/内存等 |
 
@@ -220,13 +260,14 @@ tail -n 50 .deploy-agent/run/agent.log
 | POST | `/api/v1/metrics` | Agent 上报 |
 | GET | `/api/v1/hosts` | 主机列表（含 anomaly、完整 `address`、资源组、`owner` / `purpose` / `asset`）。已隐藏的不在内。`?hidden=1` 只看已隐藏，`?include_hidden=1` 含全部 |
 | GET | `/api/v1/hosts/{id}` | 详情（含手工 `asset` 与 Agent `hardware`；已隐藏的仍可按 id 打开） |
-| POST | `/api/v1/hosts/{id}/meta` | 更新手工资产字段。空字符串清空该字段。拒绝密码一类键 |
+| POST | `/api/v1/hosts/{id}/meta` | 更新手工资产字段。空字符串清空该字段。`previous_ips: []` 清空历史 IP；不传该键则保留。拒绝密码一类键 |
 | POST | `/api/v1/hosts/{id}/hide` | 隐藏。正文可带 `{"remove_deploy_target": true}` 同时删匹配的部署目标 |
 | POST | `/api/v1/hosts/{id}/restore` | 取消隐藏 |
 | DELETE | `/api/v1/hosts/{id}?confirm=delete` | 硬删除主机和历史上报。没有 `confirm=delete` 则 400，不删。`remove_deploy_target=1` 可选 |
 | POST | `/api/v1/hosts/meta/import` | 按 IP 预览 CSV/xlsx。`?apply=1` 才写入。凭据列忽略。手工地址、历史 IP、展示地址、host_id 内嵌 IP 都能对上 |
-| POST | `/api/v1/hosts/{id}/readdress` | 同机更换展示 IP。默认只预览。`{"new_ip","note","apply":true}` 才写入。不改 host_id，不改历史上报 |
-| POST | `/api/v1/deploy/targets/{id}` | 更新部署目标。可改 `ip`、`host_id`；与其他目标 IP 冲突或 IP/host_id 无效则 400，凭据保持不变。密码空字符串不覆盖 |
+| POST | `/api/v1/hosts/{id}/readdress` | 同机更换展示 IP。默认只预览。`{"new_ip","note","apply":true}` 才写入。不改 host_id，不改历史上报。apply 时记下可撤销的目标 host_id 与 retired |
+| POST | `/api/v1/hosts/{id}/readdress/undo` | 撤销上一次改址。默认预览。`{"apply":true}` 恢复当时的 host_id 与 retired，清掉手工地址和这次追加的那条 `previous_ips`。没有记录则 400 |
+| POST | `/api/v1/deploy/targets/{id}` | 更新部署目标。可改 `ip`、`host_id`，以及 `retired: true/false`。只提交 `retired` 时不改 IP、host_id 和密码。与其他目标 IP 冲突或 IP/host_id/`retired` 无效则 400 |
 | GET/POST/DELETE | `/api/v1/groups` | 资源组列表 / 创建；`POST/DELETE /api/v1/groups/{id}` 重命名、删除 |
 | POST | `/api/v1/hosts/{id}/group` | 分配资源组（`{"group_id": 1}` 或 `null` 取消） |
 | GET | `/api/v1/hosts/{id}/history` | 历史趋势（`minutes` / `limit`） |

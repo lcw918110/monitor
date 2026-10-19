@@ -213,8 +213,9 @@
 | POST | `/api/v1/metrics` | Agent 上报 |
 | GET | `/api/v1/hosts` | 主机列表（默认不含已隐藏） |
 | GET | `/api/v1/hosts/{host_id}` | 主机详情（含 `asset` 与 `hardware`） |
-| POST | `/api/v1/hosts/{host_id}/meta` | 更新手工资产 |
-| POST | `/api/v1/hosts/{host_id}/readdress` | 同机更换展示 IP（默认预览，`apply: true` 才写入） |
+| POST | `/api/v1/hosts/{host_id}/meta` | 更新手工资产。可带 `previous_ips`，`[]` 清空 |
+| POST | `/api/v1/hosts/{host_id}/readdress` | 同机更换展示 IP（默认预览，`apply: true` 才写入，并记下可撤销状态） |
+| POST | `/api/v1/hosts/{host_id}/readdress/undo` | 撤销上一次改址（默认预览） |
 | POST | `/api/v1/hosts/{host_id}/hide` 与 `/restore` | 隐藏 / 恢复 |
 | DELETE | `/api/v1/hosts/{host_id}?confirm=delete` | 硬删除主机与历史 |
 | POST | `/api/v1/hosts/meta/import` | 按 IP 预览或写入资产表 |

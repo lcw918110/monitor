@@ -97,7 +97,8 @@
           <input id="tPeers" placeholder="网关=10.0.0.1;存储=10.0.0.50 或 10.0.0.1,10.0.0.2" />
         </label>
       </div>
-      <p class="muted">编辑已有目标时可以修改 IP 和 host_id。另一个目标已经使用该 IP 时会拒绝保存。密码留空不会改掉已保存的密码。同机改址请在监测台主机详情里用「更换 IP」，旧目标会标为已停用且不再参与部署。</p>
+      <p class="muted">编辑已有目标时可以修改 IP 和 host_id。另一个目标已经使用该 IP 时会拒绝保存。密码留空不会改掉已保存的密码。清单里的「停用 / 恢复」只改 retired，不改 IP、host_id 和密码。同机改址请在监测台主机详情里用「更换 IP」，旧目标会标为已停用且不再参与部署。</p>
+      <p class="muted">目标机没有 Python ≥ 3.6（Ubuntu 16.04 的 3.5 不够）时，中心会上传 <code>deploy.python_bundles</code> 目录里的便携解释器。相关失败短码：<code>python_bundle_missing</code>、<code>python_bundle_checksum</code>、<code>python_bundle_arch</code>、<code>python_bundle_extract</code>、<code>python_bundle_exec</code>。apt/yum 安装失败不会挡住这次回退。</p>
       <div class="form-actions">
         <button type="button" id="btnAdd" class="btn primary">添加到清单</button>
         <button type="button" id="btnTestSsh" class="btn">测试连通/部署条件</button>

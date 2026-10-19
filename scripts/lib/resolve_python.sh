@@ -30,8 +30,12 @@
 #
 # shellcheck shell=bash
 
-MONITOR_PY_MIN_MAJOR="${MONITOR_PY_MIN_MAJOR:-3}"
-MONITOR_PY_MIN_MINOR="${MONITOR_PY_MIN_MINOR:-6}"
+_RESOLVE_PYTHON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=python_min.sh
+. "${_RESOLVE_PYTHON_DIR}/python_min.sh"
+
+MONITOR_PY_MIN_MAJOR="${MONITOR_PY_MIN_MAJOR:-$MONITOR_AGENT_PY_MIN_MAJOR}"
+MONITOR_PY_MIN_MINOR="${MONITOR_PY_MIN_MINOR:-$MONITOR_AGENT_PY_MIN_MINOR}"
 MONITOR_INSTALL_PYTHON="${MONITOR_INSTALL_PYTHON:-0}"
 
 PY="${PY:-}"
@@ -344,6 +348,11 @@ _py_yum_install_python3_centos7_vault() {
 install_python3_best_effort() {
   local installer yum_rc=0 yum_out
   MONITOR_PYTHON_INSTALL_FAIL=0
+  if [[ -n "${MONITOR_PYTHON_INSTALL_STUB:-}" ]]; then
+    MONITOR_PYTHON_INSTALL_FAIL=1
+    echo "[warn] python_install_fail: ${MONITOR_PYTHON_INSTALL_STUB}"
+    return 1
+  fi
   echo "==> 未找到可用 Python >= ${MONITOR_PY_MIN_MAJOR}.${MONITOR_PY_MIN_MINOR}，尝试安装 python3 ..."
   if [[ "${MONITOR_PYTHON_ASSUME_ROOT:-0}" != "1" && "$(id -u)" -ne 0 ]]; then
     echo "[info] 非 root，无法自动安装 python3"
@@ -444,6 +453,8 @@ ensure_python() {
       fi
     fi
   fi
-  print_python_resolve_error "$major" "$minor"
+  if [[ "${MONITOR_PYTHON_QUIET_FAIL:-0}" != "1" ]]; then
+    print_python_resolve_error "$major" "$minor"
+  fi
   return 1
 }

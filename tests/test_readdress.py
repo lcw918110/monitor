@@ -8,8 +8,11 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import urllib.request
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -320,6 +323,235 @@ class ReaddressEndpointTests(unittest.TestCase):
             conn.close()
         self.assertEqual([row[0] for row in rows], ["host-172-24-5-3"])
         self.assertEqual(hist, self.history_before)
+
+
+class ReaddressUndoTests(ReaddressEndpointTests):
+    def _apply(self):
+        code, applied = self._call(
+            {
+                "new_ip": "192.168.198.64",
+                "note": "同机改址到 192.168.198.64",
+                "apply": True,
+            }
+        )
+        self.assertEqual(code, 200, applied)
+        return applied
+
+    def _undo(self, body):
+        return api_mod.handle_host_readdress_undo(
+            self.storage,
+            "host-172-24-5-3",
+            json.dumps(body).encode("utf-8"),
+            deploy_store=self.store,
+        )
+
+    def test_apply_records_undo_and_owner_save_keeps_it(self) -> None:
+        self._apply()
+        host = self.storage.get_host("host-172-24-5-3")
+        undo = host["readdress_undo"]
+        self.assertEqual(undo["added_previous_ip"], "172.24.5.3")
+        ids = {item["id"]: item for item in undo["targets"]}
+        self.assertEqual(ids[int(self.new["id"])]["host_id"], "host-192-168-198-64")
+        self.assertFalse(ids[int(self.new["id"])]["retired"])
+        self.assertEqual(ids[int(self.old["id"])]["host_id"], "host-172-24-5-3")
+        self.assertFalse(ids[int(self.old["id"])]["retired"])
+        code, owner = api_mod.handle_host_meta_update(
+            self.storage,
+            "host-172-24-5-3",
+            json.dumps({"owner": "甲"}).encode("utf-8"),
+        )
+        self.assertEqual(code, 200, owner)
+        saved = self.storage.get_host("host-172-24-5-3")
+        self.assertEqual(saved["owner"], "甲")
+        self.assertEqual(saved["previous_ips"][0]["ip"], "172.24.5.3")
+        self.assertEqual(saved["readdress_undo"]["added_previous_ip"], "172.24.5.3")
+
+    def test_preview_then_apply_restores_targets_and_clears_address(self) -> None:
+        self._apply()
+        code, preview = self._undo({"apply": False})
+        self.assertEqual(code, 200, preview)
+        self.assertFalse(preview["apply"])
+        self.assertEqual(preview["remove_previous_ip"], "172.24.5.3")
+        self.assertEqual(self.storage.get_host("host-172-24-5-3")["address"], "192.168.198.64")
+        self.assertEqual(
+            self.store.get_target(int(self.new["id"]))["host_id"], "host-172-24-5-3"
+        )
+
+        code, applied = self._undo({"apply": True})
+        self.assertEqual(code, 200, applied)
+        self.assertTrue(applied["apply"])
+        self.assertFalse(applied["history_rewritten"])
+        self.assertEqual(applied["history_rows"], self.history_before)
+        host = self.storage.get_host("host-172-24-5-3")
+        self.assertEqual(host["host_id"], "host-172-24-5-3")
+        self.assertEqual(host["asset"]["address"], "")
+        self.assertEqual(host["previous_ips"], [])
+        self.assertIsNone(host["asset"].get("readdress_undo"))
+        moved = self.store.get_target(int(self.new["id"]), include_secrets=True)
+        self.assertEqual(moved["host_id"], "host-192-168-198-64")
+        self.assertEqual(moved["ssh_password"], "secret-new")
+        self.assertFalse(moved["retired"])
+        kept = self.store.get_target(int(self.old["id"]), include_secrets=True)
+        self.assertEqual(kept["host_id"], "host-172-24-5-3")
+        self.assertEqual(kept["ssh_password"], "secret-old")
+        self.assertFalse(kept["retired"])
+        self.assertEqual(self.storage.history_count("host-172-24-5-3"), self.history_before)
+        code, again = self._undo({"apply": True})
+        self.assertEqual(code, 400)
+        self.assertIn("没有可撤销", again["error"])
+
+    def test_missing_target_refuses_before_writes(self) -> None:
+        self._apply()
+        self.store.delete_target(int(self.old["id"]))
+        code, resp = self._undo({"apply": True})
+        self.assertEqual(code, 400, resp)
+        self.assertIn("不存在", resp["error"])
+        host = self.storage.get_host("host-172-24-5-3")
+        self.assertEqual(host["address"], "192.168.198.64")
+        self.assertEqual(host["previous_ips"][0]["ip"], "172.24.5.3")
+        self.assertIsNotNone(host["readdress_undo"])
+        self.assertEqual(
+            self.store.get_target(int(self.new["id"]))["host_id"], "host-172-24-5-3"
+        )
+
+    def test_no_record_is_400(self) -> None:
+        code, resp = self._undo({})
+        self.assertEqual(code, 400)
+        self.assertIn("没有可撤销", resp["error"])
+
+    def test_http_undo_route(self) -> None:
+        from center.server import make_handler
+        from http.server import ThreadingHTTPServer
+
+        self._apply()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.storage, "", deploy_store=self.store))
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        port = httpd.server_address[1]
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:%s/api/v1/hosts/host-172-24-5-3/readdress/undo" % port,
+                data=b'{"apply": false}',
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            self.assertEqual(resp.status, 200)
+            self.assertTrue(body["ok"])
+            self.assertFalse(body["apply"])
+            self.assertEqual(body["remove_previous_ip"], "172.24.5.3")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class PreviousIpsMetaTests(ReaddressEndpointTests):
+    def test_empty_list_clears_and_invalid_is_rejected(self) -> None:
+        self.storage.set_host_readdress(
+            "host-172-24-5-3",
+            "192.168.198.64",
+            [{"ip": "172.24.5.3", "date": "2026-10-19", "note": "同机改址到 192.168.198.64"}],
+            undo={
+                "added_previous_ip": "172.24.5.3",
+                "new_ip": "192.168.198.64",
+                "old_ip": "172.24.5.3",
+                "note": "同机改址到 192.168.198.64",
+                "targets": [],
+            },
+        )
+        code, bad = api_mod.handle_host_meta_update(
+            self.storage,
+            "host-172-24-5-3",
+            json.dumps({"previous_ips": ["不是地址"]}).encode("utf-8"),
+        )
+        self.assertEqual(code, 400)
+        self.assertIn("无效", bad["error"])
+        self.assertEqual(
+            self.storage.get_host("host-172-24-5-3")["previous_ips"][0]["ip"],
+            "172.24.5.3",
+        )
+        code, kept = api_mod.handle_host_meta_update(
+            self.storage,
+            "host-172-24-5-3",
+            json.dumps({"owner": "乙"}).encode("utf-8"),
+        )
+        self.assertEqual(code, 200, kept)
+        self.assertEqual(
+            self.storage.get_host("host-172-24-5-3")["previous_ips"][0]["note"],
+            "同机改址到 192.168.198.64",
+        )
+        code, cleared = api_mod.handle_host_meta_update(
+            self.storage,
+            "host-172-24-5-3",
+            b'{"previous_ips":[]}',
+        )
+        self.assertEqual(code, 200, cleared)
+        host = self.storage.get_host("host-172-24-5-3")
+        self.assertEqual(host["previous_ips"], [])
+        self.assertEqual(host["owner"], "乙")
+        self.assertEqual(host["readdress_undo"]["added_previous_ip"], "172.24.5.3")
+        self.assertEqual(host["asset"]["address"], "192.168.198.64")
+
+
+class RetiredFlagTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = DeployStore(os.path.join(self.tmp.name, "d.db"))
+        self.target = self.store.add_target(
+            {
+                "ip": "172.24.5.3",
+                "host_id": "host-172-24-5-3",
+                "ssh_password": "secret-old",
+            }
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_retired_toggle_keeps_credentials_and_identity(self) -> None:
+        with mock.patch("center.deploy_api.auto_probe_addresses", return_value=[]) as probed:
+            code, resp = handle_update_target(
+                self.store,
+                int(self.target["id"]),
+                b'{"retired": true}',
+            )
+        self.assertEqual(code, 200, resp)
+        self.assertTrue(probed.called)
+        row = self.store.get_target(int(self.target["id"]), include_secrets=True)
+        self.assertTrue(row["retired"])
+        self.assertEqual(row["ip"], "172.24.5.3")
+        self.assertEqual(row["host_id"], "host-172-24-5-3")
+        self.assertEqual(row["ssh_password"], "secret-old")
+
+        with mock.patch("center.deploy_api.auto_probe_addresses", return_value=[]):
+            code, resp = handle_update_target(
+                self.store,
+                int(self.target["id"]),
+                b'{"retired": false}',
+            )
+        self.assertEqual(code, 200, resp)
+        row = self.store.get_target(int(self.target["id"]), include_secrets=True)
+        self.assertFalse(row["retired"])
+        self.assertEqual(row["ssh_password"], "secret-old")
+        self.assertEqual(row["ip"], "172.24.5.3")
+        self.assertEqual(row["host_id"], "host-172-24-5-3")
+
+    def test_invalid_retired_is_400_before_probe(self) -> None:
+        before = self.store.get_target(int(self.target["id"]), include_secrets=True)
+        with mock.patch("center.deploy_api.auto_probe_addresses", return_value=[]) as probed:
+            code, resp = handle_update_target(
+                self.store,
+                int(self.target["id"]),
+                b'{"retired":"maybe"}',
+            )
+        self.assertEqual(code, 400)
+        self.assertIn("retired", resp["error"])
+        self.assertFalse(probed.called)
+        after = self.store.get_target(int(self.target["id"]), include_secrets=True)
+        self.assertEqual(after["ssh_password"], before["ssh_password"])
+        self.assertFalse(after["retired"])
+        self.assertEqual(after["ip"], before["ip"])
 
 
 if __name__ == "__main__":

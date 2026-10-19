@@ -41,6 +41,19 @@ def _identity_update(
     return new_ip, new_hid, ip_changed, hid_changed
 
 
+def _parse_retired_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes"):
+        return True
+    if text in ("false", "0", "no"):
+        return False
+    raise ValueError("retired 只能是 true 或 false")
+
+
 def _reject_identity_conflict(conn, target_id: int, new_ip: str, new_hid: str, ip_changed: bool) -> None:
     from center.hostaddr import normalize_ip
 
@@ -457,6 +470,9 @@ class DeployStore:
             ).strip(),
         }
         new_ip, new_hid, ip_changed, hid_changed = _identity_update(cur, data)
+        retired_flag: Optional[bool] = None
+        if "retired" in data:
+            retired_flag = _parse_retired_flag(data.get("retired"))
         with self._lock:
             conn = self._connect()
             try:
@@ -490,6 +506,15 @@ class DeployStore:
                 if hid_changed:
                     assignments.append("host_id=?")
                     params.append(new_hid)
+                if retired_flag is not None:
+                    assignments.append("retired=?")
+                    assignments.append("retired_at=?")
+                    if retired_flag:
+                        params.append(1)
+                        params.append(int(time.time()))
+                    else:
+                        params.append(None)
+                        params.append(None)
                 params.append(target_id)
                 conn.execute(
                     "UPDATE deploy_targets SET "

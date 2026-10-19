@@ -474,6 +474,17 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
+            if path.startswith("/api/v1/hosts/") and path.endswith("/readdress/undo"):
+                host_id = path[len("/api/v1/hosts/") : -len("/readdress/undo")].strip("/")
+                if not host_id or "/" in host_id or ".." in host_id:
+                    self._send_json(400, {"ok": False, "error": "非法 host_id"})
+                    return
+                code, payload = api_mod.handle_host_readdress_undo(
+                    storage, host_id, body, deploy_store=dstore
+                )
+                self._send_json(code, payload)
+                return
+
             if path.startswith("/api/v1/hosts/") and (
                 path.endswith("/group")
                 or path.endswith("/meta")
@@ -707,7 +718,14 @@ def run_server(config: Dict[str, Any]) -> None:
     port = int(config.get("port") or 8080)
     token = config.get("token") or ""
     deploy_store = DeployStore(db_path)
-    deploy_runner = DeployRunner(deploy_store, token=token)
+    from center.python_bundle import bundles_dir_from_config
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    deploy_runner = DeployRunner(
+        deploy_store,
+        token=token,
+        bundles_dir=bundles_dir_from_config(config, project_root),
+    )
     from center.netutil import ensure_public_center_url
 
     public_url = ensure_public_center_url(deploy_store, port)

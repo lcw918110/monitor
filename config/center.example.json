@@ -24,6 +24,9 @@
     "busy_cpu_percent": 80,
     "busy_accel_percent": 80
   },
+  "deploy": {
+    "python_bundles": "/opt/monitor/vendor/python"
+  },
   "report_schedule": {
     "enabled": true,
     "daily": {"enabled": true, "hour": 0, "minute": 10},

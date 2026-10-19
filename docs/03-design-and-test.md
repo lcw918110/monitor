@@ -45,16 +45,17 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/v1/hosts/{id}/meta` | 合并手工字段。给出的空字符串清空。未知键忽略。含密码、用户名、token 等键则 400，不写库 |
+| POST | `/api/v1/hosts/{id}/meta` | 合并手工字段。给出的空字符串清空。未知键忽略。含密码、用户名、token 等键则 400，不写库。`previous_ips` 缺省不改，`[]` 清空，非数组或无效 IP 为 400 且不写库 |
 | POST | `/api/v1/hosts/{id}/hide` | `hidden=1`。历史上报和分组关系保留。Agent 再上报不会自动取消隐藏。正文 `remove_deploy_target: true` 时删除部署清单里 host_id 相同，或 IP 对得上且清单 host_id 为空 / 等于 IP / 嵌着同一 IP 的目标 |
 | POST | `/api/v1/hosts/{id}/restore` | 取消隐藏 |
 | DELETE | `/api/v1/hosts/{id}?confirm=delete` | 删除主机行、`metrics_history` 和分组成员。缺少 `confirm=delete` 返回 400，一行不删。`remove_deploy_target=1` 同上 |
 | POST | `/api/v1/hosts/meta/import` | 正文为 CSV、xlsx，或 JSON `{"csv":"..."}` / `{"rows":[...]}`。默认只预览。`?apply=1` 或 JSON `"apply": true` 才写入。按 IP 匹配已有主机（手工展示地址、历史 IP、展示地址、host_id 内嵌 IP、最近来源 IP、上报网卡）。未匹配不新建。同一 IP 多台主机则该行不写。同一 IP 多行以最后一行为准。空单元格不覆盖。`硬盘/型号`：纯容量进 `disk`，其余进 `model`。表头「地址」只用来匹配，不写进展示地址。凭据列不出现在预览和库里 |
-| POST | `/api/v1/hosts/{id}/readdress` | 正文 `{"new_ip","note","apply"}`。`apply` 不是 `true` 时只返回计划。`apply: true` 把手工 `address` 设为新 IP，把当前展示地址追加进 `previous_ips`（带上海日期和 note），`host_id` 与 `metrics_history` 不动。新 IP 若恰有一个部署目标，把它的 `host_id` 改成这台主机并取消停用，密码不动；旧 IP 上属于这台主机、或 `host_id` 就是这台主机且 IP 不是新地址的目标设 `retired=1`，不删除。多个目标共用新 IP、新 IP 无效、或与当前展示地址相同，则 400 且不写库 |
+| POST | `/api/v1/hosts/{id}/readdress` | 正文 `{"new_ip","note","apply"}`。`apply` 不是 `true` 时只返回计划。`apply: true` 把手工 `address` 设为新 IP，把当前展示地址追加进 `previous_ips`（带上海日期和 note），`host_id` 与 `metrics_history` 不动，并把改动前的目标 `host_id` / `retired` 记进 `readdress_undo`。新 IP 若恰有一个部署目标，把它的 `host_id` 改成这台主机并取消停用，密码不动；旧 IP 上属于这台主机、或 `host_id` 就是这台主机且 IP 不是新地址的目标设 `retired=1`，不删除。多个目标共用新 IP、新 IP 无效、或与当前展示地址相同，则 400 且不写库 |
+| POST | `/api/v1/hosts/{id}/readdress/undo` | 正文 `{"apply"}`。没有 `readdress_undo` 时 400。记录里的目标 id 已删除则 400 且不写库。`apply: true` 按记录恢复每个目标的 `host_id` 和 `retired`，手工 `address` 清空，只去掉这次追加的那条 `previous_ips`，然后清除撤销记录 |
 
 `asset` 字段：`owner` 负责人、`purpose` 用途、`address` 手工展示地址、`cpu` / `memory` / `disk` / `gpu` / `model` 型号或资产编号、`notes` 备注，以及导入可带的 `name`、`category`、`vm_host`、`monitor_flag`。`previous_ips` 是 `[{"ip","date","note"}]`，不是普通字符串字段；只改其他资产字段时仍保留它。
 
-部署目标 `POST /api/v1/deploy/targets/{id}` 可以改 `ip` 和 `host_id`。IP 必须是可用 IPv4；`host_id` 不能空、不能含空白或斜杠。改到的 IP 若已被另一个目标使用，返回 400，该行不变。未提交或空字符串的 `ssh_password` 保持原值。`deploy_targets.retired` 为可空整数，`1` 表示停用：不进入展示地址映射，也不进入部署任务。
+部署目标 `POST /api/v1/deploy/targets/{id}` 可以改 `ip`、`host_id` 和 `retired`（`true` / `false` / `1` / `0`）。IP 必须是可用 IPv4；`host_id` 不能空、不能含空白或斜杠。`retired` 非法时 400，且不会去做网络探查。改到的 IP 若已被另一个目标使用，返回 400，该行不变。未提交或空字符串的 `ssh_password` 保持原值。只提交 `retired` 时 IP、host_id 和密码都不变。`deploy_targets.retired` 为可空整数，`1` 表示停用：不进入展示地址映射，也不进入部署任务。部署页每行有「停用 / 恢复」。
 
 ### 1.4 GET `/api/v1/stats`
 

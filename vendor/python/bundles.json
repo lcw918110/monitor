@@ -1,0 +1,19 @@
+{
+  "note": "python-build-standalone install_only，glibc >= 2.17。tar.gz 不要提交进 git，用 scripts/fetch_python_bundle.sh 在有网的机器下载后再拷到中心。",
+  "release": "20241016",
+  "glibc_min": "2.17",
+  "arches": {
+    "x86_64": {
+      "triple": "x86_64-unknown-linux-gnu",
+      "filename": "cpython-3.10.15+20241016-x86_64-unknown-linux-gnu-install_only.tar.gz",
+      "sha256": "3db2171e03c1a7acdc599fba583c1b92306d3788b375c9323077367af1e9d9de",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20241016/cpython-3.10.15+20241016-x86_64-unknown-linux-gnu-install_only.tar.gz"
+    },
+    "aarch64": {
+      "triple": "aarch64-unknown-linux-gnu",
+      "filename": "cpython-3.10.15+20241016-aarch64-unknown-linux-gnu-install_only.tar.gz",
+      "sha256": "eb58581f85fde83d1f3e8e1f8c6f5a15c7ae4fdbe3b1d1083931f9167fdd8dbc",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20241016/cpython-3.10.15+20241016-aarch64-unknown-linux-gnu-install_only.tar.gz"
+    }
+  }
+}

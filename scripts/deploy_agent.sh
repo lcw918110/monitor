@@ -13,6 +13,8 @@ TOKEN=""
 INTERVAL=15
 NO_SYSTEMD=0
 START=1
+PYTHON_BUNDLE=""
+PYTHON_BUNDLE_SHA256=""
 
 usage() {
   cat <<EOF
@@ -31,10 +33,14 @@ usage() {
   --interval N        上报间隔秒（默认 15）
   --no-systemd        不安装 systemd
   --no-start          只安装不启动
+  --python-bundle FILE
+                      便携 CPython 的 install_only tar.gz（系统解释器不够时才用）
+  --python-bundle-sha256 HEX
+                      上面这个包的 sha256
   -h, --help          帮助
 
 环境变量:
-  PYTHON_BIN          优先使用的 Python 解释器（需 >= 3.6）
+  PYTHON_BIN          优先使用的 Python 解释器（需 >= 3.6；3.5 不够）
 EOF
 }
 
@@ -49,6 +55,8 @@ while [[ $# -gt 0 ]]; do
     --interval) INTERVAL="$2"; shift 2 ;;
     --no-systemd) NO_SYSTEMD=1; shift ;;
     --no-start) START=0; shift ;;
+    --python-bundle) PYTHON_BUNDLE="$2"; shift 2 ;;
+    --python-bundle-sha256) PYTHON_BUNDLE_SHA256="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1"; usage; exit 1 ;;
   esac
@@ -74,9 +82,13 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "[info] 非 root，跳过 systemd，将使用 nohup 后台启动"
 fi
 
-# 先复用本机已有 Python >= 3.6，没有再用 apt/yum/dnf 安装
+# 下限见 scripts/lib/python_min.sh（Agent 3.6，不是 3.7）。
+# shellcheck source=lib/python_min.sh
+. "$ROOT/scripts/lib/python_min.sh"
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
+# shellcheck source=lib/python_bundle.sh
+. "$ROOT/scripts/lib/python_bundle.sh"
 # shellcheck source=lib/sync_tree.sh
 . "$ROOT/scripts/lib/sync_tree.sh"
 
@@ -88,11 +100,13 @@ fail_deploy() {
 }
 
 MONITOR_INSTALL_PYTHON=1
-if ! ensure_python 3 6; then
-  if [[ "${MONITOR_PYTHON_INSTALL_FAIL:-0}" == "1" ]]; then
-    fail_deploy python_install_fail "自动安装 python3 失败（CentOS 7 默认镜像 EOL/404 时会尝试 vault.centos.org/7.9.2009）"
+if ! ensure_agent_python "$MONITOR_AGENT_PY_MIN_MAJOR" "$MONITOR_AGENT_PY_MIN_MINOR"; then
+  if [[ -n "${MONITOR_PYTHON_BUNDLE_CODE:-}" ]]; then
+    fail_deploy "$MONITOR_PYTHON_BUNDLE_CODE" "${MONITOR_PYTHON_BUNDLE_MSG:-便携 Python 不可用}"
+  elif [[ "${MONITOR_PYTHON_INSTALL_FAIL:-0}" == "1" ]]; then
+    fail_deploy python_install_fail "自动安装 python3 失败，且没有可用的便携 Python（CentOS 7 默认镜像 EOL/404 时会尝试 vault.centos.org/7.9.2009）"
   else
-    fail_deploy no_python "未找到可用的 Python >= 3.6"
+    fail_deploy no_python "未找到可用的 Python >= ${MONITOR_AGENT_PY_MIN_MAJOR}.${MONITOR_AGENT_PY_MIN_MINOR}（Ubuntu 16.04 自带 3.5 不够；请在中心放置便携 CPython）"
   fi
 fi
 log_python_choice

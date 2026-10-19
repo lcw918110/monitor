@@ -108,6 +108,7 @@ _FORBIDDEN_API_KEYS = {
 def empty_asset() -> Dict[str, Any]:
     out: Dict[str, Any] = {key: "" for key in ASSET_FIELDS}
     out["previous_ips"] = []
+    out["readdress_undo"] = None
     return out
 
 
@@ -141,6 +142,68 @@ def parse_previous_ips(raw: Any) -> List[Dict[str, str]]:
     return out
 
 
+def parse_readdress_undo(raw: Any) -> Optional[Dict[str, Any]]:
+    """改址 apply 时记下的可撤销状态。坏数据当成没有记录。"""
+    if not isinstance(raw, dict):
+        return None
+    targets: List[Dict[str, Any]] = []
+    for item in raw.get("targets") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            tid = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        targets.append(
+            {
+                "id": tid,
+                "host_id": str(item.get("host_id") or ""),
+                "retired": bool(item.get("retired")),
+                "ip": normalize_ip(item.get("ip")) or str(item.get("ip") or ""),
+            }
+        )
+    return {
+        "added_previous_ip": normalize_ip(raw.get("added_previous_ip")) or "",
+        "new_ip": normalize_ip(raw.get("new_ip")) or "",
+        "old_ip": normalize_ip(raw.get("old_ip")) or "",
+        "note": str(raw.get("note") or "").strip()[:200],
+        "targets": targets,
+    }
+
+
+def sanitize_previous_ips_value(
+    data: Any,
+) -> Tuple[Optional[str], Optional[List[Dict[str, str]]]]:
+    """``previous_ips`` 缺省表示不改。``[]`` 清空。无效 IP 拒绝，不静默丢掉。"""
+    if not isinstance(data, dict) or "previous_ips" not in data:
+        return None, None
+    raw = data.get("previous_ips")
+    if raw is None:
+        return None, []
+    if not isinstance(raw, list):
+        return "previous_ips 必须是数组", None
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for item in raw:
+        note = ""
+        date = ""
+        if isinstance(item, dict):
+            ip = normalize_ip(item.get("ip") or item.get("address"))
+            note = str(item.get("note") or "").strip()[:200]
+            date = str(item.get("date") or "").strip()[:32]
+        elif isinstance(item, str):
+            ip = normalize_ip(item)
+        else:
+            ip = ""
+        if not ip:
+            return "previous_ips 含有无效 IP", None
+        if ip in seen:
+            continue
+        seen.add(ip)
+        out.append({"ip": ip, "date": date, "note": note})
+    return None, out
+
+
 def parse_asset_meta(raw: Any) -> Dict[str, Any]:
     """库里的 JSON。缺键、坏 JSON 都当成空，不抛给调用方。
 
@@ -165,6 +228,7 @@ def parse_asset_meta(raw: Any) -> Dict[str, Any]:
             continue
         out[key] = str(value)
     out["previous_ips"] = parse_previous_ips(data.get("previous_ips"))
+    out["readdress_undo"] = parse_readdress_undo(data.get("readdress_undo"))
     return out
 
 
@@ -172,6 +236,11 @@ def dump_asset_meta(asset: Dict[str, Any]) -> str:
     clean = empty_asset()
     clean.update({key: str(asset.get(key) or "") for key in ASSET_FIELDS})
     clean["previous_ips"] = parse_previous_ips(asset.get("previous_ips"))
+    undo = parse_readdress_undo(asset.get("readdress_undo"))
+    if undo:
+        clean["readdress_undo"] = undo
+    else:
+        clean.pop("readdress_undo", None)
     return json.dumps(clean, ensure_ascii=False)
 
 

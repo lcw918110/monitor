@@ -1859,7 +1859,10 @@ function renderHosts(hosts) {
       "</div></div>" +
       '<div class="asset-actions">' +
       '<button type="button" class="btn btn-sm" id="btnReaddress">更换 IP</button>' +
-      '<span class="muted">旧 IP 留在历史里，监控 ID 和历史上报不改。新 IP 上的部署目标会改指向这台主机，旧 IP 目标停用但不删除。</span>' +
+      (data.readdress_undo
+        ? ' <button type="button" class="btn btn-sm" id="btnReaddressUndo">撤销更换 IP</button>'
+        : "") +
+      '<span class="muted">旧 IP 留在历史里，监控 ID 和历史上报不改。新 IP 上的部署目标会改指向这台主机，旧 IP 目标停用但不删除。撤销会按当时记下的 host_id 和停用状态恢复，并清掉这次写入的手工地址和那一条历史 IP。</span>' +
       "</div>"
     );
   }
@@ -1868,6 +1871,62 @@ function renderHosts(hosts) {
     const btn = document.getElementById("btnReaddress");
     if (btn && data && data.host_id) {
       btn.addEventListener("click", () => readdressHost(data));
+    }
+    const undo = document.getElementById("btnReaddressUndo");
+    if (undo && data && data.host_id) {
+      undo.addEventListener("click", () => undoReaddress(data));
+    }
+  }
+
+  async function undoReaddress(data) {
+    const url = "/api/v1/hosts/" + encodeURIComponent(data.host_id) + "/readdress/undo";
+    try {
+      const previewRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apply: false }),
+      });
+      const preview = await previewRes.json();
+      if (!previewRes.ok || !preview.ok) {
+        throw new Error((preview && preview.error) || "无法预览撤销");
+      }
+      const lines = [
+        "撤销主机 " + preview.host_id + " 的上一次更换 IP。监控 ID 和历史上报不改。",
+        "手工地址会清空。",
+      ];
+      if (preview.remove_previous_ip) {
+        lines.push("去掉历史 IP：" + preview.remove_previous_ip);
+      }
+      (preview.targets || []).forEach((t) => {
+        lines.push(
+          "部署目标 #" +
+            t.id +
+            " " +
+            (t.ip || "") +
+            " host_id " +
+            (t.host_id_from || "（空）") +
+            " → " +
+            (t.host_id_to || "（空）") +
+            "，停用 " +
+            (t.retired_from ? "是" : "否") +
+            " → " +
+            (t.retired_to ? "是" : "否")
+        );
+      });
+      lines.push("确认撤销？");
+      if (!window.confirm(lines.join("\n"))) return;
+      const applyRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apply: true }),
+      });
+      const applied = await applyRes.json();
+      if (!applyRes.ok || !applied.ok) {
+        throw new Error((applied && applied.error) || "撤销失败");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e.message || "撤销失败");
     }
   }
 

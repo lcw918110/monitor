@@ -8,7 +8,7 @@ fi
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
 MONITOR_INSTALL_PYTHON=0
-ensure_python 3 6 || exit 1
+ensure_python "$MONITOR_AGENT_PY_MIN_MAJOR" "$MONITOR_AGENT_PY_MIN_MINOR" || exit 1
 apply_python_ld_library_path
 export PYTHONPATH=.
 exec "$PY" -m agent --config config/agent.json "$@"

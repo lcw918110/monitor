@@ -9,3 +9,5 @@ __pycache__/
 venv/
 .deploy-center/
 .deploy-agent/
+vendor/python/*.tar.gz
+vendor/python/*.sha256

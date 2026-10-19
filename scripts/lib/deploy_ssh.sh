@@ -60,6 +60,26 @@ ssh_classify_fail() {
       echo "remote_fail"
       return 0
       ;;
+    *"python_bundle_checksum"*)
+      echo "python_bundle_checksum"
+      return 0
+      ;;
+    *"python_bundle_missing"*)
+      echo "python_bundle_missing"
+      return 0
+      ;;
+    *"python_bundle_arch"*)
+      echo "python_bundle_arch"
+      return 0
+      ;;
+    *"python_bundle_extract"*)
+      echo "python_bundle_extract"
+      return 0
+      ;;
+    *"python_bundle_exec"*)
+      echo "python_bundle_exec"
+      return 0
+      ;;
     *"python_install_fail"*|*"vault.centos.org"*)
       echo "python_install_fail"
       return 0

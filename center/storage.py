@@ -716,6 +716,8 @@ class Storage:
         item["owner"] = asset.get("owner") or ""
         item["purpose"] = asset.get("purpose") or ""
         item["previous_ips"] = list(asset.get("previous_ips") or [])
+        if asset.get("readdress_undo"):
+            item["readdress_undo"] = asset["readdress_undo"]
         manual = str(asset.get("address") or "").strip()
         if normalize_ip(manual):
             item["address"] = resolve_host_address(
@@ -843,9 +845,15 @@ class Storage:
         return item
 
     def update_host_asset(
-        self, host_id: str, patch: Dict[str, str]
+        self,
+        host_id: str,
+        patch: Dict[str, str],
+        previous_ips: Optional[List[Dict[str, str]]] = None,
     ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """合并手工资产字段。patch 里的空字符串会清空。不上报路径调用。"""
+        """合并手工资产字段。patch 里的空字符串会清空。不上报路径调用。
+
+        ``previous_ips is None`` 表示不改历史 IP。传入列表（含空列表）则整表替换。
+        """
         hid = str(host_id or "").strip()
         if not hid:
             return "host_id 不能为空", None
@@ -861,6 +869,8 @@ class Storage:
                 for key, value in patch.items():
                     if key in ASSET_FIELDS:
                         asset[key] = value
+                if previous_ips is not None:
+                    asset["previous_ips"] = parse_previous_ips(previous_ips)
                 conn.execute(
                     "UPDATE hosts SET asset_meta=? WHERE host_id=?",
                     (dump_asset_meta(asset), hid),
@@ -890,13 +900,19 @@ class Storage:
         host_id: str,
         address: str,
         previous_ips: List[Dict[str, str]],
+        undo: Any = None,
+        allow_clear_address: bool = False,
     ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """只改展示地址和历史 IP。host_id 与历史上报不动。"""
+        """只改展示地址和历史 IP。host_id 与历史上报不动。
+
+        ``undo`` 为 dict 时记下可撤销状态；``None`` 表示清掉记录。
+        ``allow_clear_address`` 让撤销可以把手工地址写成空。
+        """
         hid = str(host_id or "").strip()
         ip = normalize_ip(address)
         if not hid:
             return "host_id 不能为空", None
-        if not ip:
+        if not ip and not allow_clear_address:
             return "新 IP 无效", None
         prev = parse_previous_ips(previous_ips)
         with self._lock:
@@ -908,8 +924,9 @@ class Storage:
                 if not row:
                     return "主机不存在", None
                 asset = parse_asset_meta(row["asset_meta"])
-                asset["address"] = ip
+                asset["address"] = ip or ""
                 asset["previous_ips"] = prev
+                asset["readdress_undo"] = undo
                 conn.execute(
                     "UPDATE hosts SET asset_meta=? WHERE host_id=?",
                     (dump_asset_meta(asset), hid),

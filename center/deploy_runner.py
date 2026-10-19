@@ -21,22 +21,20 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from center.deploy_errors import (
-    AGENT_START_FAIL,
     AUTH_FAIL,
     CENTER_URL_MISSING,
     DIR_NOT_WRITABLE,
     KEY_MISSING,
-    NO_PYTHON,
     PACKAGE_INCOMPLETE,
-    PYTHON_INSTALL_FAIL,
     REMOTE_FAIL,
+    SUDO_REQUIRED,
     SSHPASS_MISSING,
     SSH_UNREACHABLE,
-    SUDO_REQUIRED,
     TIMEOUT,
     UNKNOWN,
     DeployError,
     classify_deploy_failure,
+    failure_from_remote_output,
     format_fail,
     run_ssh_with_retry,
 )
@@ -474,11 +472,78 @@ echo REMOTE_DIR=$REMOTE_DIR
         }
 
 
+REMOTE_PYTHON_BUNDLE = "/tmp/monitor-python-bundle.tgz"
+
+
+def _stage_python_bundle(
+    *,
+    ssh_base: List[str],
+    remote: str,
+    env: Optional[Dict[str, str]],
+    bundles_dir: str,
+    log: LogFn,
+    label: str,
+) -> str:
+    """有对应架构且校验通过时上传便携包，返回 deploy_agent.sh 的参数。否则返回空串。
+
+    架构探不到、目录没有包、校验失败都不中断部署：目标机若已有 >= 3.6 仍可成功。
+    """
+    from center.python_bundle import select_bundle
+
+    if not bundles_dir or not os.path.isdir(bundles_dir):
+        log("%s 中心未配置便携 Python 目录，跳过" % label)
+        return ""
+    try:
+        proc = run_ssh_with_retry(
+            ssh_base + [remote, "uname -m"],
+            timeout=20,
+            env=env,
+            attempts=2,
+            log=log,
+            label=label,
+        )
+    except subprocess.TimeoutExpired:
+        log("%s 读取目标机架构超时，跳过便携 Python" % label)
+        return ""
+    if proc.returncode != 0:
+        log("%s 读取目标机架构失败，跳过便携 Python" % label)
+        return ""
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    arch = lines[-1] if lines else ""
+    info, code, message = select_bundle(arch, bundles_dir)
+    if not info:
+        log("%s %s（%s）" % (label, message or "未使用便携 Python", code or "skip"))
+        return ""
+    log("%s 上传便携 Python %s" % (label, info["filename"]))
+    try:
+        uploaded = upload_file_via_ssh(
+            ssh_base,
+            remote,
+            info["path"],
+            remote_path=REMOTE_PYTHON_BUNDLE,
+            env=env,
+            timeout=180,
+            log=log,
+            label=label,
+        )
+    except subprocess.TimeoutExpired:
+        log("%s 便携 Python 上传超时，继续尝试系统解释器" % label)
+        return ""
+    if uploaded.returncode != 0:
+        log("%s 便携 Python 上传失败，继续尝试系统解释器" % label)
+        return ""
+    return "--python-bundle %s --python-bundle-sha256 %s" % (
+        shlex.quote(REMOTE_PYTHON_BUNDLE),
+        shlex.quote(info["sha256"]),
+    )
+
+
 def deploy_one_target(
     target: Dict[str, Any],
     settings: Dict[str, Any],
     token: str,
     log: LogFn,
+    bundles_dir: str = "",
 ) -> None:
     root = _project_root()
     public_url = (settings.get("public_center_url") or "").strip()
@@ -517,6 +582,7 @@ def deploy_one_target(
         log("[%s] 私钥: %s" % (ip, auth["key_path"]))
 
     log("[%s] 打包代码..." % ip)
+    bundle_cli = ""
     tgz = _make_package_tgz(root)
     remote = "%s@%s" % (ssh_user, ip)
     try:
@@ -542,6 +608,15 @@ def deploy_one_target(
                 % proc.returncode,
             )
             raise DeployError(code, human)
+        bundle_cli = _stage_python_bundle(
+            ssh_base=ssh_base,
+            remote=remote,
+            env=env,
+            bundles_dir=bundles_dir,
+            log=log,
+            label="[%s]" % ip,
+        )
+        bundle_suffix = (" \\\n  " + bundle_cli) if bundle_cli else ""
         # 远端展开 ~ 后直接安装，避免嵌套 heredoc 在 set -u 下误展开变量
         center = public_url.rstrip("/")
         helper = build_remote_root_helper(
@@ -577,7 +652,7 @@ run_root "$STAGING/scripts/deploy_agent.sh" \\
   --hostname {shlex.quote(hostname or host_id)} \\
   --host-type {shlex.quote(host_type or "auto")} \\
   --token {shlex.quote(token or "")} \\
-  --interval {int(interval or 15)}
+  --interval {int(interval or 15)}{bundle_suffix}
 run_root rm -rf "$STAGING"
 rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE
@@ -606,31 +681,11 @@ echo DEPLOY_DONE
                 hint = "（非 root 写 /opt 需 sudo；或把远端目录改为 ~/monitor-agent）"
             elif "unbound variable" in out:
                 hint = "（远端脚本变量错误，请更新中心端后重试）"
-            code, human = classify_deploy_failure(
+            code, human = failure_from_remote_output(
                 out,
                 default_code=REMOTE_FAIL,
                 default_message="远端安装失败，exit=%s%s" % (proc.returncode, hint),
             )
-            if "python_install_fail" in out:
-                code, human = (
-                    PYTHON_INSTALL_FAIL,
-                    "自动安装 python3 失败（CentOS 7 默认镜像 EOL/404 时会尝试 vault.centos.org/7.9.2009）",
-                )
-            elif "未找到可用的 Python" in out:
-                code, human = NO_PYTHON, "目标机没有可用的 Python >= 3.6"
-            elif "上报自检失败" in out:
-                code, human = AGENT_START_FAIL, "Agent 上报自检失败（检查中心地址/Token/网络）"
-            elif "package_incomplete" in out or "No module named agent" in out:
-                code, human = (
-                    PACKAGE_INCOMPLETE,
-                    "安装包缺少 agent/（中心树必须保留 agent 包后再部署）",
-                )
-            elif (
-                "sudo_required" in out
-                or "not in the sudoers" in out.lower()
-                or "a password is required" in out.lower()
-            ):
-                code, human = SUDO_REQUIRED, "非 root 写入 /opt 需要 sudo（sudo -n 或同一 SSH 密码）"
             raise DeployError(code, human)
         log("[%s] 部署成功" % ip)
     finally:
@@ -641,9 +696,12 @@ echo DEPLOY_DONE
 
 
 class DeployRunner:
-    def __init__(self, store: DeployStore, token: str = "") -> None:
+    def __init__(
+        self, store: DeployStore, token: str = "", bundles_dir: str = ""
+    ) -> None:
         self.store = store
         self.token = token or ""
+        self.bundles_dir = bundles_dir or ""
         self._lock = threading.Lock()
 
     def start_job(self, target_ids: Optional[List[int]] = None) -> int:
@@ -684,7 +742,9 @@ class DeployRunner:
             tid = int(t["id"])
             self.store.update_target_status(tid, "deploying", "部署中")
             try:
-                deploy_one_target(t, settings, self.token, log)
+                deploy_one_target(
+                    t, settings, self.token, log, bundles_dir=self.bundles_dir
+                )
                 self.store.update_target_status(tid, "success", "部署成功", error_code="")
             except DeployError as exc:
                 ok_all = False

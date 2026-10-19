@@ -52,13 +52,15 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "[info] 非 root，跳过 systemd，将使用 nohup 后台启动"
 fi
 
-# 先复用本机已有 Python >= 3.8（中心端），没有再用 apt/yum/dnf 安装
+# 中心端下限 3.8，见 scripts/lib/python_min.sh。便携包只给 Agent 目标机。
+# shellcheck source=lib/python_min.sh
+. "$ROOT/scripts/lib/python_min.sh"
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
 # shellcheck source=lib/sync_tree.sh
 . "$ROOT/scripts/lib/sync_tree.sh"
 MONITOR_INSTALL_PYTHON=1
-ensure_python 3 8 || exit 1
+ensure_python "$MONITOR_CENTER_PY_MIN_MAJOR" "$MONITOR_CENTER_PY_MIN_MINOR" || exit 1
 log_python_choice
 apply_python_ld_library_path
 

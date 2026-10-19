@@ -160,6 +160,47 @@ deploy_one() {
   fi
   echo "[$ip] [sync] method=$method"
 
+  local bundle_args="" bundle_arch bundle_out bundle_path bundle_sha
+  bundle_arch="$(ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "uname -m" 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)"
+  if [[ -n "$bundle_arch" ]]; then
+    bundle_out="$(
+      PYTHONPATH="$ROOT" python3 - "$bundle_arch" "$ROOT" <<'PY' || true
+import os, sys
+sys.path.insert(0, sys.argv[2])
+from center.python_bundle import bundles_dir_from_config, select_bundle
+import json
+cfg = {}
+path = os.path.join(sys.argv[2], "config", "center.json")
+if os.path.isfile(path):
+    try:
+        cfg = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        cfg = {}
+directory = bundles_dir_from_config(cfg, sys.argv[2])
+info, code, msg = select_bundle(sys.argv[1], directory)
+if not info:
+    sys.stderr.write("%s %s\n" % (code or "", msg or ""))
+    raise SystemExit(2)
+sys.stdout.write(info["path"] + "\n" + info["sha256"] + "\n")
+PY
+    )" || true
+    bundle_path="$(printf '%s\n' "$bundle_out" | sed -n '1p')"
+    bundle_sha="$(printf '%s\n' "$bundle_out" | sed -n '2p')"
+    if [[ -n "$bundle_path" && -f "$bundle_path" && -n "$bundle_sha" ]]; then
+      if ssh "${ssh_opts[@]}" -T "${SSH_USER}@${ip}" "cat > /tmp/monitor-python-bundle.tgz" < "$bundle_path"; then
+        bundle_args="--python-bundle /tmp/monitor-python-bundle.tgz --python-bundle-sha256 ${bundle_sha}"
+        echo "[$ip] 已上传便携 Python"
+      else
+        echo "[$ip] 便携 Python 上传失败，继续尝试系统解释器"
+        bundle_args=""
+      fi
+    else
+      echo "[$ip] 未选用便携 Python（架构 ${bundle_arch}），继续使用系统解释器"
+    fi
+  else
+    echo "[$ip] 未能读取架构，跳过便携 Python"
+  fi
+
   set +e
   out="$(ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" bash -s <<EOF
 set -euo pipefail
@@ -184,7 +225,7 @@ sudo "\$STAGING/scripts/deploy_agent.sh" \\
   --center-url '$CENTER_URL' \\
   --dir '$REMOTE_DIR' \\
   --host-id '$host_id' \\
-  --token '$TOKEN'
+  --token '$TOKEN' $bundle_args
 sudo rm -rf "\$STAGING"
 rm -f /tmp/monitor-agent.tgz
 echo DEPLOY_DONE

@@ -503,8 +503,15 @@ class ResolvePythonScriptTests(unittest.TestCase):
         with open(deploy, "r", encoding="utf-8") as f:
             src = f.read()
         self.assertIn("resolve_python.sh", src)
-        self.assertIn("ensure_python 3 6", src)
+        self.assertIn("python_min.sh", src)
+        self.assertIn("ensure_agent_python", src)
+        self.assertIn("MONITOR_AGENT_PY_MIN_MAJOR", src)
         self.assertIn("MONITOR_INSTALL_PYTHON=1", src)
+        mins = os.path.join(ROOT, "scripts", "lib", "python_min.sh")
+        with open(mins, "r", encoding="utf-8") as f:
+            msrc = f.read()
+        self.assertIn("MONITOR_AGENT_PY_MIN_MINOR=6", msrc)
+        self.assertIn("MONITOR_CENTER_PY_MIN_MINOR=8", msrc)
         self.assertIn("python_install_fail", src)
         self.assertIn("no_python", src)
         self.assertIn("sync_tree.sh", src)
