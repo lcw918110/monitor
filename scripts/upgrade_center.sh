@@ -7,7 +7,9 @@
 #   bash scripts/upgrade_center.sh <包目录或 tar.gz> --sha <git-sha> --dir /opt/monitor
 #
 # 保留 config/center.json、data/、vendor/python 里的 tar.gz。
-# 失败时用升级前的一致备份回滚代码、数据库和 systemd 单元。
+# 先在新包上跑测试，失败则直接退出，不备份、不同步、不重启。
+# 同步之后只做健康检查。回滚只恢复代码和 systemd 单元，不碰 data/，
+# 失败的代码留在同级的 <安装目录名>-failed-<时间> 目录里。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -31,9 +33,11 @@ usage() {
   cat <<EOF
 用法: $0 <包目录或 tar.gz> [--dir /opt/monitor] [--sha SHA] [--keep-backups N]
 
-在中心机执行。升级前用 Python sqlite3 backup 做一致的数据库副本并 quick_check，
+在中心机执行。先在新包上跑测试，失败则不改安装目录。
+通过后再用 Python sqlite3 backup 做一致的数据库副本并 quick_check。
 同步时不覆盖 config/center.json、data/ 和已放置的便携 Python 包。
-健康检查、主机/报告接口、历史上报条数或本机测试失败时自动回滚。
+重启后只做健康检查（health / hosts / reports，以及主机和历史上报条数没有减少）。
+健康检查失败时只回滚代码和 systemd 单元，不从备份恢复 data/。
 EOF
 }
 
@@ -67,8 +71,24 @@ UNIT_PATH="${MONITOR_UPGRADE_UNIT:-/etc/systemd/system/monitor-center.service}"
 SYSTEMCTL_CMD="${MONITOR_UPGRADE_SYSTEMCTL_CMD:-systemctl}"
 CURL_CMD="${MONITOR_UPGRADE_CURL_CMD:-}"
 
+_upgrade_assert_not_live_data() {
+  local target="${1:-}"
+  local live="${INSTALL_DIR}/data"
+  [[ -n "$target" ]] || return 1
+  case "$target" in
+    "$INSTALL_DIR"|"$live"|"$live"/*)
+      echo "拒绝删除现场数据: $target" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 cleanup() {
   if [[ -n "${WORK:-}" && -d "$WORK" ]]; then
+    if declare -F _upgrade_assert_not_live_data >/dev/null 2>&1; then
+      _upgrade_assert_not_live_data "$WORK" || return 0
+    fi
     rm -rf "$WORK"
   fi
 }
@@ -180,23 +200,72 @@ print(int(json.load(open(sys.argv[1], encoding="utf-8")).get("port") or 8080))
 PY
 }
 
+# 复制目录项，跳过 data/。不删除源，也不删除目标里的 data/。
+_upgrade_copy_except_data() {
+  local src="$1"
+  local dest="$2"
+  local item name
+  local glob_state
+  glob_state="$(shopt -p nullglob dotglob || true)"
+  shopt -s nullglob dotglob
+  mkdir -p "$dest"
+  for item in "$src"/*; do
+    [[ -e "$item" ]] || continue
+    name="$(basename "$item")"
+    [[ "$name" == "." || "$name" == ".." || "$name" == "data" ]] && continue
+    cp -a "$item" "$dest/"
+  done
+  eval "$glob_state"
+}
+
+# 用备份里的代码盖回安装目录。只删除安装目录里除 data/ 以外的项。
+_upgrade_restore_code_except_data() {
+  local src="$1"
+  local dest="$2"
+  local item name
+  local glob_state
+  glob_state="$(shopt -p nullglob dotglob || true)"
+  shopt -s nullglob dotglob
+  for item in "$dest"/*; do
+    [[ -e "$item" ]] || continue
+    name="$(basename "$item")"
+    [[ "$name" == "." || "$name" == ".." || "$name" == "data" ]] && continue
+    if [[ "$item" == "$INSTALL_DIR/data" || "$item" == "$INSTALL_DIR/data/"* ]]; then
+      echo "拒绝删除现场数据: $item" >&2
+      return 1
+    fi
+    rm -rf "$item"
+  done
+  for item in "$src"/*; do
+    [[ -e "$item" ]] || continue
+    name="$(basename "$item")"
+    [[ "$name" == "." || "$name" == ".." || "$name" == "data" ]] && continue
+    cp -a "$item" "$dest/"
+  done
+  eval "$glob_state"
+}
+
 do_rollback() {
-  echo "==> 回滚到 ${BACKUP_DIR}"
-  upgrade_systemctl stop monitor-center >/dev/null 2>&1 || true
-  local failed_dir="${INSTALL_DIR}.failed-$$"
-  rm -rf "$failed_dir"
-  if [[ -d "$INSTALL_DIR" ]]; then
-    mv "$INSTALL_DIR" "$failed_dir"
+  local failed_dir ts parent base
+  ts="$(date +%Y%m%d%H%M%S)"
+  parent="$(dirname "$INSTALL_DIR")"
+  base="$(basename "$INSTALL_DIR")"
+  failed_dir="${parent}/${base}-failed-${ts}"
+  if [[ -e "$failed_dir" ]]; then
+    failed_dir="${failed_dir}-$$"
   fi
-  cp -a "$BACKUP_DIR/code" "$INSTALL_DIR"
+  echo "==> 回滚代码，失败的目录保留在 ${failed_dir}（不改 data/）"
+  upgrade_systemctl stop monitor-center >/dev/null 2>&1 || true
+  mkdir -p "$failed_dir"
+  _upgrade_copy_except_data "$INSTALL_DIR" "$failed_dir"
+  _upgrade_restore_code_except_data "$BACKUP_DIR/code" "$INSTALL_DIR"
   if [[ -f "$BACKUP_DIR/monitor-center.service" ]]; then
     mkdir -p "$(dirname "$UNIT_PATH")"
     cp -a "$BACKUP_DIR/monitor-center.service" "$UNIT_PATH"
   fi
   upgrade_systemctl daemon-reload >/dev/null 2>&1 || true
   upgrade_systemctl restart monitor-center >/dev/null 2>&1 || true
-  rm -rf "$failed_dir"
-  echo "[rollback] 已恢复代码、数据库和 systemd 单元"
+  echo "[rollback] 已恢复代码和 systemd 单元，data/ 未改动，失败代码在 ${failed_dir}"
 }
 
 fail_upgrade() {
@@ -228,6 +297,18 @@ prune_backups() {
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue
     if [[ "$i" -lt "$remove_count" ]]; then
+      case "$(basename "$d")" in
+        "${base}-backup-"*) ;;
+        *)
+          echo "拒绝删除非备份目录: $d" >&2
+          i=$((i + 1))
+          continue
+          ;;
+      esac
+      if ! _upgrade_assert_not_live_data "$d"; then
+        i=$((i + 1))
+        continue
+      fi
       rm -rf "$d"
       echo "[backup] 删除旧备份 $d"
     fi
@@ -264,6 +345,18 @@ if [[ -z "$PY" || ! -x "$PY" ]]; then
   exit 1
 fi
 
+echo "==> 在新包上跑测试（尚未改动 $INSTALL_DIR）"
+if [[ ! -d "$PKG/tests" ]]; then
+  echo "升级包没有 tests/，未改动安装目录"
+  exit 1
+fi
+# 不传 -t：tests/ 不是包（没有 __init__.py）。cwd 与 PYTHONPATH 指向新包，测试不得去写现场数据库。
+if ! (cd "$PKG" && PYTHONPATH="$PKG" "$PY" -m unittest discover -s tests); then
+  echo "新包测试未通过，未改动安装目录"
+  exit 1
+fi
+echo "[ok] 新包测试通过"
+
 DB="$INSTALL_DIR/data/monitor.db"
 db_bytes=0
 if [[ -f "$DB" ]]; then
@@ -286,11 +379,14 @@ echo "==> 备份到 $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 cp -a "$INSTALL_DIR" "$BACKUP_DIR/code"
 if [[ -f "$DB" ]]; then
+  # 只换掉备份目录里的数据库文件，准备写入一致副本。现场 $DB 不在这条路径上。
   rm -f "$BACKUP_DIR/code/data/monitor.db" \
     "$BACKUP_DIR/code/data/monitor.db-wal" \
     "$BACKUP_DIR/code/data/monitor.db-shm"
   if ! backup_sqlite "$DB" "$BACKUP_DIR/code/data/monitor.db" "$PY"; then
-    rm -rf "$BACKUP_DIR"
+    if _upgrade_assert_not_live_data "$BACKUP_DIR"; then
+      rm -rf "$BACKUP_DIR"
+    fi
     echo "数据库一致备份失败，未改动安装目录"
     exit 1
   fi
@@ -359,12 +455,17 @@ BASE="http://127.0.0.1:${PORT}"
 echo "==> 检查 ${BASE}"
 health_ok=0
 health_body=""
-for _try in 1 2 3 4 5 6 7 8 9 10; do
+health_tries="${MONITOR_UPGRADE_HEALTH_TRIES:-10}"
+_try=1
+while [[ "$_try" -le "$health_tries" ]]; do
   if health_body="$(upgrade_curl "${BASE}/api/v1/health" 2>/dev/null || true)" && printf '%s' "$health_body" | grep -q '"ok"'; then
     health_ok=1
     break
   fi
-  sleep 1
+  if [[ "$_try" -lt "$health_tries" ]]; then
+    sleep 1
+  fi
+  _try=$((_try + 1))
 done
 if [[ "$health_ok" != "1" ]]; then
   fail_upgrade "健康检查失败: ${BASE}/api/v1/health"
@@ -381,15 +482,6 @@ if [[ "$HOSTS_AFTER" -lt "$HOSTS_BEFORE" || "$HIST_AFTER" -lt "$HIST_BEFORE" ]];
   fail_upgrade "主机或历史上报条数减少（主机 ${HOSTS_BEFORE}->${HOSTS_AFTER}，历史上报 ${HIST_BEFORE}->${HIST_AFTER}）"
 fi
 
-echo "==> 在安装树上跑测试"
-if [[ ! -d "$INSTALL_DIR/tests" ]]; then
-  fail_upgrade "安装树没有 tests/"
-fi
-# 不传 -t：tests/ 不是包（没有 __init__.py）。cwd 与 PYTHONPATH 指向安装树，center 才能被导入。
-if ! (cd "$INSTALL_DIR" && PYTHONPATH="$INSTALL_DIR" "$PY" -m unittest discover -s tests); then
-  fail_upgrade "安装树上的测试未通过"
-fi
-
 prune_backups
 UPGRADE_DONE=1
 echo
@@ -400,4 +492,4 @@ echo "  备份: $BACKUP_DIR"
 echo "  主机: ${HOSTS_BEFORE} -> ${HOSTS_AFTER}"
 echo "  历史上报: ${HIST_BEFORE} -> ${HIST_AFTER}"
 echo "  健康检查: ${health_body}"
-echo "  测试: 通过"
+echo "  测试: 同步前已通过"

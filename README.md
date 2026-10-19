@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.9.0**
+当前版本：**v1.9.1**
 
 运行环境：
 
@@ -140,8 +140,9 @@ Agent 安装目录：
 
 ```bash
 scripts/fetch_python_bundle.sh --dest vendor/python
-# 校验通过后，把整个目录拷到中心：
-scp -r vendor/python/ <中心>:/opt/monitor/vendor/python/
+# 远端目录不存在时也会先 mkdir -p：
+scripts/push_python_bundles.sh root@<中心>
+# 非交互密码：SSHPASS='***' scripts/push_python_bundles.sh root@<中心>
 ```
 
 固定包是 python-build-standalone `20241016` 的 **install_only**（不是 musl / stripped / `gnu_2_28`），glibc ≥ 2.17，含 x86_64 与 aarch64。中心按目标机 `uname -m` 选择。目录也可在 `config/center.json` 里改：
@@ -158,6 +159,7 @@ scp -r vendor/python/ <中心>:/opt/monitor/vendor/python/
 
 ```bash
 scripts/push_upgrade.sh root@<中心> HEAD
+# 非交互密码：SSHPASS='***' scripts/push_upgrade.sh root@<中心> HEAD
 ```
 
 它等价于把该 git 版本解到中心 `/tmp/monitor-upgrade-src`，然后执行：
@@ -166,7 +168,7 @@ scripts/push_upgrade.sh root@<中心> HEAD
 bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src --sha <该版本 sha> --dir /opt/monitor
 ```
 
-脚本会做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启、检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少，再在安装树上跑测试。任一步失败会自动回滚。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。
+脚本先在**新包**上跑测试，失败则直接退出，不备份、不同步、不重启。通过后做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
 
 批量：
 

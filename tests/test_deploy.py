@@ -929,6 +929,10 @@ class PackageTreeTests(unittest.TestCase):
             text=True,
         )
 
+    @unittest.skipIf(
+        sys.platform == "darwin",
+        "macOS bsdtar 在 grep -q 提前关掉管道时不以 SIGPIPE 141 退出，这条误判只在 GNU tar 上出现",
+    )
     def test_pipefail_tar_grep_q_false_positive_on_complete_package(self) -> None:
         """pipefail + tar|grep -q：grep 命中后 tar 得 SIGPIPE(141)，好包装被判 package_incomplete。"""
         fd, path = tempfile.mkstemp(prefix="pkg-sigpipe-", suffix=".tgz")

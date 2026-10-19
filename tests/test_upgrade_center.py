@@ -141,6 +141,7 @@ class UpgradeCenterTests(unittest.TestCase):
                 "MONITOR_UPGRADE_CURL_CMD": self.curl,
                 "MONITOR_UPGRADE_SYSTEMCTL_CMD": self.systemctl,
                 "MONITOR_UPGRADE_PYTHON": sys.executable,
+                "MONITOR_UPGRADE_HEALTH_TRIES": "1",
             }
         )
 
@@ -234,20 +235,228 @@ class UpgradeCenterTests(unittest.TestCase):
         self.assertEqual(hosts, "1")
         self.assertGreaterEqual(int(hist), 1)
 
-    def test_failed_tests_roll_back_code_and_unit(self) -> None:
+    def test_failed_package_tests_abort_before_sync(self) -> None:
+        live = os.path.join(self.install, "data", "live-only.txt")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        db = os.path.join(self.install, "data", "monitor.db")
+        inode = os.stat(db).st_ino
         self._package(
             {"build-id.txt": "brand-new-marker\n", "tests/test_boom.py": _boom_test()}
         )
         proc = self._run(None)
         self.assertNotEqual(proc.returncode, 0, proc.stdout)
-        self.assertIn("回滚", proc.stdout)
+        self.assertIn("未改动安装目录", proc.stdout)
+        self.assertNotIn("同步代码", proc.stdout)
+        self.assertNotIn("[rollback]", proc.stdout)
+        with open(os.path.join(self.install, "build-id.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "old-marker")
+        with open(self.unit, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), self.original_unit)
+        self.assertEqual(os.stat(db).st_ino, inode)
+        with open(live, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "live\n")
+        self.assertFalse(os.path.isfile(os.path.join(self.install, "tests", "test_boom.py")))
+        names = os.listdir(self.tmp)
+        self.assertFalse(any(name.startswith("monitor-backup-") for name in names))
+        self.assertFalse(any(name.startswith("monitor-failed-") for name in names))
+        if os.path.isfile(self.syslog):
+            with open(self.syslog, encoding="utf-8") as fh:
+                self.assertNotIn("restart", fh.read())
+
+    def test_health_rollback_keeps_data_and_failed_tree(self) -> None:
+        live = os.path.join(self.install, "data", "live-only.txt")
+        during = os.path.join(self.install, "data", "written-during-upgrade")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        db = os.path.join(self.install, "data", "monitor.db")
+        inode = os.stat(db).st_ino
+        with open(self.systemctl, "w", encoding="utf-8") as fh:
+            fh.write(
+                "#!/bin/bash\n"
+                "printf '%%s\\n' \"$*\" >> \"%s\"\n"
+                "case \"$*\" in\n"
+                "  *restart*) printf 'during\\n' >> \"%s\" ;;\n"
+                "esac\n"
+                "exit 0\n" % (self.syslog, during)
+            )
+        os.chmod(self.systemctl, 0o755)
+        with open(self.curl, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/bash\necho down >&2\nexit 1\n")
+        os.chmod(self.curl, 0o755)
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("回滚代码", proc.stdout)
+        self.assertIn("不改 data/", proc.stdout)
         with open(os.path.join(self.install, "build-id.txt"), encoding="utf-8") as fh:
             self.assertEqual(fh.read().strip(), "old-marker")
         with open(os.path.join(self.install, "config", "center.json"), encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["marker"], "KEEP-ME")
         with open(self.unit, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), self.original_unit)
-        self.assertTrue(os.path.isfile(os.path.join(self.install, "tests", "test_ok.py")))
-        self.assertFalse(os.path.isfile(os.path.join(self.install, "tests", "test_boom.py")))
-        with open(os.path.join(self.install, "vendor", "python", "already.tar.gz"), encoding="utf-8") as fh:
-            self.assertIn("bundle-bytes", fh.read())
+        self.assertEqual(os.stat(db).st_ino, inode)
+        with open(live, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "live\n")
+        with open(during, encoding="utf-8") as fh:
+            self.assertIn("during", fh.read())
+        failed = [name for name in os.listdir(self.tmp) if name.startswith("monitor-failed-")]
+        self.assertEqual(len(failed), 1, proc.stdout)
+        failed_dir = os.path.join(self.tmp, failed[0])
+        with open(os.path.join(failed_dir, "build-id.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "brand-new-marker")
+        self.assertFalse(os.path.isdir(os.path.join(failed_dir, "data")))
+        self.assertTrue(os.path.isdir(os.path.join(self.install, "data")))
+        with open(os.path.join(ROOT, "scripts", "upgrade_center.sh"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertNotIn('rm -rf "$INSTALL_DIR"', src)
+        self.assertNotIn('rm -rf "$failed_dir"', src)
+        self.assertNotIn('rm -rf "$INSTALL_DIR/data"', src)
+
+
+def _write_exe(path: str, body: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.chmod(path, 0o755)
+
+
+class PushSshTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="push-ssh-")
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.log = os.path.join(self.tmp, "ssh.log")
+        _write_exe(
+            os.path.join(self.bin, "sshpass"),
+            "#!/bin/bash\nprintf 'sshpass %%s\\n' \"$*\" >> \"%s\"\nexit 0\n" % self.log,
+        )
+        _write_exe(
+            os.path.join(self.bin, "fake-ssh"),
+            "#!/bin/bash\nprintf '%%s\\n' \"$*\" >> \"%s\"\ncat >/dev/null\nexit 0\n" % self.log,
+        )
+        self.env = dict(os.environ)
+        self.env.pop("SSHPASS", None)
+        self.env.pop("MONITOR_SSH_CMD_OVERRIDE", None)
+        self.env["PATH"] = self.bin + os.pathsep + "/usr/bin:/bin"
+        self.env["MONITOR_PUSH_DRY"] = "1"
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_sshpass_env_wraps_ssh(self) -> None:
+        self.env["SSHPASS"] = "secret-token"
+        proc = subprocess.run(
+            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=self.env,
+            timeout=20,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SSH=sshpass -e ssh", proc.stdout)
+        self.assertNotIn("secret-token", proc.stdout)
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_plain_ssh_without_sshpass_env(self) -> None:
+        proc = subprocess.run(
+            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=self.env,
+            timeout=20,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SSH=ssh\n", proc.stdout)
+        self.assertNotIn("sshpass", proc.stdout)
+
+    def test_ssh_cmd_override_skips_sshpass(self) -> None:
+        self.env["SSHPASS"] = "secret-token"
+        proc = subprocess.run(
+            [
+                "bash",
+                os.path.join(ROOT, "scripts", "push_upgrade.sh"),
+                "--ssh-cmd",
+                "fake-ssh -o BatchMode=yes",
+                "root@center",
+                "HEAD",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=self.env,
+            timeout=20,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SSH=fake-ssh -o BatchMode=yes", proc.stdout)
+        self.assertNotIn("sshpass", proc.stdout)
+
+    def test_sshpass_set_without_binary_fails(self) -> None:
+        clean = os.path.join(self.tmp, "clean-bin")
+        os.makedirs(clean)
+        for name in ("bash", "dirname", "git", "ssh"):
+            src = shutil.which(name)
+            self.assertTrue(src, name)
+            os.symlink(src, os.path.join(clean, name))
+        self.env["SSHPASS"] = "secret-token"
+        self.env["PATH"] = clean
+        proc = subprocess.run(
+            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=self.env,
+            timeout=20,
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("没有 sshpass", proc.stdout)
+
+    def test_push_upgrade_plans_bundle_mkdir(self) -> None:
+        bundle = os.path.join(self.tmp, "vendor")
+        os.makedirs(bundle)
+        with open(os.path.join(bundle, "cpython.tar.gz"), "wb") as fh:
+            fh.write(b"bundle")
+        self.env["MONITOR_PUSH_BUNDLE_DIR"] = bundle
+        proc = subprocess.run(
+            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=self.env,
+            timeout=20,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("BUNDLES=sync", proc.stdout)
+        self.assertIn("MKDIR=/opt/monitor/vendor/python", proc.stdout)
+
+    def test_push_bundles_mkdirs_missing_remote_dir(self) -> None:
+        local = os.path.join(self.tmp, "local-bundles")
+        os.makedirs(local)
+        with open(os.path.join(local, "bundles.json"), "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        with open(os.path.join(local, "cpython.tar.gz"), "wb") as fh:
+            fh.write(b"bundle")
+        env = dict(self.env)
+        env.pop("MONITOR_PUSH_DRY", None)
+        proc = subprocess.run(
+            [
+                "bash",
+                os.path.join(ROOT, "scripts", "push_python_bundles.sh"),
+                "--ssh-cmd",
+                os.path.join(self.bin, "fake-ssh"),
+                "root@center",
+                local,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            env=env,
+            timeout=20,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        with open(self.log, encoding="utf-8") as fh:
+            log = fh.read()
+        self.assertIn("mkdir -p '/opt/monitor/vendor/python'", log)
+        self.assertIn("tar -xf - -C '/opt/monitor/vendor/python'", log)

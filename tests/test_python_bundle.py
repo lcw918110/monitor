@@ -127,9 +127,15 @@ class BundleShellTests(unittest.TestCase):
             {body}
             """
         ).format(root=ROOT, body=textwrap.dedent(body).strip("\n"))
+        # 默认隔离宿主机解释器：/usr/local/python3.8 这类 glob 和 PATH 里的 python 都不能进来。
         merged = dict(os.environ)
+        merged.pop("PYTHON_BIN", None)
+        merged.pop("PYTHONPATH", None)
+        merged.pop("PYTHONHOME", None)
+        merged["PATH"] = "/usr/bin:/bin"
+        merged["MONITOR_PYTHON_LOCAL_GLOBS"] = "/no/such/python3.*/bin/python3"
+        merged["MONITOR_INSTALL_PYTHON"] = "0"
         merged.update(env or {})
-        merged["MONITOR_INSTALL_PYTHON"] = merged.get("MONITOR_INSTALL_PYTHON", "0")
         return subprocess.run(
             ["bash", "-s"],
             input=script,
@@ -190,6 +196,42 @@ class BundleShellTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("REJECTED", proc.stdout)
+
+    def test_run_ignores_host_path_and_local_python(self) -> None:
+        decoy = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, decoy, True)
+        self._write_fake(decoy, "python3.12", "3.12", 0)
+        self._write_fake(decoy, "python3", "3.12", 0)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = decoy + os.pathsep + old_path
+        try:
+            only = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, only, True)
+            self._write_fake(only, "python3.6", "3.6", 0)
+            proc = self._run(
+                """
+                echo "GLOBS=$MONITOR_PYTHON_LOCAL_GLOBS"
+                case ":$PATH:" in
+                  *:%s:*) echo PATH_LEAKED; exit 1 ;;
+                esac
+                unset PYTHON_BIN || true
+                resolve_python 3 6
+                echo "PY=$(basename "$PY")"
+                echo "VER=$PY_VERSION"
+                """
+                % decoy,
+                env={"MONITOR_PYTHON_SEARCH_PATH": only, "PYTHON_BIN": ""},
+            )
+        finally:
+            if old_path:
+                os.environ["PATH"] = old_path
+            else:
+                os.environ.pop("PATH", None)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("GLOBS=/no/such/python3.*/bin/python3", proc.stdout)
+        self.assertNotIn("PATH_LEAKED", proc.stdout)
+        self.assertIn("PY=python3.6", proc.stdout)
+        self.assertIn("VER=3.6", proc.stdout)
 
     def test_dest_root_versus_install_dir(self) -> None:
         proc = self._run(
@@ -278,7 +320,9 @@ class BundleShellTests(unittest.TestCase):
             "scripts/fetch_python_bundle.sh",
             "scripts/upgrade_center.sh",
             "scripts/push_upgrade.sh",
+            "scripts/push_python_bundles.sh",
             "scripts/lib/python_bundle.sh",
+            "scripts/lib/ssh_cmd.sh",
             "scripts/deploy_agent.sh",
             "scripts/deploy_fleet.sh",
         ):
@@ -299,3 +343,5 @@ class BundleShellTests(unittest.TestCase):
         self.assertIn("$REMOTE_DIR/scripts/upgrade_center.sh", push)
         self.assertNotIn("/opt/monitor/scripts/upgrade_center.sh", push)
         self.assertIn("git archive", push)
+        self.assertIn("sshpass -e ssh", push)
+        self.assertIn("monitor_push_bundles", push)
