@@ -63,9 +63,12 @@
 
 见 `docs/13-diagnostic-reports.md`。
 
-- `GET /api/v1/reports/preview?period=day|week|month`：只解析 Asia/Shanghai 半开窗口
-- `POST /api/v1/reports/generate`：按原始历史聚合后插入 `diagnostic_reports`
-- `GET /api/v1/reports`、`GET /api/v1/reports/{id}`：读库存。`{id}/markdown` 与 `{id}/rankings.csv` 为下载
+- `GET /api/v1/reports/preview?period=day|week|month`：只解析 Asia/Shanghai 半开窗口。可选 `window_date=YYYY-MM-DD`
+- `POST /api/v1/reports/generate`：按原始历史聚合。同一 `(period, 半开窗口)` 覆盖一行，不另起版本。调度器调用时 `replace=false`，已有则跳过
+- `GET /api/v1/reports`、`GET /api/v1/reports/{id}`：读库存。列表带 `source`（scheduled/manual）、`status`（ok/failed）、`error`、`generated_at`。`{id}/markdown` 与 `{id}/rankings.csv` 为下载
+- 调度：中心进程内，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）。只在那一分钟触发，不补跑停机错过的时刻
+- `generated_at` 是实际计算时间，与 `as_of` / 窗口边界分开
+- 0～100% 以外的利用率不进入平均 / P95 / 繁忙占比，报告写明排除条数和主机
 - 空闲判定：在线且样本足够时，CPU 平均 <5% 且繁忙 <5%；有加速卡则同样 <5%。高负荷为繁忙占比 ≥40% 或 P95 ≥85%（CPU 或加速卡）。磁盘不进闲忙
 - 与监测台其它 GET 一样不校验 Agent Token
 
@@ -92,7 +95,7 @@ loop:
 1. **顶部**：产品名 + 刷新 + 页签（实时监控 / 时段统计 / 使用诊断）+ 客户端部署入口
 2. **实时监控**：异常汇总、集群卡片、主机表（可排序、按资源组筛选）。列把规格和实时利用率分开：加速卡型号数量 | 加速卡使用率；磁盘% | 磁盘数。离线行不填实时数字
 3. **时段统计**：集群与各主机的平均 / P95 / 繁忙占比，可导出 CSV
-4. **使用诊断**：生成并预览已入库的日/周/月报告，下载 Markdown 与排行 CSV
+4. **使用诊断**：选择已结束的窗口生成或覆盖报告，看定时/手动与成功/失败，下载 Markdown 与排行 CSV
 5. **主机详情**：在线时展示实时用量与分盘；离线时标明末次快照不是实时
 
 风格：清晰运维控制台，中文标签，数字突出。磁盘汇总口径见 `docs/12-disk-mounts.md`。地址口径见 `center/hostaddr.py`。
@@ -115,6 +118,11 @@ loop:
 | TC-REPORT-01 | 生成日报后删除原始历史再 GET | 正文与入库时一致，不重算 |
 | TC-REPORT-02 | CPU 平均 14% 或加速卡平均 9% | 不算基本不用（阈值 5%） |
 | TC-REPORT-03 | 已有日报文本再生成月报 | 月报正文不包含该日报标记 |
+| TC-REPORT-04 | 调度在 00:11 或次日中午检查 | 不补生成错过的 00:10 |
+| TC-REPORT-05 | 同一窗口生成两次 | 仍是一行，id 不变，`generated_at` 更新 |
+| TC-REPORT-06 | `as_of` 取旧窗口、`generated_at` 取现在 | 正文「实际生成时刻」是后者 |
+| TC-REPORT-07 | 加速卡样本 >100% | 不进入平均，正文点名主机和排除条数 |
+| TC-REPORT-08 | 清理超期 `metrics_history` | `diagnostic_reports` 仍在 |
 
 ---
 

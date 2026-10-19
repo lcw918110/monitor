@@ -51,6 +51,28 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
+# 利用率只接受 0～100%。负值、>100% 和非有限数（例如昇腾 310P3 曾上报到百万级）
+# 不能进入平均 / P95 / 繁忙占比。缺省值不算「排除」。
+UTIL_PERCENT_MIN = 0.0
+UTIL_PERCENT_MAX = 100.0
+
+
+def classify_util_percent(value: Any) -> Tuple[Optional[float], bool]:
+    """返回 (可用百分比或 None, 是否因越界被排除)。"""
+    if value is None or value == "":
+        return None, False
+    num = _to_float(value)
+    if num is None:
+        return None, False
+    if (
+        not math.isfinite(num)
+        or num < UTIL_PERCENT_MIN
+        or num > UTIL_PERCENT_MAX
+    ):
+        return None, True
+    return num, False
+
+
 def _slim_disk_history(system: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """历史里只留挂载、利用率、容量，供诊断报告指出最满挂载。
 
@@ -199,10 +221,16 @@ class Storage:
                         clamped INTEGER NOT NULL DEFAULT 0,
                         created_at INTEGER NOT NULL,
                         markdown TEXT NOT NULL,
-                        payload TEXT NOT NULL
+                        payload TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'manual',
+                        status TEXT NOT NULL DEFAULT 'ok',
+                        error TEXT,
+                        generated_at INTEGER
                     );
                     CREATE INDEX IF NOT EXISTS idx_diag_reports_created
                         ON diagnostic_reports(created_at DESC, id DESC);
+                    CREATE INDEX IF NOT EXISTS idx_diag_reports_window
+                        ON diagnostic_reports(period_type, requested_from_ts, requested_to_ts);
                     """
                 )
                 cols = {
@@ -210,6 +238,44 @@ class Storage:
                 }
                 if "last_remote_ip" not in cols:
                     conn.execute("ALTER TABLE hosts ADD COLUMN last_remote_ip TEXT")
+                # 诊断报告列只做加法。不改 metrics_history，避免在大库上重写历史上报。
+                diag_cols = {
+                    r[1]
+                    for r in conn.execute(
+                        "PRAGMA table_info(diagnostic_reports)"
+                    ).fetchall()
+                }
+                diag_alters = (
+                    (
+                        "source",
+                        "ALTER TABLE diagnostic_reports ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+                    ),
+                    (
+                        "status",
+                        "ALTER TABLE diagnostic_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'",
+                    ),
+                    ("error", "ALTER TABLE diagnostic_reports ADD COLUMN error TEXT"),
+                    (
+                        "generated_at",
+                        "ALTER TABLE diagnostic_reports ADD COLUMN generated_at INTEGER",
+                    ),
+                )
+                for name, sql in diag_alters:
+                    if name not in diag_cols:
+                        conn.execute(sql)
+                conn.execute(
+                    """
+                    UPDATE diagnostic_reports
+                    SET generated_at = created_at
+                    WHERE generated_at IS NULL
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_diag_reports_window
+                        ON diagnostic_reports(period_type, requested_from_ts, requested_to_ts)
+                    """
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -552,18 +618,18 @@ class Storage:
         gpus = payload.get("gpus") or []
         npu_utils = []
         for n in npus:
-            if n.get("util_percent") is not None:
-                try:
-                    npu_utils.append(float(n["util_percent"]))
-                except (TypeError, ValueError):
-                    pass
+            if not isinstance(n, dict):
+                continue
+            num, _bad = classify_util_percent(n.get("util_percent"))
+            if num is not None:
+                npu_utils.append(num)
         gpu_utils = []
         for g in gpus:
-            if g.get("util_percent") is not None:
-                try:
-                    gpu_utils.append(float(g["util_percent"]))
-                except (TypeError, ValueError):
-                    pass
+            if not isinstance(g, dict):
+                continue
+            num, _bad = classify_util_percent(g.get("util_percent"))
+            if num is not None:
+                gpu_utils.append(num)
         cards = cards_from_payload(payload)
         identity = summarize_accelerators(cards)
         accel_util_vals = accel_utils(cards)
@@ -572,10 +638,10 @@ class Storage:
         if disk_count is None and isinstance(disks, list):
             disk_count = len(disks)
         return {
-            "cpu_percent": system.get("cpu_percent"),
+            "cpu_percent": classify_util_percent(system.get("cpu_percent"))[0],
             "cpu_count": system.get("cpu_count"),
-            "mem_percent": system.get("mem_percent"),
-            "disk_percent": system.get("disk_percent"),
+            "mem_percent": classify_util_percent(system.get("mem_percent"))[0],
+            "disk_percent": classify_util_percent(system.get("disk_percent"))[0],
             "disk_used_gb": system.get("disk_used_gb"),
             "disk_total_gb": system.get("disk_total_gb"),
             "disk_count": disk_count,
@@ -740,12 +806,17 @@ class Storage:
         gpus = payload.get("gpus") or []
         npu_utils: List[float] = []
         npu_temps: List[float] = []
-        for n in npus:
-            if n.get("util_percent") is not None:
-                try:
-                    npu_utils.append(float(n["util_percent"]))
-                except (TypeError, ValueError):
-                    pass
+        excluded: List[Dict[str, Any]] = []
+        for n in npus if isinstance(npus, list) else []:
+            if not isinstance(n, dict):
+                continue
+            num, bad = classify_util_percent(n.get("util_percent"))
+            if bad:
+                excluded.append(
+                    {"metric": "accel_util_avg", "raw": n.get("util_percent")}
+                )
+            elif num is not None:
+                npu_utils.append(num)
             if n.get("temp_c") is not None:
                 try:
                     npu_temps.append(float(n["temp_c"]))
@@ -753,18 +824,22 @@ class Storage:
                     pass
         gpu_utils: List[float] = []
         gpu_temps: List[float] = []
-        for g in gpus:
-            if g.get("util_percent") is not None:
-                try:
-                    gpu_utils.append(float(g["util_percent"]))
-                except (TypeError, ValueError):
-                    pass
+        for g in gpus if isinstance(gpus, list) else []:
+            if not isinstance(g, dict):
+                continue
+            num, bad = classify_util_percent(g.get("util_percent"))
+            if bad:
+                excluded.append(
+                    {"metric": "accel_util_avg", "raw": g.get("util_percent")}
+                )
+            elif num is not None:
+                gpu_utils.append(num)
             if g.get("temp_c") is not None:
                 try:
                     gpu_temps.append(float(g["temp_c"]))
                 except (TypeError, ValueError):
                     pass
-        accel_utils = npu_utils + gpu_utils
+        accel_vals = npu_utils + gpu_utils
         accel_temps = npu_temps + gpu_temps
         rated = system.get("net_rated_mbps")
         rx_pct = system.get("net_rx_percent")
@@ -773,11 +848,18 @@ class Storage:
             rx_pct = _ratio_percent(system.get("net_rx_mbps"), rated)
         if tx_pct is None:
             tx_pct = _ratio_percent(system.get("net_tx_mbps"), rated)
+        def _take_percent(metric: str, raw: Any) -> Optional[float]:
+            num, bad = classify_util_percent(raw)
+            if bad:
+                excluded.append({"metric": metric, "raw": raw})
+            return num
+
         return {
             "ts": ts,
-            "cpu_percent": system.get("cpu_percent"),
-            "mem_percent": system.get("mem_percent"),
-            "disk_percent": system.get("disk_percent"),
+            "cpu_percent": _take_percent("cpu_percent", system.get("cpu_percent")),
+            "mem_percent": _take_percent("mem_percent", system.get("mem_percent")),
+            "disk_percent": _take_percent("disk_percent", system.get("disk_percent")),
+            "excluded_utils": excluded,
             "load1": system.get("load1"),
             "net_rx_mbps": system.get("net_rx_mbps"),
             "net_tx_mbps": system.get("net_tx_mbps"),
@@ -791,7 +873,7 @@ class Storage:
             "gpu_temp_max": max(gpu_temps) if gpu_temps else None,
             "gpu_count": len(gpus),
             "accel_util_avg": (
-                round(sum(accel_utils) / len(accel_utils), 2) if accel_utils else None
+                round(sum(accel_vals) / len(accel_vals), 2) if accel_vals else None
             ),
             "accel_temp_max": max(accel_temps) if accel_temps else None,
         }
@@ -952,6 +1034,7 @@ class Storage:
         for row in rows:
             pt = self._history_point_from_row(row["ts"], row["payload"])
             if pt:
+                pt.pop("excluded_utils", None)
                 points.append(self._apply_rated_fallback(pt, rated_fallback))
         return points
 
@@ -981,16 +1064,24 @@ class Storage:
         self,
         rows: List[Any],
         rated_fallback: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Dict[str, List[float]], Optional[int], Optional[int], int]:
+    ) -> Tuple[Dict[str, List[float]], Optional[int], Optional[int], int, Dict[str, Any]]:
         series: Dict[str, List[float]] = {key: [] for key in PERIOD_METRIC_KEYS}
         first_ts = None
         last_ts = None
         parsed = 0
+        excluded_count = 0
+        excluded_by_metric: Dict[str, int] = {}
         for row in rows:
             pt = self._history_point_from_row(row["ts"], row["payload"])
             if not pt:
                 continue
             pt = self._apply_rated_fallback(pt, rated_fallback)
+            for item in pt.pop("excluded_utils", None) or []:
+                if not isinstance(item, dict):
+                    continue
+                metric = str(item.get("metric") or "util")
+                excluded_by_metric[metric] = excluded_by_metric.get(metric, 0) + 1
+                excluded_count += 1
             parsed += 1
             if first_ts is None:
                 first_ts = pt["ts"]
@@ -1014,7 +1105,10 @@ class Storage:
                 if num is None:
                     continue
                 series[key].append(num)
-        return series, first_ts, last_ts, parsed
+        return series, first_ts, last_ts, parsed, {
+            "count": excluded_count,
+            "by_metric": excluded_by_metric,
+        }
 
     @staticmethod
     def _metrics_from_series(
@@ -1067,7 +1161,7 @@ class Storage:
         rows = self._fetch_history_rows(
             host_id, int(window["from_ts"]), int(window["to_ts"]), max_rows=row_cap
         )
-        series, first_ts, last_ts, parsed = self._series_from_rows(
+        series, first_ts, last_ts, parsed, excluded = self._series_from_rows(
             rows, rated_fallback=rated_fallback
         )
         if busy_thresholds is None:
@@ -1108,6 +1202,7 @@ class Storage:
             "busy_thresholds": thresholds,
             "metrics": self._metrics_from_series(series, thresholds),
             "history_truncated": len(rows) >= row_cap,
+            "excluded_samples": excluded,
         }
         if include_series:
             result["_series"] = series
@@ -1144,6 +1239,9 @@ class Storage:
         total_samples = 0
         hosts_with_samples = 0
         history_truncated = False
+        excluded_hosts: List[Dict[str, Any]] = []
+        excluded_count = 0
+        excluded_by_metric: Dict[str, int] = {}
         for host in hosts:
             hid = host["host_id"]
             rated_fallback = None
@@ -1169,6 +1267,23 @@ class Storage:
                 hosts_with_samples += 1
             if stats.get("history_truncated"):
                 history_truncated = True
+            host_excluded = stats.get("excluded_samples") or {}
+            host_excluded_n = int(host_excluded.get("count") or 0)
+            if host_excluded_n:
+                excluded_count += host_excluded_n
+                for metric, metric_n in (host_excluded.get("by_metric") or {}).items():
+                    excluded_by_metric[str(metric)] = excluded_by_metric.get(
+                        str(metric), 0
+                    ) + int(metric_n or 0)
+                excluded_hosts.append(
+                    {
+                        "host_id": hid,
+                        "address": host.get("address") or "",
+                        "hostname": host.get("hostname") or hid,
+                        "count": host_excluded_n,
+                        "by_metric": host_excluded.get("by_metric") or {},
+                    }
+                )
             host_rows.append(
                 {
                     "host_id": hid,
@@ -1187,12 +1302,14 @@ class Storage:
                     "to_ts": stats.get("to_ts"),
                     "metrics": stats.get("metrics") or {},
                     "history_truncated": bool(stats.get("history_truncated")),
+                    "excluded_samples": host_excluded,
                 }
             )
 
         cluster_identity = merge_inventories(
             h.get("accel_inventory") for h in host_rows
         )
+        excluded_hosts.sort(key=lambda item: (-int(item.get("count") or 0), str(item.get("host_id") or "")))
 
         return {
             "minutes": window["minutes"],
@@ -1204,6 +1321,11 @@ class Storage:
             "hosts_with_samples": hosts_with_samples,
             "sample_count": total_samples,
             "history_truncated": history_truncated,
+            "excluded_samples": {
+                "count": excluded_count,
+                "by_metric": excluded_by_metric,
+                "hosts": excluded_hosts,
+            },
             "from_ts": window["from_ts"],
             "to_ts": window["to_ts"],
             "accel_count": cluster_identity.get("count") or 0,
@@ -1246,7 +1368,7 @@ class Storage:
             for item in disks:
                 if not isinstance(item, dict):
                     continue
-                pct = _to_float(item.get("percent"))
+                pct, _bad = classify_util_percent(item.get("percent"))
                 if pct is None:
                     continue
                 candidate = {
@@ -1275,36 +1397,103 @@ class Storage:
         clamped: bool,
         markdown: str,
         payload: Dict[str, Any],
+        source: str = "manual",
+        status: str = "ok",
+        error: Optional[str] = None,
+        generated_at: Optional[int] = None,
+        replace: bool = True,
     ) -> Dict[str, Any]:
-        now = int(time.time())
+        """同一 (period, 半开窗口) 只保留一行。
+
+        replace=True：覆盖最新一行，并删掉该窗口更早的重复行（id 保持为最新那条）。
+        replace=False：已有则跳过，不改内容。调度器用来避免补写或覆盖手动报告。
+        """
+        if source not in ("manual", "scheduled"):
+            source = "manual"
+        if status not in ("ok", "failed"):
+            status = "ok"
+        gen_col = int(generated_at if generated_at is not None else time.time())
         raw = json.dumps(payload, ensure_ascii=False)
+        window_key = (str(period_type), int(requested_from_ts), int(requested_to_ts))
+        action = "created"
         with self._lock:
             conn = self._connect()
             try:
-                cur = conn.execute(
+                row = conn.execute(
                     """
-                    INSERT INTO diagnostic_reports (
-                        period_type, title, requested_from_ts, requested_to_ts,
-                        clamped, created_at, markdown, payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT id FROM diagnostic_reports
+                    WHERE period_type=? AND requested_from_ts=? AND requested_to_ts=?
+                    ORDER BY id DESC
+                    LIMIT 1
                     """,
-                    (
-                        period_type,
-                        title,
-                        int(requested_from_ts),
-                        int(requested_to_ts),
-                        1 if clamped else 0,
-                        now,
-                        markdown,
-                        raw,
-                    ),
-                )
-                conn.commit()
-                report_id = int(cur.lastrowid)
+                    window_key,
+                ).fetchone()
+                if row and not replace:
+                    report_id = int(row["id"])
+                    action = "skipped"
+                elif row:
+                    report_id = int(row["id"])
+                    conn.execute(
+                        """
+                        UPDATE diagnostic_reports SET
+                            title=?, clamped=?, markdown=?, payload=?,
+                            source=?, status=?, error=?, generated_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            title,
+                            1 if clamped else 0,
+                            markdown,
+                            raw,
+                            source,
+                            status,
+                            error,
+                            gen_col,
+                            report_id,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        DELETE FROM diagnostic_reports
+                        WHERE period_type=? AND requested_from_ts=? AND requested_to_ts=?
+                          AND id<>?
+                        """,
+                        (window_key[0], window_key[1], window_key[2], report_id),
+                    )
+                    conn.commit()
+                    action = "replaced"
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO diagnostic_reports (
+                            period_type, title, requested_from_ts, requested_to_ts,
+                            clamped, created_at, markdown, payload,
+                            source, status, error, generated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            window_key[0],
+                            title,
+                            window_key[1],
+                            window_key[2],
+                            1 if clamped else 0,
+                            gen_col,
+                            markdown,
+                            raw,
+                            source,
+                            status,
+                            error,
+                            gen_col,
+                        ),
+                    )
+                    conn.commit()
+                    report_id = int(cur.lastrowid)
+                    action = "created"
             finally:
                 conn.close()
-        saved = self.get_diagnostic_report(report_id)
-        return saved or {"id": report_id}
+        saved = self.get_diagnostic_report(report_id) or {"id": report_id}
+        saved["action"] = action
+        return saved
 
     def list_diagnostic_reports(self, limit: int = 50) -> List[Dict[str, Any]]:
         cap = max(1, min(int(limit or 50), 200))
@@ -1314,27 +1503,37 @@ class Storage:
                 rows = conn.execute(
                     """
                     SELECT id, period_type, title, requested_from_ts, requested_to_ts,
-                           clamped, created_at
+                           clamped, created_at, generated_at, source, status, error
                     FROM diagnostic_reports
-                    ORDER BY created_at DESC, id DESC
+                    WHERE id IN (
+                        SELECT MAX(id) FROM diagnostic_reports
+                        GROUP BY period_type, requested_from_ts, requested_to_ts
+                    )
+                    ORDER BY COALESCE(generated_at, created_at) DESC, id DESC
                     LIMIT ?
                     """,
                     (cap,),
                 ).fetchall()
             finally:
                 conn.close()
-        return [
-            {
-                "id": int(row["id"]),
-                "period_type": row["period_type"],
-                "title": row["title"],
-                "requested_from_ts": int(row["requested_from_ts"]),
-                "requested_to_ts": int(row["requested_to_ts"]),
-                "clamped": bool(row["clamped"]),
-                "created_at": int(row["created_at"]),
-            }
-            for row in rows
-        ]
+        return [self._report_list_item(row) for row in rows]
+
+    @staticmethod
+    def _report_list_item(row: sqlite3.Row) -> Dict[str, Any]:
+        generated = row["generated_at"]
+        return {
+            "id": int(row["id"]),
+            "period_type": row["period_type"],
+            "title": row["title"],
+            "requested_from_ts": int(row["requested_from_ts"]),
+            "requested_to_ts": int(row["requested_to_ts"]),
+            "clamped": bool(row["clamped"]),
+            "created_at": int(row["created_at"]),
+            "generated_at": int(generated if generated is not None else row["created_at"]),
+            "source": row["source"] or "manual",
+            "status": row["status"] or "ok",
+            "error": row["error"] or None,
+        }
 
     def get_diagnostic_report(self, report_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -1343,7 +1542,8 @@ class Storage:
                 row = conn.execute(
                     """
                     SELECT id, period_type, title, requested_from_ts, requested_to_ts,
-                           clamped, created_at, markdown, payload
+                           clamped, created_at, generated_at, source, status, error,
+                           markdown, payload
                     FROM diagnostic_reports WHERE id=?
                     """,
                     (int(report_id),),
@@ -1356,22 +1556,19 @@ class Storage:
             payload = json.loads(row["payload"])
         except (TypeError, json.JSONDecodeError):
             payload = {}
-        return {
-            "id": int(row["id"]),
-            "period_type": row["period_type"],
-            "title": row["title"],
-            "requested_from_ts": int(row["requested_from_ts"]),
-            "requested_to_ts": int(row["requested_to_ts"]),
-            "clamped": bool(row["clamped"]),
-            "created_at": int(row["created_at"]),
-            "markdown": row["markdown"] or "",
-            "payload": payload,
-        }
+        item = self._report_list_item(row)
+        item["markdown"] = row["markdown"] or ""
+        item["payload"] = payload
+        return item
 
     def export_hosts_rows(self) -> List[Dict[str, Any]]:
         return self.list_hosts()
 
     def cleanup_old_metrics(self) -> int:
+        """只删除 metrics_history 中超期的原始点。
+
+        diagnostic_reports 不在此清理范围内，retention_days 不会删已生成的诊断报告。
+        """
         if self.retention_days <= 0:
             return 0
         cutoff = int(time.time()) - self.retention_days * 86400

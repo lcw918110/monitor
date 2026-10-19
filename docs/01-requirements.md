@@ -213,7 +213,7 @@
 | GET | `/api/v1/hosts/{host_id}` | 主机详情 |
 | GET | `/api/v1/stats` | 集群统计 |
 | GET | `/` | Web 控制台（实时监控 / 时段统计 / 使用诊断） |
-| POST | `/api/v1/reports/generate` | 生成并保存诊断报告 |
+| POST | `/api/v1/reports/generate` | 生成并保存诊断报告（同一窗口覆盖） |
 | GET | `/api/v1/reports` 与 `/api/v1/reports/{id}` | 列表与详情（含 Markdown） |
 | GET | `/api/v1/reports/{id}/markdown` 与 `.../rankings.csv` | 下载 |
 

@@ -35,6 +35,30 @@ def validate_center_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if period_util is not None and not isinstance(period_util, dict):
         errors.append("period_util 必须是对象")
 
+    schedule = cfg.get("report_schedule")
+    if schedule is not None:
+        if not isinstance(schedule, dict):
+            errors.append("report_schedule 必须是对象")
+        else:
+            for key in ("daily", "weekly", "monthly"):
+                slot = schedule.get(key)
+                if slot is None:
+                    continue
+                label = "report_schedule.%s" % key
+                if not isinstance(slot, dict):
+                    errors.append("%s 必须是对象" % label)
+                    continue
+                for field, lo, hi in (("hour", 0, 23), ("minute", 0, 59)):
+                    if field not in slot or slot[field] in (None, ""):
+                        continue
+                    try:
+                        value = int(slot[field])
+                    except (TypeError, ValueError):
+                        errors.append("%s.%s 必须是整数" % (label, field))
+                        continue
+                    if not (lo <= value <= hi):
+                        errors.append("%s.%s 必须在 %d-%d" % (label, field, lo, hi))
+
     return len(errors) == 0, errors
 
 

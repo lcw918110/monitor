@@ -23,5 +23,11 @@
   "period_util": {
     "busy_cpu_percent": 80,
     "busy_accel_percent": 80
+  },
+  "report_schedule": {
+    "enabled": true,
+    "daily": {"enabled": true, "hour": 0, "minute": 10},
+    "weekly": {"enabled": true, "hour": 0, "minute": 20},
+    "monthly": {"enabled": true, "hour": 0, "minute": 30}
   }
 }

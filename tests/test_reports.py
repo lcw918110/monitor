@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -12,6 +13,7 @@ import time
 import unittest
 from datetime import datetime
 from http.server import ThreadingHTTPServer
+from unittest import mock
 from urllib.request import Request, urlopen
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -20,6 +22,11 @@ if ROOT not in sys.path:
 
 from center import api as api_mod
 from center import reports as reports_mod
+from center.report_schedule import (
+    ReportScheduler,
+    due_slots,
+    normalize_report_schedule,
+)
 from center.reports import (
     HIGH_BUSY_GTE,
     HIGH_P95_GTE,
@@ -28,9 +35,11 @@ from center.reports import (
     high_load_reasons,
     idle_status,
     report_period_bounds,
+    report_window_for_date,
 )
-from center.server import make_handler
+from center.server import load_config, make_handler
 from center.storage import Storage
+from common.validate import validate_center_config
 
 
 def _ts(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> int:
@@ -84,16 +93,18 @@ def _post(storage: Storage, host_id: str, ts: int, cpu: float, **extra) -> None:
         system["disks"] = extra["disks"]
         system["disk_count"] = len(extra["disks"])
     gpus = extra.get("gpus") or []
+    npus = extra.get("npus") or []
     api_mod.handle_metrics_post(
         storage,
         json.dumps(
             {
                 "host_id": host_id,
                 "hostname": extra.get("hostname", host_id),
-                "host_type": "gpu" if gpus else "cpu",
+                "host_type": "gpu" if (gpus or npus) else "cpu",
                 "timestamp": ts,
                 "system": system,
                 "gpus": gpus,
+                "npus": npus,
             }
         ).encode("utf-8"),
     )
@@ -398,9 +409,444 @@ class HttpReportTests(unittest.TestCase):
                 page = resp.read().decode("utf-8")
             self.assertIn("使用诊断", page)
             self.assertIn("tabBtnReports", page)
+            self.assertIn("reportWindowDate", page)
+            self.assertIn("reportScheduleNote", page)
         finally:
             httpd.shutdown()
             httpd.server_close()
+            tmp.cleanup()
+
+
+class SchedulerWindowTests(unittest.TestCase):
+    def test_defaults_fire_only_in_that_minute(self) -> None:
+        spec = normalize_report_schedule(None)
+        self.assertEqual(
+            [s["period"] for s in due_slots(spec, _ts(2026, 10, 5, 0, 9))], []
+        )
+        self.assertEqual(
+            [s["period"] for s in due_slots(spec, _ts(2026, 10, 5, 0, 11))], []
+        )
+        daily = due_slots(spec, _ts(2026, 10, 5, 0, 10))
+        self.assertEqual([s["period"] for s in daily], ["day"])
+        self.assertEqual(daily[0]["from_ts"], _ts(2026, 10, 4))
+        self.assertEqual(daily[0]["to_ts"], _ts(2026, 10, 5))
+
+        weekly = due_slots(spec, _ts(2026, 10, 5, 0, 20))
+        self.assertEqual([s["period"] for s in weekly], ["week"])
+        self.assertEqual(weekly[0]["from_ts"], _ts(2026, 9, 28))
+        self.assertEqual(weekly[0]["to_ts"], _ts(2026, 10, 5))
+        # 周日的 00:20 不是周报
+        self.assertEqual(due_slots(spec, _ts(2026, 10, 4, 0, 20)), [])
+
+        monthly = due_slots(spec, _ts(2026, 10, 1, 0, 30))
+        self.assertEqual([s["period"] for s in monthly], ["month"])
+        self.assertEqual(monthly[0]["from_ts"], _ts(2026, 9, 1))
+        self.assertEqual(monthly[0]["to_ts"], _ts(2026, 10, 1))
+        self.assertEqual(due_slots(spec, _ts(2026, 10, 2, 0, 30)), [])
+
+    def test_disabled_and_shared_minute(self) -> None:
+        self.assertEqual(
+            due_slots({"enabled": False}, _ts(2026, 10, 5, 0, 10)), []
+        )
+        daily_off = normalize_report_schedule({"daily": {"enabled": False}})
+        self.assertEqual(due_slots(daily_off, _ts(2026, 10, 5, 0, 10)), [])
+        both = normalize_report_schedule({"weekly": {"minute": 10}})
+        self.assertEqual(
+            [s["period"] for s in due_slots(both, _ts(2026, 10, 5, 0, 10))],
+            ["day", "week"],
+        )
+
+    def test_missed_minutes_are_not_backfilled(self) -> None:
+        spec = normalize_report_schedule(None)
+        fired = set()
+        seen = []
+        for moment in (
+            _ts(2026, 10, 3, 0, 10),
+            _ts(2026, 10, 5, 0, 10),
+            _ts(2026, 10, 5, 0, 20),
+            _ts(2026, 10, 5, 12, 0),
+        ):
+            for slot in due_slots(spec, moment):
+                if slot["key"] in fired:
+                    continue
+                fired.add(slot["key"])
+                seen.append((slot["period"], slot["from_ts"]))
+        self.assertEqual(
+            seen,
+            [
+                ("day", _ts(2026, 10, 2)),
+                ("day", _ts(2026, 10, 4)),
+                ("week", _ts(2026, 9, 28)),
+            ],
+        )
+
+    def test_explicit_window_date(self) -> None:
+        day = report_window_for_date("day", "2026-09-15", _ts(2026, 10, 12, 9, 0))
+        self.assertEqual(day["from_ts"], _ts(2026, 9, 15))
+        self.assertEqual(day["to_ts"], _ts(2026, 9, 16))
+        week = report_window_for_date("week", "2026-09-16", _ts(2026, 10, 12))
+        self.assertEqual(week["from_ts"], _ts(2026, 9, 14))
+        self.assertEqual(week["to_ts"], _ts(2026, 9, 21))
+        month = report_window_for_date("month", "2026-09-15", _ts(2026, 10, 12))
+        self.assertEqual(month["from_ts"], _ts(2026, 9, 1))
+        self.assertEqual(month["to_ts"], _ts(2026, 10, 1))
+        with self.assertRaises(ValueError):
+            report_window_for_date("day", "2026-10-12", _ts(2026, 10, 12, 15, 0))
+        with self.assertRaises(ValueError):
+            report_window_for_date("day", "09-15", _ts(2026, 10, 12))
+
+
+class SchedulerRunTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(
+            os.path.join(self.tmp.name, "t.db"),
+            offline_seconds=90,
+            retention_days=40,
+        )
+        self.clock = {"ts": _ts(2026, 10, 5, 0, 10)}
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _scheduler(self) -> ReportScheduler:
+        return ReportScheduler(
+            self.storage,
+            clock=lambda: self.clock["ts"],
+            busy_thresholds={"cpu_percent": 80.0, "accel_util_avg": 80.0},
+        )
+
+    def test_run_due_skips_misses_and_existing_rows(self) -> None:
+        sched = self._scheduler()
+        self.clock["ts"] = _ts(2026, 10, 5, 12, 0)
+        self.assertEqual(sched.run_due(self.clock["ts"]), [])
+        self.assertEqual(self.storage.list_diagnostic_reports(), [])
+
+        fire = _ts(2026, 10, 5, 0, 10)
+        self.clock["ts"] = fire
+        with mock.patch("center.report_schedule.deliver_report") as hook:
+            created = sched.run_due(fire)
+        self.assertEqual(len(created), 1)
+        report = created[0]["report"]
+        self.assertEqual(report["source"], "scheduled")
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["generated_at"], fire)
+        self.assertEqual(report["requested_from_ts"], _ts(2026, 10, 4))
+        self.assertNotEqual(report["generated_at"], report["requested_to_ts"])
+        self.assertIn("实际生成时刻（Asia/Shanghai）2026-10-05 00:10", report["markdown"])
+        self.assertEqual(hook.call_count, 1)
+        self.assertEqual(sched.run_due(fire), [])
+
+        again = self._scheduler()
+        with mock.patch("center.report_schedule.deliver_report") as hook:
+            skipped = again.run_due(fire)
+        self.assertTrue(skipped[0]["skipped"])
+        hook.assert_not_called()
+        self.assertEqual(len(self.storage.list_diagnostic_reports()), 1)
+        self.assertEqual(
+            self.storage.get_diagnostic_report(report["id"])["markdown"],
+            report["markdown"],
+        )
+
+        manual_at = fire + 7200
+        self.clock["ts"] = manual_at
+        code, payload = reports_mod.handle_generate_report(
+            self.storage,
+            json.dumps({"period": "day", "as_of": fire}).encode("utf-8"),
+            source="manual",
+            generated_at=manual_at,
+            clock=manual_at,
+        )
+        self.assertEqual(code, 200, payload)
+        self.assertEqual(payload["report"]["id"], report["id"])
+        self.assertEqual(payload["report"]["action"], "replaced")
+        self.assertEqual(payload["report"]["source"], "manual")
+        self.assertEqual(payload["report"]["generated_at"], manual_at)
+
+        third = self._scheduler()
+        self.clock["ts"] = fire
+        skipped = third.run_due(fire)
+        self.assertTrue(skipped[0]["skipped"])
+        kept = self.storage.get_diagnostic_report(report["id"])
+        self.assertEqual(kept["source"], "manual")
+        self.assertEqual(kept["generated_at"], manual_at)
+
+    def test_failed_schedule_is_recorded_and_not_delivered(self) -> None:
+        short = Storage(
+            os.path.join(self.tmp.name, "short.db"),
+            offline_seconds=90,
+            retention_days=1,
+        )
+        self.clock["ts"] = _ts(2026, 11, 20, 12, 0)
+        sched = ReportScheduler(short, clock=lambda: self.clock["ts"])
+        fire = _ts(2026, 10, 1, 0, 30)
+        with mock.patch("center.report_schedule.deliver_report") as hook:
+            result = sched.run_due(fire)
+        hook.assert_not_called()
+        self.assertFalse(result[0]["ok"])
+        report = result[0]["report"]
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["source"], "scheduled")
+        self.assertTrue(report["error"])
+        self.assertIn(report["error"], report["markdown"])
+        listed = short.list_diagnostic_reports()
+        self.assertEqual(listed[0]["status"], "failed")
+        self.assertEqual(listed[0]["error"], report["error"])
+
+
+class GeneratedAtAndDedupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(
+            os.path.join(self.tmp.name, "t.db"),
+            offline_seconds=90,
+            retention_days=40,
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_generated_at_is_not_as_of(self) -> None:
+        as_of = _ts(2026, 10, 1, 0, 0)
+        generated = _ts(2026, 10, 12, 15, 4)
+        code, payload = reports_mod.handle_generate_report(
+            self.storage,
+            json.dumps({"period": "day", "as_of": as_of}).encode("utf-8"),
+            generated_at=generated,
+            clock=generated,
+        )
+        self.assertEqual(code, 200, payload)
+        report = payload["report"]
+        self.assertEqual(report["generated_at"], generated)
+        self.assertEqual(report["payload"]["generated_at"], generated)
+        self.assertEqual(report["requested_from_ts"], _ts(2026, 9, 30))
+        self.assertNotEqual(report["generated_at"], as_of)
+        self.assertIn("实际生成时刻（Asia/Shanghai）2026-10-12 15:04", report["markdown"])
+        self.assertNotIn("实际生成时刻（Asia/Shanghai）2026-10-01 00:00", report["markdown"])
+        self.assertIn("来源：手动", report["markdown"])
+
+    def test_same_window_replaces_one_row(self) -> None:
+        body = json.dumps(
+            {"period": "day", "window_date": "2026-09-30"}
+        ).encode("utf-8")
+        code, first = reports_mod.handle_generate_report(
+            self.storage, body, generated_at=_ts(2026, 10, 12, 8, 0), clock=_ts(2026, 10, 12, 8, 0)
+        )
+        self.assertEqual(code, 200, first)
+        code, second = reports_mod.handle_generate_report(
+            self.storage, body, generated_at=_ts(2026, 10, 12, 9, 0), clock=_ts(2026, 10, 12, 9, 0)
+        )
+        self.assertEqual(code, 200, second)
+        self.assertEqual(second["report"]["action"], "replaced")
+        self.assertEqual(second["report"]["id"], first["report"]["id"])
+        self.assertEqual(second["report"]["generated_at"], _ts(2026, 10, 12, 9, 0))
+        self.assertEqual(len(self.storage.list_diagnostic_reports()), 1)
+        with self.storage._lock:
+            conn = self.storage._connect()
+            try:
+                count = conn.execute("SELECT COUNT(*) FROM diagnostic_reports").fetchone()[0]
+            finally:
+                conn.close()
+        self.assertEqual(count, 1)
+
+    def test_replace_drops_older_duplicate_rows(self) -> None:
+        with self.storage._lock:
+            conn = self.storage._connect()
+            try:
+                for created in (10, 20):
+                    conn.execute(
+                        """
+                        INSERT INTO diagnostic_reports (
+                            period_type, title, requested_from_ts, requested_to_ts,
+                            clamped, created_at, markdown, payload,
+                            source, status, error, generated_at
+                        ) VALUES ('day', '旧', ?, ?, 0, ?, 'OLD', '{}', 'manual', 'ok', NULL, ?)
+                        """,
+                        (_ts(2026, 9, 30), _ts(2026, 10, 1), created, created),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        self.assertEqual(len(self.storage.list_diagnostic_reports()), 1)
+        code, payload = reports_mod.handle_generate_report(
+            self.storage,
+            json.dumps({"period": "day", "window_date": "2026-09-30"}).encode("utf-8"),
+            generated_at=_ts(2026, 10, 12, 10, 0),
+            clock=_ts(2026, 10, 12, 10, 0),
+        )
+        self.assertEqual(code, 200, payload)
+        self.assertNotIn("OLD", payload["report"]["markdown"])
+        with self.storage._lock:
+            conn = self.storage._connect()
+            try:
+                count = conn.execute("SELECT COUNT(*) FROM diagnostic_reports").fetchone()[0]
+            finally:
+                conn.close()
+        self.assertEqual(count, 1)
+
+    def test_open_window_is_rejected_without_a_row(self) -> None:
+        code, payload = reports_mod.handle_generate_report(
+            self.storage,
+            json.dumps({"period": "day", "window_date": "2026-10-12"}).encode("utf-8"),
+            clock=_ts(2026, 10, 12, 15, 0),
+        )
+        self.assertEqual(code, 400)
+        self.assertIn("尚未结束", payload["error"])
+        self.assertNotIn("report", payload)
+        self.assertEqual(self.storage.list_diagnostic_reports(), [])
+
+
+class OutlierExclusionTests(unittest.TestCase):
+    def test_out_of_range_util_is_excluded_and_named(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        storage = Storage(
+            os.path.join(tmp.name, "t.db"), offline_seconds=90, retention_days=40
+        )
+        now = _ts(2026, 10, 3, 12, 0)
+        bounds = report_period_bounds("day", now)
+        span = bounds["to_ts"] - bounds["from_ts"]
+        samples = [bounds["from_ts"] + int((span - 2) * i / 12) for i in range(12)]
+        try:
+            for i, ts in enumerate(samples):
+                util = 1283784.7 if i == 0 else 10.0
+                cpu = -3.0 if i == 0 else 20.0
+                _post(
+                    storage,
+                    "center-95",
+                    ts,
+                    cpu,
+                    primary_ip="10.9.9.9",
+                    hostname="center-95",
+                    npus=[
+                        {
+                            "index": 1,
+                            "name": "310P3",
+                            "util_percent": util,
+                            "vendor": "huawei",
+                        }
+                    ],
+                )
+            code, payload = reports_mod.handle_generate_report(
+                storage,
+                json.dumps({"period": "day", "as_of": now}).encode("utf-8"),
+                busy_thresholds={"cpu_percent": 80.0, "accel_util_avg": 80.0},
+                generated_at=now,
+                clock=now,
+            )
+            self.assertEqual(code, 200, payload)
+            report = payload["report"]
+            excluded = report["payload"]["excluded_samples"]
+            self.assertGreaterEqual(excluded["count"], 2)
+            self.assertGreaterEqual(excluded["by_metric"].get("accel_util_avg", 0), 1)
+            self.assertGreaterEqual(excluded["by_metric"].get("cpu_percent", 0), 1)
+            self.assertTrue(any(h["host_id"] == "center-95" for h in excluded["hosts"]))
+            ranking = report["payload"]["rankings"][0]
+            self.assertEqual(ranking["host_id"], "center-95")
+            self.assertEqual(ranking["accel_avg"], 10.0)
+            self.assertEqual(ranking["cpu_avg"], 20.0)
+            self.assertLess(ranking["accel_avg"], 100)
+            md = report["markdown"]
+            self.assertIn("已排除超出 0～100% 的利用率样本", md)
+            self.assertIn("10.9.9.9", md)
+            self.assertIn("加速卡", md)
+            self.assertNotIn("1283784", md)
+        finally:
+            tmp.cleanup()
+
+
+class ReportConfigAndRetentionTests(unittest.TestCase):
+    def test_missing_schedule_keeps_token_and_retention(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            path = os.path.join(tmp.name, "center.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"token": "keep-me", "retention_days": 40, "port": 8080}, fh)
+            cfg = load_config(path)
+            self.assertEqual(cfg["token"], "keep-me")
+            self.assertEqual(cfg["retention_days"], 40)
+            self.assertTrue(cfg["report_schedule"]["enabled"])
+            self.assertEqual(cfg["report_schedule"]["daily"]["hour"], 0)
+            self.assertEqual(cfg["report_schedule"]["daily"]["minute"], 10)
+            self.assertEqual(cfg["report_schedule"]["weekly"]["minute"], 20)
+            self.assertTrue(cfg["report_schedule"]["weekly"]["enabled"])
+            self.assertEqual(cfg["report_schedule"]["monthly"]["minute"], 30)
+            ok, errors = validate_center_config(cfg)
+            self.assertTrue(ok, errors)
+
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "token": "t2",
+                        "retention_days": 40,
+                        "port": 8080,
+                        "report_schedule": {
+                            "enabled": False,
+                            "daily": {"enabled": False, "hour": 3, "minute": 5},
+                        },
+                    },
+                    fh,
+                )
+            cfg = load_config(path)
+            self.assertEqual(cfg["token"], "t2")
+            self.assertEqual(cfg["retention_days"], 40)
+            self.assertFalse(cfg["report_schedule"]["enabled"])
+            self.assertFalse(cfg["report_schedule"]["daily"]["enabled"])
+            self.assertEqual(cfg["report_schedule"]["daily"]["hour"], 3)
+            self.assertEqual(cfg["report_schedule"]["weekly"]["minute"], 20)
+
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {"port": 8080, "report_schedule": {"daily": {"hour": 99}}},
+                    fh,
+                )
+            cfg = load_config(path)
+            ok, errors = validate_center_config(cfg)
+            self.assertFalse(ok)
+            self.assertTrue(any("daily.hour" in err for err in errors))
+        finally:
+            tmp.cleanup()
+
+    def test_migration_and_cleanup_keep_reports(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            path = os.path.join(tmp.name, "old.db")
+            conn = sqlite3.connect(path)
+            conn.execute(
+                """
+                CREATE TABLE diagnostic_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    requested_from_ts INTEGER NOT NULL,
+                    requested_to_ts INTEGER NOT NULL,
+                    clamped INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    markdown TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO diagnostic_reports (
+                    period_type, title, requested_from_ts, requested_to_ts,
+                    clamped, created_at, markdown, payload
+                ) VALUES ('day', '旧报告', 1, 2, 0, 111, 'KEEP_ME', '{}')
+                """
+            )
+            conn.commit()
+            conn.close()
+            storage = Storage(path, offline_seconds=90, retention_days=7)
+            row = storage.get_diagnostic_report(1)
+            self.assertEqual(row["markdown"], "KEEP_ME")
+            self.assertEqual(row["source"], "manual")
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["generated_at"], 111)
+            _post(storage, "h1", int(time.time()) - 10 * 86400, 10, primary_ip="10.0.0.8")
+            deleted = storage.cleanup_old_metrics()
+            self.assertGreaterEqual(deleted, 1)
+            self.assertEqual(storage.get_diagnostic_report(1)["markdown"], "KEEP_ME")
+        finally:
             tmp.cleanup()
 
 

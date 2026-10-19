@@ -17,6 +17,7 @@ from center import api as api_mod
 from center import deploy_api
 from center import reports as reports_mod
 from center.deploy_runner import DeployRunner
+from center.report_schedule import ReportScheduler, merge_report_schedule
 from center.deploy_store import DeployStore
 from center.storage import Storage
 from common.validate import validate_center_config
@@ -52,6 +53,7 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
             "busy_cpu_percent": 80,
             "busy_accel_percent": 80,
         },
+        "report_schedule": merge_report_schedule(None),
     }
     if path and os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -62,6 +64,7 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
         period_util = cfg.get("period_util") or {}
         user_anomaly = user.pop("anomaly", None)
         user_period_util = user.pop("period_util", None)
+        user_schedule = user.pop("report_schedule", None)
         # 兼容旧 alerts 字段名，忽略不用
         user.pop("alerts", None)
         cfg.update(user)
@@ -71,6 +74,11 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
         if isinstance(user_period_util, dict):
             period_util.update(user_period_util)
         cfg["period_util"] = period_util
+        # 缺省 report_schedule 时用默认时刻；已有 token / retention_days 不被这段覆盖
+        if user_schedule is None:
+            cfg["report_schedule"] = merge_report_schedule(None)
+        else:
+            cfg["report_schedule"] = merge_report_schedule(user_schedule)
     return cfg
 
 
@@ -641,6 +649,14 @@ def run_server(config: Dict[str, Any]) -> None:
         name="cleanup",
     )
     t.start()
+
+    scheduler = ReportScheduler(
+        storage,
+        schedule=config.get("report_schedule"),
+        busy_thresholds=period_util_thresholds(config.get("period_util") or {}),
+        anomaly_thresholds=config.get("anomaly") or {},
+    )
+    scheduler.start()
 
     host = config.get("host") or "0.0.0.0"
     port = int(config.get("port") or 8080)

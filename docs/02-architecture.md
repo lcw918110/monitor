@@ -48,6 +48,7 @@
 | 存储层 | `center/storage.py` | SQLite：主机快照、历史、时段聚合、清理 |
 | 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
 | 诊断报告 | `center/reports.py` | 日/周/月窗口、闲忙口径、Markdown；结果表 `diagnostic_reports` |
+| 报告调度 | `center/report_schedule.py` | 进程内定时生成；错过不补；`deliver_report` 为下一阶段推送挂钩 |
 | 展示地址 | `center/hostaddr.py` | 列表/详情/时段统计/诊断报告的完整 IP：部署清单 → host_id 内嵌 IP → RFC1918；跳过 `198.18/15` 隧道假 IP |
 | 异常判定 | `center/anomaly.py` | 阈值着色判定 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
@@ -67,7 +68,7 @@
 
 - **hosts**：每机最新完整 payload  
 - **metrics_history**：压缩历史点，保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘
-- **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON），读取不重算
+- **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组
 - **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路  
 
