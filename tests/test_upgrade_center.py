@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -179,10 +180,10 @@ class UpgradeCenterTests(unittest.TestCase):
             },
         )
 
-    def _run(self, extra):
+    def _run(self, extra, env=None, script=None):
         cmd = [
             "bash",
-            os.path.join(ROOT, "scripts", "upgrade_center.sh"),
+            script or os.path.join(ROOT, "scripts", "upgrade_center.sh"),
             self.pkg,
             "--dir",
             self.install,
@@ -191,7 +192,135 @@ class UpgradeCenterTests(unittest.TestCase):
             "--keep-backups",
             "2",
         ]
-        return _captured(cmd, self.base_env, 60)
+        return _captured(cmd, env or self.base_env, 90)
+
+    def _ld_bound_python(self, libdir):
+        """解释器在 LD_LIBRARY_PATH 含 libdir 之前直接失败，模拟 libpython3.8.so.1.0。"""
+        os.makedirs(libdir, exist_ok=True)
+        open(os.path.join(libdir, "libpython3.8.so.1.0"), "a").close()
+        wrapper = os.path.join(self.tmp, "python-needs-ld")
+        marker = os.path.join(self.tmp, "python-used.txt")
+        body = "\n".join(
+            [
+                "#!/bin/bash",
+                'case ":${LD_LIBRARY_PATH:-}:" in',
+                "  *:%s:*) ;;" % libdir,
+                "  *)",
+                '    echo "error while loading shared libraries: libpython3.8.so.1.0" >&2',
+                "    exit 127",
+                "    ;;",
+                "esac",
+                "printf 'used\\n' >> %s" % shlex.quote(marker),
+                "exec %s \"$@\"" % shlex.quote(sys.executable),
+                "",
+            ]
+        )
+        _write_exe(wrapper, body)
+        return wrapper, marker
+
+    def _env_without_python_override(self):
+        env = dict(self.base_env)
+        env.pop("MONITOR_UPGRADE_PYTHON", None)
+        env.pop("LD_LIBRARY_PATH", None)
+        env.pop("PYTHONPATH", None)
+        return env
+
+    def test_execstart_python_requires_unit_ld_library_path(self) -> None:
+        libdir = os.path.join(self.tmp, "py38", "lib")
+        wrapper, marker = self._ld_bound_python(libdir)
+        with open(self.unit, "w", encoding="utf-8") as fh:
+            fh.write(
+                "\n".join(
+                    [
+                        "[Service]",
+                        "Environment=LD_LIBRARY_PATH=%s" % libdir,
+                        "Environment=PATH=/usr/bin:/bin",
+                        "ExecStart=%s -m center --config %s"
+                        % (wrapper, os.path.join(self.install, "config", "center.json")),
+                        "",
+                    ]
+                )
+            )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None, env=self._env_without_python_override())
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("升级完成", proc.stdout)
+        self.assertNotIn("libpython3.8.so.1.0", proc.stdout)
+        with open(marker, encoding="utf-8") as fh:
+            self.assertIn("used", fh.read())
+        with open(os.path.join(self.install, "config", "center.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["marker"], "KEEP-ME")
+
+    def _upgrade_script_from_archive(self) -> str:
+        if os.path.isdir(os.path.join(ROOT, ".git")) and shutil.which("git"):
+            extract = tempfile.mkdtemp(prefix="upgrade-src-")
+            self.addCleanup(shutil.rmtree, extract, True)
+            archive = subprocess.check_output(["git", "-C", ROOT, "archive", "HEAD"])
+            subprocess.run(["tar", "-x", "-C", extract], input=archive, check=True)
+            script = os.path.join(extract, "scripts", "upgrade_center.sh")
+            self.assertTrue(os.path.isfile(script), script)
+            with open(script, encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertIn("_upgrade_apply_unit_runtime_env", text)
+            return script
+        return os.path.join(ROOT, "scripts", "upgrade_center.sh")
+
+    def test_archive_script_preserves_config_and_data_with_unit_env(self) -> None:
+        libdir = os.path.join(self.tmp, "usr", "local", "python3.8", "lib")
+        wrapper, marker = self._ld_bound_python(libdir)
+        live = os.path.join(self.install, "data", "live-only.txt")
+        with open(live, "w", encoding="utf-8") as fh:
+            fh.write("live\n")
+        db = os.path.join(self.install, "data", "monitor.db")
+        inode = os.stat(db).st_ino
+        recorded = os.path.join(self.tmp, "seen-pythonpath.txt")
+        with open(self.unit, "w", encoding="utf-8") as fh:
+            fh.write(
+                "\n".join(
+                    [
+                        "[Service]",
+                        "Environment=PATH=/usr/local/bin:/usr/local/python3.8/bin:/usr/bin:/bin",
+                        "Environment=LD_LIBRARY_PATH=/usr/local/python3.8/lib:%s" % libdir,
+                        "Environment=PYTHONPATH=/opt/monitor",
+                        "ExecStart=%s -m center --config %s"
+                        % (wrapper, os.path.join(self.install, "config", "center.json")),
+                        "",
+                    ]
+                )
+            )
+        py_test = textwrap.dedent(
+            """
+            import os
+            import unittest
+
+            class Ok(unittest.TestCase):
+                def test_records_pythonpath(self):
+                    with open(%s, "w", encoding="utf-8") as fh:
+                        fh.write(os.environ.get("PYTHONPATH", ""))
+            """
+            % json.dumps(recorded)
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": py_test})
+        proc = self._run(
+            None,
+            env=self._env_without_python_override(),
+            script=self._upgrade_script_from_archive(),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("升级完成", proc.stdout)
+        with open(marker, encoding="utf-8") as fh:
+            self.assertIn("used", fh.read())
+        with open(os.path.join(self.install, "config", "center.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        self.assertEqual(cfg["marker"], "KEEP-ME")
+        self.assertEqual(cfg["token"], "secret")
+        self.assertEqual(os.stat(db).st_ino, inode)
+        with open(live, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "live\n")
+        with open(recorded, encoding="utf-8") as fh:
+            seen = fh.read()
+        self.assertEqual(os.path.realpath(seen), os.path.realpath(self.pkg))
+        self.assertNotIn("/opt/monitor", seen)
 
     def test_preserves_config_environment_and_vendor_bundle(self) -> None:
         for name in ("100", "200", "300"):
@@ -493,6 +622,10 @@ class PushSshTests(unittest.TestCase):
         self.assertIn("BUNDLES=sync", proc.stdout)
         self.assertIn("MKDIR=/opt/monitor/vendor/python", proc.stdout)
 
+    @unittest.skipIf(
+        sys.platform == "darwin",
+        "macOS bsdtar 往管道里写 AppleDouble 扩展头时退出码和 Linux 不一致；推包已设置 COPYFILE_DISABLE=1，并在 tar 支持时加 --no-xattrs / --disable-copyfile。此用例在 Darwin 上跳过",
+    )
     def test_push_bundles_mkdirs_missing_remote_dir(self) -> None:
         local = os.path.join(self.tmp, "local-bundles")
         os.makedirs(local)

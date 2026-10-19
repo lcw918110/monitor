@@ -53,5 +53,24 @@ monitor_push_bundles() {
     return 2
   fi
   "${SSH_ARGV[@]}" "$target" "mkdir -p '$remote_dir'"
-  tar -C "$local_dir" -cf - . | "${SSH_ARGV[@]}" "$target" "tar -xf - -C '$remote_dir'"
+  # macOS tar 默认把 AppleDouble / com.apple.provenance 写进包，Linux tar 会报
+  # unknown extended header。COPYFILE_DISABLE 关掉 copyfile；--no-xattrs /
+  # --disable-copyfile 只在当前 tar 支持时加上。
+  _bundle_tar_to_stdout "$local_dir" | "${SSH_ARGV[@]}" "$target" "tar -xf - -C '$remote_dir'"
+}
+
+_bundle_tar_to_stdout() {
+  local src="$1"
+  local help_text=""
+  local -a args
+  args=()
+  help_text="$(tar --help 2>&1 || true)"
+  if printf '%s\n' "$help_text" | grep -F -q -- '--no-xattrs'; then
+    args+=(--no-xattrs)
+  fi
+  if printf '%s\n' "$help_text" | grep -F -q -- '--disable-copyfile'; then
+    args+=(--disable-copyfile)
+  fi
+  args+=(-C "$src" -cf - .)
+  COPYFILE_DISABLE=1 tar "${args[@]}"
 }
