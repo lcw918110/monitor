@@ -10,6 +10,8 @@
 # 先在新包上跑测试，失败则直接退出，不备份、不同步、不重启。
 # 同步之后只做健康检查。回滚只恢复代码和 systemd 单元，不碰 data/，
 # 失败的代码留在同级的 <安装目录名>-failed-<时间> 目录里。
+# 跑 Python 之前，在脚本顶层从 systemd 单元读出 LD_LIBRARY_PATH 和 PATH 并 export。
+# 不能放进 PY="$(upgrade_python)" 的子 shell，否则现场的 libpython 加载不到。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -117,26 +119,99 @@ upgrade_curl() {
   curl -sf --max-time 10 "$url"
 }
 
-upgrade_python() {
-  local line py
-  if [[ -n "${MONITOR_UPGRADE_PYTHON:-}" && -x "${MONITOR_UPGRADE_PYTHON}" ]]; then
-    printf '%s\n' "$MONITOR_UPGRADE_PYTHON"
-    return 0
+# 从单元里取某个 Environment= 的值。一行里可以有多个 KEY=VAL。不要在命令替换的子 shell 里 export。
+_upgrade_unit_env_value() {
+  local key="$1" line rest tok k v found=""
+  [[ -f "$UNIT_PATH" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Environment=*) rest="${line#Environment=}" ;;
+      *) continue ;;
+    esac
+    if [[ "$rest" == \"*\" && "$rest" != *" "* ]]; then
+      rest="${rest#\"}"
+      rest="${rest%\"}"
+    fi
+    # shellcheck disable=SC2086
+    for tok in $rest; do
+      tok="${tok#\"}"
+      tok="${tok%\"}"
+      k="${tok%%=*}"
+      [[ "$tok" == *=* ]] || continue
+      v="${tok#*=}"
+      if [[ "$k" == "$key" ]]; then
+        found="$v"
+      fi
+    done
+  done < "$UNIT_PATH"
+  printf '%s\n' "$found"
+}
+
+# 顶层调用。LD_LIBRARY_PATH / PATH 来自单元；PYTHONPATH 固定为正在测试的新包，不用现场树。
+_upgrade_apply_unit_runtime_env() {
+  local unit_ld unit_path
+  unit_ld="$(_upgrade_unit_env_value LD_LIBRARY_PATH)"
+  unit_path="$(_upgrade_unit_env_value PATH)"
+  if [[ -n "$unit_ld" ]]; then
+    case ":${LD_LIBRARY_PATH:-}:" in
+      *":${unit_ld}:"*) ;;
+      *) export LD_LIBRARY_PATH="${unit_ld}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+    esac
   fi
-  if [[ -f "$UNIT_PATH" ]]; then
-    line="$(grep -E '^ExecStart=' "$UNIT_PATH" | head -n 1 || true)"
-    py="${line#ExecStart=}"
-    py="${py%% *}"
-    if [[ -n "$py" && -x "$py" ]]; then
-      printf '%s\n' "$py"
+  if [[ -n "$unit_path" ]]; then
+    export PATH="${unit_path}${PATH:+:$PATH}"
+  fi
+  if [[ -n "${PKG:-}" ]]; then
+    export PYTHONPATH="$PKG"
+  fi
+}
+
+_py_imports_sqlite() {
+  local bin="$1"
+  [[ -n "$bin" && -x "$bin" ]] || return 1
+  "$bin" -c 'import sqlite3' >/dev/null 2>&1
+}
+
+_upgrade_execstart_python() {
+  local line py
+  [[ -f "$UNIT_PATH" ]] || return 0
+  line="$(grep -E '^ExecStart=' "$UNIT_PATH" | head -n 1 || true)"
+  py="${line#ExecStart=}"
+  py="${py%% *}"
+  py="${py#\"}"
+  py="${py%\"}"
+  printf '%s\n' "$py"
+}
+
+# 只往 stdout 打解释器路径。环境变量必须已经在父 shell export 过。
+upgrade_python() {
+  local cand
+  if [[ -n "${MONITOR_UPGRADE_PYTHON:-}" ]]; then
+    if _py_imports_sqlite "$MONITOR_UPGRADE_PYTHON"; then
+      printf '%s\n' "$MONITOR_UPGRADE_PYTHON"
       return 0
     fi
-    line="$(grep -E '^Environment=LD_LIBRARY_PATH=' "$UNIT_PATH" | head -n 1 || true)"
-    if [[ -n "$line" ]]; then
-      export LD_LIBRARY_PATH="${line#Environment=LD_LIBRARY_PATH=}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    fi
+    echo "[warn] MONITOR_UPGRADE_PYTHON 无法 import sqlite3: $MONITOR_UPGRADE_PYTHON" >&2
   fi
-  command -v python3
+  cand="$(_upgrade_execstart_python)"
+  if [[ -n "$cand" ]]; then
+    if _py_imports_sqlite "$cand"; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+    echo "[warn] 单元 ExecStart 的解释器无法 import sqlite3: $cand" >&2
+  fi
+  cand="$(command -v python3 2>/dev/null || true)"
+  if _py_imports_sqlite "$cand"; then
+    printf '%s\n' "$cand"
+    return 0
+  fi
+  cand="$(command -v python 2>/dev/null || true)"
+  if _py_imports_sqlite "$cand"; then
+    printf '%s\n' "$cand"
+    return 0
+  fi
+  return 1
 }
 
 backup_sqlite() {
@@ -339,9 +414,16 @@ if [[ ! -f "$INSTALL_DIR/config/center.json" ]]; then
   exit 1
 fi
 
-PY="$(upgrade_python)"
-if [[ -z "$PY" || ! -x "$PY" ]]; then
-  echo "找不到可用于备份数据库的 Python >= ${MONITOR_CENTER_PY_MIN_MAJOR}.${MONITOR_CENTER_PY_MIN_MINOR}"
+# 必须在当前 shell export。PY="$(upgrade_python)" 是子 shell，里面的 export 带不出来。
+_upgrade_apply_unit_runtime_env
+if ! PY="$(upgrade_python)"; then
+  echo "找不到能 import sqlite3 的 Python。" >&2
+  echo "已从 ${UNIT_PATH} 读取 Environment=LD_LIBRARY_PATH 和 PATH，PYTHONPATH=${PYTHONPATH:-未设置}（新包，不是现场安装树）。" >&2
+  echo "若 ExecStart 的解释器报 libpython3.8.so.1.0，单元里的 LD_LIBRARY_PATH 没有指到对应的 lib 目录。" >&2
+  exit 1
+fi
+if ! _py_imports_sqlite "$PY"; then
+  echo "Python 无法 import sqlite3: $PY" >&2
   exit 1
 fi
 
