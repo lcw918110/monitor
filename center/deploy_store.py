@@ -6,7 +6,56 @@ import json
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+
+def _clean_host_id(value: Any) -> str:
+    hid = str(value or "").strip()
+    if not hid or len(hid) > 128 or any(ch.isspace() or ch in "/\\" for ch in hid):
+        raise ValueError("host_id 无效")
+    return hid
+
+
+def _identity_update(
+    cur: Dict[str, Any], data: Dict[str, Any]
+) -> Tuple[str, str, bool, bool]:
+    """返回 (ip, host_id, ip 是否变化, host_id 是否变化)。未给出的身份字段保持原值。"""
+    from center.hostaddr import normalize_ip
+
+    current_ip = normalize_ip(cur.get("ip")) or str(cur.get("ip") or "").strip()
+    current_hid = str(cur.get("host_id") or "").strip()
+    new_ip = current_ip
+    new_hid = current_hid
+    ip_changed = False
+    hid_changed = False
+    if "ip" in data:
+        parsed = normalize_ip(data.get("ip"))
+        if not parsed:
+            raise ValueError("IP 无效")
+        new_ip = parsed
+        ip_changed = parsed != (normalize_ip(cur.get("ip")) or str(cur.get("ip") or "").strip())
+    if "host_id" in data:
+        parsed_hid = _clean_host_id(data.get("host_id"))
+        new_hid = parsed_hid
+        hid_changed = parsed_hid != current_hid
+    return new_ip, new_hid, ip_changed, hid_changed
+
+
+def _reject_identity_conflict(conn, target_id: int, new_ip: str, new_hid: str, ip_changed: bool) -> None:
+    from center.hostaddr import normalize_ip
+
+    rows = conn.execute(
+        "SELECT id, ip, host_id FROM deploy_targets WHERE id<>?",
+        (int(target_id),),
+    ).fetchall()
+    for row in rows:
+        other_ip = normalize_ip(row["ip"]) or str(row["ip"] or "").strip()
+        other_hid = str(row["host_id"] or "").strip()
+        if ip_changed and other_ip == new_ip:
+            raise ValueError("已有其他部署目标使用该 IP（#%s）" % row["id"])
+        if other_ip == new_ip and other_hid == new_hid:
+            raise ValueError("已有部署目标使用相同的 IP 与 host_id（#%s）" % row["id"])
+
 
 # Agent 产品默认目录：与同机 Center（/opt/monitor）分开，避免互相覆盖。
 # 已有库若已写入 /opt/monitor 或用户显式填写，不自动改写。
@@ -120,6 +169,12 @@ class DeployStore:
                     alters.append(
                         "ALTER TABLE deploy_targets ADD COLUMN last_error_code TEXT DEFAULT ''"
                     )
+                # 不加 NOT NULL DEFAULT：旧 SQLite 会因此重写整表。
+                # NULL / 0 表示仍参与展示和部署；1 表示同机改址后停用，行保留。
+                if "retired" not in cols:
+                    alters.append("ALTER TABLE deploy_targets ADD COLUMN retired INTEGER")
+                if "retired_at" not in cols:
+                    alters.append("ALTER TABLE deploy_targets ADD COLUMN retired_at INTEGER")
                 for sql in alters:
                     conn.execute(sql)
                 conn.commit()
@@ -292,6 +347,10 @@ class DeployStore:
         item.setdefault("ssh_password", "")
         item.setdefault("ssh_key_path", "")
         item.setdefault("last_error_code", "")
+        try:
+            item["retired"] = int(item.get("retired") or 0) == 1
+        except (TypeError, ValueError):
+            item["retired"] = False
         pwd_set = bool(str(item.get("ssh_password") or "").strip())
         key_set = bool(str(item.get("ssh_key_path") or "").strip())
         if pwd_set:
@@ -397,32 +456,114 @@ class DeployStore:
                 data.get("ssh_key_path", cur.get("ssh_key_path") or "")
             ).strip(),
         }
+        new_ip, new_hid, ip_changed, hid_changed = _identity_update(cur, data)
         with self._lock:
             conn = self._connect()
             try:
+                if ip_changed or hid_changed:
+                    _reject_identity_conflict(
+                        conn, target_id, new_ip, new_hid, ip_changed
+                    )
+                assignments = [
+                    "hostname=?",
+                    "host_type=?",
+                    "ssh_user=?",
+                    "ssh_port=?",
+                    "remote_dir=?",
+                    "peer_hosts=?",
+                    "ssh_password=?",
+                    "ssh_key_path=?",
+                ]
+                params: List[Any] = [
+                    fields["hostname"],
+                    fields["host_type"],
+                    fields["ssh_user"],
+                    fields["ssh_port"],
+                    fields["remote_dir"],
+                    fields["peer_hosts"],
+                    fields["ssh_password"],
+                    fields["ssh_key_path"],
+                ]
+                if ip_changed:
+                    assignments.append("ip=?")
+                    params.append(new_ip)
+                if hid_changed:
+                    assignments.append("host_id=?")
+                    params.append(new_hid)
+                params.append(target_id)
                 conn.execute(
-                    """
-                    UPDATE deploy_targets SET
-                      hostname=?, host_type=?, ssh_user=?, ssh_port=?,
-                      remote_dir=?, peer_hosts=?, ssh_password=?, ssh_key_path=?
-                    WHERE id=?
-                    """,
-                    (
-                        fields["hostname"],
-                        fields["host_type"],
-                        fields["ssh_user"],
-                        fields["ssh_port"],
-                        fields["remote_dir"],
-                        fields["peer_hosts"],
-                        fields["ssh_password"],
-                        fields["ssh_key_path"],
-                        target_id,
-                    ),
+                    "UPDATE deploy_targets SET "
+                    + ", ".join(assignments)
+                    + " WHERE id=?",
+                    params,
                 )
                 conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("已有部署目标使用相同的 IP 与 host_id") from exc
             finally:
                 conn.close()
         return self.get_target(target_id)
+
+    def assign_target_host_id(self, target_id: int, host_id: str) -> Dict[str, Any]:
+        """只改 host_id。密码、IP 和其他字段不动。用于同机改址。"""
+        hid = _clean_host_id(host_id)
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT id, ip, host_id FROM deploy_targets WHERE id=?",
+                    (int(target_id),),
+                ).fetchone()
+                if not row:
+                    raise ValueError("目标不存在")
+                current = str(row["host_id"] or "").strip()
+                if current != hid:
+                    ip = str(row["ip"] or "")
+                    clash = conn.execute(
+                        """
+                        SELECT id FROM deploy_targets
+                        WHERE ip=? AND host_id=? AND id<>?
+                        """,
+                        (ip, hid, int(target_id)),
+                    ).fetchone()
+                    if clash:
+                        raise ValueError(
+                            "已有部署目标使用相同的 IP 与 host_id（#%s）" % clash["id"]
+                        )
+                    conn.execute(
+                        "UPDATE deploy_targets SET host_id=? WHERE id=?",
+                        (hid, int(target_id)),
+                    )
+                    conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("已有部署目标使用相同的 IP 与 host_id") from exc
+            finally:
+                conn.close()
+        target = self.get_target(int(target_id))
+        if not target:
+            raise ValueError("目标不存在")
+        return target
+
+    def set_target_retired(self, target_id: int, retired: bool) -> Dict[str, Any]:
+        """停用后不再参与展示地址，也不再进入「全部部署」。行和密码都保留。"""
+        flag = 1 if retired else None
+        when = int(time.time()) if retired else None
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE deploy_targets SET retired=?, retired_at=? WHERE id=?",
+                    (flag, when, int(target_id)),
+                )
+                conn.commit()
+                if cur.rowcount <= 0:
+                    raise ValueError("目标不存在")
+            finally:
+                conn.close()
+        target = self.get_target(int(target_id))
+        if not target:
+            raise ValueError("目标不存在")
+        return target
 
     def delete_target(self, target_id: int) -> bool:
         with self._lock:

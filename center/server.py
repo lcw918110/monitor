@@ -479,6 +479,7 @@ def make_handler(
                 or path.endswith("/meta")
                 or path.endswith("/hide")
                 or path.endswith("/restore")
+                or path.endswith("/readdress")
             ):
                 rest = path[len("/api/v1/hosts/") :].strip("/")
                 parts = rest.split("/") if rest else []
@@ -496,6 +497,10 @@ def make_handler(
                     )
                 elif action == "hide":
                     code, payload = api_mod.handle_host_hide(
+                        storage, host_id, body, deploy_store=dstore
+                    )
+                elif action == "readdress":
+                    code, payload = api_mod.handle_host_readdress(
                         storage, host_id, body, deploy_store=dstore
                     )
                 else:

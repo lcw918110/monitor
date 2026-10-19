@@ -145,9 +145,14 @@
           "<tr>" +
           '<td><input type="checkbox" class="chk" value="' +
           t.id +
-          '" /></td>' +
+          '"' +
+          (t.retired ? " disabled" : "") +
+          " /></td>" +
           "<td>" +
           escapeHtml(t.ip) +
+          (t.retired
+            ? ' <span class="status-badge unknown">已停用</span>'
+            : "") +
           "</td>" +
           "<td>" +
           escapeHtml(String(t.ssh_port || 22)) +

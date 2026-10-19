@@ -217,18 +217,24 @@ def resolve_host_address(
     remote_ip: Any = "",
     deploy_ip: Any = "",
     deploy_map: Optional[Dict[str, str]] = None,
+    manual_address: Any = "",
 ) -> str:
     """解析列表应展示的完整地址，优先真实管理/LAN IPv4。
 
     来源顺序：
 
-    1. 部署清单 ``deploy_targets.ip``（按 host_id / hostname 映射）
-    2. ``host_id`` 内嵌 IP（如 ``host-172-24-26-50`` → ``172.24.26.50``）
-    3. Agent 上报的 RFC1918 网卡/``primary_ip``（跳过 ``198.18/15`` 等假 IP）
-    4. 其余非拒绝的上报 IP
-    5. 上报来源 ``last_remote_ip``（同样走拒绝列表）
-    6. ``hostname`` 本身若已是完整 IPv4
+    1. 手工展示地址（资产里的 ``address``，同机改址后用它）
+    2. 部署清单 ``deploy_targets.ip``（按 host_id / hostname 映射；已停用的目标不入映射）
+    3. ``host_id`` 内嵌 IP（如 ``host-172-24-26-50`` → ``172.24.26.50``）
+    4. Agent 上报的 RFC1918 网卡/``primary_ip``（跳过 ``198.18/15`` 等假 IP）
+    5. 其余非拒绝的上报 IP
+    6. 上报来源 ``last_remote_ip``（同样走拒绝列表）
+    7. ``hostname`` 本身若已是完整 IPv4
     """
+    manual = normalize_ip(manual_address)
+    if manual:
+        return manual
+
     mapped = lookup_deploy_ip(host_id, hostname, deploy_map)
     for item in (deploy_ip, mapped):
         ip = normalize_ip(item)

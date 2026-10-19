@@ -525,7 +525,10 @@ def handle_update_target(store: DeployStore, target_id: int, body: bytes) -> Tup
         data = json.loads(body.decode("utf-8") or "{}")
     except (UnicodeDecodeError, json.JSONDecodeError):
         return _bad("JSON 无效")
-    target = store.update_target(target_id, data)
+    try:
+        target = store.update_target(target_id, data)
+    except ValueError as exc:
+        return _bad(str(exc))
     if not target:
         return _bad("目标不存在", 404)
     probes = auto_probe_addresses(store, target=store.get_target(target_id) or target)
