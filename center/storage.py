@@ -12,10 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from center.hostaddr import normalize_ip, resolve_host_address
 from center.hostmeta import (
+    ASSET_FIELDS,
     collected_hardware,
     dump_asset_meta,
     host_match_ips,
     parse_asset_meta,
+    parse_previous_ips,
 )
 from common.accel_identity import (
     accel_utils,
@@ -429,11 +431,18 @@ class Storage:
 
     def _deploy_ip_map(self, conn: sqlite3.Connection) -> Dict[str, str]:
         out: Dict[str, str] = {}
-        try:
-            rows = conn.execute(
-                "SELECT host_id, hostname, ip FROM deploy_targets"
-            ).fetchall()
-        except sqlite3.OperationalError:
+        rows = None
+        for sql in (
+            # 已停用的目标不再驱动展示地址。旧库没有 retired 列时退回全表。
+            "SELECT host_id, hostname, ip FROM deploy_targets WHERE COALESCE(retired, 0) = 0",
+            "SELECT host_id, hostname, ip FROM deploy_targets",
+        ):
+            try:
+                rows = conn.execute(sql).fetchall()
+                break
+            except sqlite3.OperationalError:
+                rows = None
+        if rows is None:
             return out
         for row in rows:
             ip = normalize_ip(row["ip"])
@@ -706,6 +715,16 @@ class Storage:
         item["asset"] = asset
         item["owner"] = asset.get("owner") or ""
         item["purpose"] = asset.get("purpose") or ""
+        item["previous_ips"] = list(asset.get("previous_ips") or [])
+        manual = str(asset.get("address") or "").strip()
+        if normalize_ip(manual):
+            item["address"] = resolve_host_address(
+                host_id=item.get("host_id"),
+                hostname=item.get("hostname"),
+                payload=payload,
+                remote_ip=item.get("last_remote_ip"),
+                manual_address=manual,
+            )
         item["hardware"] = collected_hardware(payload)
         item["ips"] = host_match_ips(item, payload)
         return item
@@ -840,8 +859,57 @@ class Storage:
                     return "主机不存在", None
                 asset = parse_asset_meta(row["asset_meta"])
                 for key, value in patch.items():
-                    if key in asset:
+                    if key in ASSET_FIELDS:
                         asset[key] = value
+                conn.execute(
+                    "UPDATE hosts SET asset_meta=? WHERE host_id=?",
+                    (dump_asset_meta(asset), hid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return None, asset
+
+    def history_count(self, host_id: str) -> int:
+        hid = str(host_id or "").strip()
+        if not hid:
+            return 0
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM metrics_history WHERE host_id=?",
+                    (hid,),
+                ).fetchone()
+            finally:
+                conn.close()
+        return int(row["n"] or 0) if row else 0
+
+    def set_host_readdress(
+        self,
+        host_id: str,
+        address: str,
+        previous_ips: List[Dict[str, str]],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """只改展示地址和历史 IP。host_id 与历史上报不动。"""
+        hid = str(host_id or "").strip()
+        ip = normalize_ip(address)
+        if not hid:
+            return "host_id 不能为空", None
+        if not ip:
+            return "新 IP 无效", None
+        prev = parse_previous_ips(previous_ips)
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT host_id, asset_meta FROM hosts WHERE host_id=?", (hid,)
+                ).fetchone()
+                if not row:
+                    return "主机不存在", None
+                asset = parse_asset_meta(row["asset_meta"])
+                asset["address"] = ip
+                asset["previous_ips"] = prev
                 conn.execute(
                     "UPDATE hosts SET asset_meta=? WHERE host_id=?",
                     (dump_asset_meta(asset), hid),
@@ -872,7 +940,7 @@ class Storage:
                         continue
                     asset = parse_asset_meta(row["asset_meta"])
                     for key, value in patch.items():
-                        if key in asset and str(value or "").strip():
+                        if key in ASSET_FIELDS and str(value or "").strip():
                             asset[key] = str(value).strip()
                     conn.execute(
                         "UPDATE hosts SET asset_meta=? WHERE host_id=?",

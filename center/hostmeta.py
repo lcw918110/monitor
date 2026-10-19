@@ -30,6 +30,7 @@ ASSET_LIMITS = {
     "gpu": 2000,
     "model": 4000,
     "notes": 4000,
+    "address": 64,
 }
 
 ASSET_FIELDS = tuple(ASSET_LIMITS.keys())
@@ -104,12 +105,48 @@ _FORBIDDEN_API_KEYS = {
 }
 
 
-def empty_asset() -> Dict[str, str]:
-    return {key: "" for key in ASSET_FIELDS}
+def empty_asset() -> Dict[str, Any]:
+    out: Dict[str, Any] = {key: "" for key in ASSET_FIELDS}
+    out["previous_ips"] = []
+    return out
 
 
-def parse_asset_meta(raw: Any) -> Dict[str, str]:
-    """库里的 JSON。缺键、坏 JSON 都当成空，不抛给调用方。"""
+def parse_previous_ips(raw: Any) -> List[Dict[str, str]]:
+    """历史 IP。每项 ``{"ip","date","note"}``，坏数据丢掉，同一 IP 只留第一次。"""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            raw = [text]
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for item in raw:
+        note = ""
+        date = ""
+        if isinstance(item, dict):
+            ip = normalize_ip(item.get("ip") or item.get("address"))
+            note = str(item.get("note") or "").strip()[:200]
+            date = str(item.get("date") or "").strip()[:32]
+        else:
+            ip = normalize_ip(item)
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        out.append({"ip": ip, "date": date, "note": note})
+    return out
+
+
+def parse_asset_meta(raw: Any) -> Dict[str, Any]:
+    """库里的 JSON。缺键、坏 JSON 都当成空，不抛给调用方。
+
+    ``previous_ips`` 是列表，其余手工字段是字符串。两边都要读出来，
+    否则下一次只改负责人会把历史 IP 写丢。
+    """
     out = empty_asset()
     if raw is None or raw == "":
         return out
@@ -127,12 +164,14 @@ def parse_asset_meta(raw: Any) -> Dict[str, str]:
         if value is None:
             continue
         out[key] = str(value)
+    out["previous_ips"] = parse_previous_ips(data.get("previous_ips"))
     return out
 
 
-def dump_asset_meta(asset: Dict[str, str]) -> str:
+def dump_asset_meta(asset: Dict[str, Any]) -> str:
     clean = empty_asset()
     clean.update({key: str(asset.get(key) or "") for key in ASSET_FIELDS})
+    clean["previous_ips"] = parse_previous_ips(asset.get("previous_ips"))
     return json.dumps(clean, ensure_ascii=False)
 
 
@@ -180,6 +219,11 @@ def sanitize_asset_patch(
         text = str(value).strip()
         if not text and not allow_clear:
             continue
+        if key == "address" and text:
+            ip = normalize_ip(text)
+            if not ip:
+                return "展示地址不是有效的 IPv4", {}
+            text = ip
         err = _limit_error(key, text)
         if err:
             return err, {}
@@ -247,9 +291,23 @@ def host_match_ips(host: Dict[str, Any], payload: Optional[Dict[str, Any]] = Non
         seen.add(ip)
         found.append(ip)
 
+    asset = host.get("asset") if isinstance(host.get("asset"), dict) else {}
+    add(asset.get("address"))
     add(host.get("address"))
     add(parse_host_id_ip(host.get("host_id")))
     add(host.get("last_remote_ip"))
+
+    def add_previous(raw: Any) -> None:
+        if not isinstance(raw, list):
+            return
+        for item in raw:
+            if isinstance(item, dict):
+                add(item.get("ip") or item.get("address"))
+            else:
+                add(item)
+
+    add_previous(asset.get("previous_ips"))
+    add_previous(host.get("previous_ips"))
     body = payload if payload is not None else host.get("payload")
     if isinstance(body, dict):
         for ip in collect_payload_ips(body):

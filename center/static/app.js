@@ -1371,6 +1371,10 @@
           asset.name,
           asset.model,
           asset.notes,
+          (h.previous_ips || [])
+            .map((item) => (item && item.ip) || item || "")
+            .join(" "),
+          (h.ips || []).join(" "),
         ]
           .join(" ")
           .toLowerCase();
@@ -1555,6 +1559,7 @@ function renderHosts(hosts) {
     html +=
       '<p class="muted"><a class="link" href="#period" id="gotoPeriodTab">查看该机时段统计</a></p>';
 
+    html += renderAddressSection(data);
     html += renderAssetSection(data);
 
     html +=
@@ -1827,6 +1832,109 @@ function renderHosts(hosts) {
       });
     }
     bindAssetActions(data);
+    bindReaddress(data);
+  }
+
+  function renderAddressSection(data) {
+    const prev = data.previous_ips || [];
+    let hist = "无";
+    if (prev.length) {
+      hist = prev
+        .map((item) => {
+          const ip = (item && item.ip) || item || "";
+          const extra = [item && item.date, item && item.note].filter(Boolean).join(" ");
+          return extra ? ip + "（" + extra + "）" : String(ip);
+        })
+        .join("；");
+    }
+    return (
+      '<div class="section-title">地址</div>' +
+      '<div class="kv">' +
+      '<div class="k">当前地址</div><div class="v">' +
+      escapeHtml(data.address || "-") +
+      '</div><div class="k">历史 IP</div><div class="v" id="previousIps">' +
+      escapeHtml(hist) +
+      '</div><div class="k">监控 ID</div><div class="v">' +
+      escapeHtml(data.host_id || "") +
+      "</div></div>" +
+      '<div class="asset-actions">' +
+      '<button type="button" class="btn btn-sm" id="btnReaddress">更换 IP</button>' +
+      '<span class="muted">旧 IP 留在历史里，监控 ID 和历史上报不改。新 IP 上的部署目标会改指向这台主机，旧 IP 目标停用但不删除。</span>' +
+      "</div>"
+    );
+  }
+
+  function bindReaddress(data) {
+    const btn = document.getElementById("btnReaddress");
+    if (btn && data && data.host_id) {
+      btn.addEventListener("click", () => readdressHost(data));
+    }
+  }
+
+  async function readdressHost(data) {
+    const hostId = data.host_id;
+    const current = data.address || "";
+    const entered = window.prompt(
+      "新的 IP 地址（当前 " + (current || "未知") + "）",
+      ""
+    );
+    if (entered == null) return;
+    const newIp = String(entered).trim();
+    if (!newIp) return;
+    const note = window.prompt("备注（可留空，例如同机改址）", "同机改址");
+    if (note == null) return;
+    const url = "/api/v1/hosts/" + encodeURIComponent(hostId) + "/readdress";
+    const body = { new_ip: newIp, note: note };
+    try {
+      const previewRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ apply: false }, body)),
+      });
+      const preview = await previewRes.json();
+      if (!previewRes.ok || !preview.ok) {
+        throw new Error((preview && preview.error) || "无法预览");
+      }
+      const lines = [
+        "主机 " + preview.host_id + " 的监控 ID 不变，历史上报不改。",
+        "展示地址：" + (preview.old_ip || "（空）") + " → " + preview.new_ip,
+      ];
+      (preview.deploy_targets_retargeted || []).forEach((t) => {
+        lines.push(
+          "部署目标 #" +
+            t.id +
+            " " +
+            t.ip +
+            " 的 host_id：" +
+            (t.host_id_from || "（空）") +
+            " → " +
+            t.host_id_to
+        );
+      });
+      (preview.deploy_targets_retired || []).forEach((t) => {
+        lines.push("部署目标 #" + t.id + " " + t.ip + " 将停用（保留，不删除）");
+      });
+      if (
+        !(preview.deploy_targets_retargeted || []).length &&
+        !(preview.deploy_targets_retired || []).length
+      ) {
+        lines.push("没有需要改动的部署目标。");
+      }
+      lines.push("确认执行？");
+      if (!window.confirm(lines.join("\n"))) return;
+      const applyRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ apply: true }, body)),
+      });
+      const applied = await applyRes.json();
+      if (!applyRes.ok || !applied.ok) {
+        throw new Error((applied && applied.error) || "更换失败");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e.message || "更换失败");
+    }
   }
 
   const ASSET_FIELDS = [

@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.7.0**
+当前版本：**v1.8.0**
 
 运行环境：
 
@@ -21,9 +21,10 @@
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
 - **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV（见 `docs/13-diagnostic-reports.md`）
-- **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索
+- **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
 - **隐藏与删除**：详情「从列表隐藏」后，该机退出列表、在线/离线统计、集群时段汇总和之后的诊断报告，历史上报仍在，可从「已隐藏」恢复。彻底删除要输入 `delete`（`DELETE /api/v1/hosts/{id}?confirm=delete`），连同该机历史一起去掉。可选同时删掉部署清单里 host_id 或 IP 对得上的目标。已隐藏的主机再上报也不会自动出现
+- **同机更换 IP**：详情「更换 IP」先预览再确认。展示地址改为新 IP，旧 IP 记在「历史 IP」（资产 JSON 的 `previous_ips`，可带日期和备注）。监控 `host_id` 和历史上报都不改。新 IP 上已有的部署目标会把 `host_id` 改成这台主机（密码不动）；旧 IP 上属于这台主机的目标标为停用，不删除，不再驱动展示地址，也不再进入部署。按旧 IP 或新 IP 导入资产表都能对上这台主机
 - **资产表导入**：实时页「导入资产」，CSV 或 xlsx，按 IP 匹配已有主机，先预览再写入。空单元格不覆盖。列名含用户名、密码、口令、password、token 的整列丢弃，不入库。示例（虚构）：`config/hosts-meta.example.csv`
 - **资源组**：在实时监控页创建分组、给主机分配、按组筛选；数据在中心 SQLite，重启保留，**不必升级 Agent**
 - **实时与规格分栏**：主机列表把加速卡型号数量和加速卡使用率、磁盘汇总百分比和磁盘数分成不同列。离线主机不把最后一次快照的数字当成当前利用率
@@ -86,7 +87,7 @@ chmod +x scripts/*.sh
 成功后打开：`http://<中心IP>:8080/`  
 客户端部署页（**推荐装 Agent 的方式**）：`http://<中心IP>:8080/deploy.html`
 
-已有中心升级时**不要删库**。`metrics_history` 可能有数 GB。诊断调度和这次的主机列都是加法：`diagnostic_reports` 补列，`hosts` 增加可空列 `hidden`、`hidden_at`、`asset_meta`，不重写历史上报。
+已有中心升级时**不要删库**。`metrics_history` 可能有数 GB。诊断调度、主机列和同机改址都是加法：`diagnostic_reports` 补列，`hosts` 增加可空列 `hidden`、`hidden_at`、`asset_meta`，`deploy_targets` 增加可空列 `retired`、`retired_at`。手工展示地址和历史 IP 写在已有 `asset_meta` JSON 里。不改 `hosts.host_id`，不重写历史上报。
 
 在中心机优先用 `scripts/lib/sync_tree.sh` 把新代码同步到安装目录（例如 `/opt/monitor`），再 `systemctl restart monitor-center`。这样不会改写已有 systemd 单元里的 `Environment=PATH=...`。`report_schedule` 可以不写进 `center.json`，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补。
 
@@ -223,7 +224,9 @@ tail -n 50 .deploy-agent/run/agent.log
 | POST | `/api/v1/hosts/{id}/hide` | 隐藏。正文可带 `{"remove_deploy_target": true}` 同时删匹配的部署目标 |
 | POST | `/api/v1/hosts/{id}/restore` | 取消隐藏 |
 | DELETE | `/api/v1/hosts/{id}?confirm=delete` | 硬删除主机和历史上报。没有 `confirm=delete` 则 400，不删。`remove_deploy_target=1` 可选 |
-| POST | `/api/v1/hosts/meta/import` | 按 IP 预览 CSV/xlsx。`?apply=1` 才写入。凭据列忽略 |
+| POST | `/api/v1/hosts/meta/import` | 按 IP 预览 CSV/xlsx。`?apply=1` 才写入。凭据列忽略。手工地址、历史 IP、展示地址、host_id 内嵌 IP 都能对上 |
+| POST | `/api/v1/hosts/{id}/readdress` | 同机更换展示 IP。默认只预览。`{"new_ip","note","apply":true}` 才写入。不改 host_id，不改历史上报 |
+| POST | `/api/v1/deploy/targets/{id}` | 更新部署目标。可改 `ip`、`host_id`；与其他目标 IP 冲突或 IP/host_id 无效则 400，凭据保持不变。密码空字符串不覆盖 |
 | GET/POST/DELETE | `/api/v1/groups` | 资源组列表 / 创建；`POST/DELETE /api/v1/groups/{id}` 重命名、删除 |
 | POST | `/api/v1/hosts/{id}/group` | 分配资源组（`{"group_id": 1}` 或 `null` 取消） |
 | GET | `/api/v1/hosts/{id}/history` | 历史趋势（`minutes` / `limit`） |

@@ -666,3 +666,93 @@ def handle_host_meta_import(
         result["summary"] = dict(result["summary"])
         result["summary"]["updated"] = len(applied.get("updated") or [])
     return 200, result
+
+
+def handle_host_readdress(
+    storage: Storage,
+    host_id: str,
+    body: bytes,
+    deploy_store: Any = None,
+) -> Tuple[int, Dict[str, Any]]:
+    """预览或执行同机改址。默认只预览；``apply: true`` 才写库。"""
+    from center.readdress import plan_readdress
+
+    err, data = _parse_json_object(body)
+    if err:
+        return _bad_request(err)
+    host = storage.get_host(host_id)
+    if not host:
+        return 404, {"ok": False, "error": "主机不存在"}
+    targets: List[Dict[str, Any]] = []
+    if deploy_store is not None:
+        try:
+            targets = deploy_store.list_targets()
+        except Exception:  # noqa: BLE001
+            targets = []
+    err, plan = plan_readdress(
+        host,
+        targets,
+        data.get("new_ip"),
+        data.get("note") or "",
+    )
+    if err or not plan:
+        return _bad_request(err or "无法更换 IP")
+    history_rows = storage.history_count(host_id)
+    apply = data.get("apply") is True or data.get("apply") == 1
+    result: Dict[str, Any] = {
+        "ok": True,
+        "apply": bool(apply),
+        "history_rows": history_rows,
+    }
+    result.update(plan)
+    if not apply:
+        return 200, result
+
+    retargeted = list(plan.get("deploy_targets_retargeted") or [])
+    retired = list(plan.get("deploy_targets_retired") or [])
+    touched: List[Tuple[str, int, str]] = []
+    try:
+        if deploy_store is not None:
+            for item in retargeted:
+                tid = int(item["id"])
+                if item.get("host_id_from") != item.get("host_id_to"):
+                    deploy_store.assign_target_host_id(tid, plan["host_id"])
+                    touched.append(("host_id", tid, str(item.get("host_id_from") or "")))
+                if item.get("was_retired"):
+                    deploy_store.set_target_retired(tid, False)
+                    touched.append(("unretired", tid, ""))
+            for item in retired:
+                tid = int(item["id"])
+                deploy_store.set_target_retired(tid, True)
+                touched.append(("retired", tid, ""))
+        err, _asset = storage.set_host_readdress(
+            host_id, plan["address"], plan["previous_ips"]
+        )
+        if err:
+            raise ValueError(err)
+    except ValueError as exc:
+        _rollback_readdress(deploy_store, touched)
+        text = str(exc)
+        code = 404 if text == "主机不存在" else 400
+        return code, {"ok": False, "error": text}
+
+    fresh = storage.get_host(host_id) or {}
+    result["history_rows"] = storage.history_count(host_id)
+    result["address"] = fresh.get("address") or plan["address"]
+    result["previous_ips"] = fresh.get("previous_ips") or plan["previous_ips"]
+    return 200, result
+
+
+def _rollback_readdress(deploy_store: Any, touched: List[Tuple[str, int, str]]) -> None:
+    if deploy_store is None:
+        return
+    for kind, tid, previous in reversed(touched):
+        try:
+            if kind == "host_id":
+                deploy_store.assign_target_host_id(tid, previous)
+            elif kind == "retired":
+                deploy_store.set_target_retired(tid, False)
+            elif kind == "unretired":
+                deploy_store.set_target_retired(tid, True)
+        except Exception:  # noqa: BLE001
+            continue

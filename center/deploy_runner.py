@@ -652,6 +652,8 @@ class DeployRunner:
             if target_ids:
                 idset = set(int(x) for x in target_ids)
                 targets = [t for t in targets if int(t["id"]) in idset]
+            # 同机改址后停用的旧 IP 不再部署，避免把旧 host_id 装回去。
+            targets = [t for t in targets if not t.get("retired")]
             if not targets:
                 raise ValueError("没有可部署的目标")
             settings = self.store.get_settings(include_secrets=True)
