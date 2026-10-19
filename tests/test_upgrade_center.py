@@ -52,6 +52,23 @@ def _boom_test() -> str:
     )
 
 
+def _captured(cmd, env, timeout):
+    """按 UTF-8 解码。macOS 上 LANG=C 时 universal_newlines 会把中文输出解成 UnicodeDecodeError。"""
+    return subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=timeout,
+    )
+
+
+@unittest.skipIf(
+    sys.platform == "darwin",
+    "upgrade_center.sh 使用 GNU stat -c%s 和 GNU df；macOS 的 BSD stat/df 对不上，在 Darwin 上跳过",
+)
 class UpgradeCenterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="upgrade-")
@@ -174,14 +191,7 @@ class UpgradeCenterTests(unittest.TestCase):
             "--keep-backups",
             "2",
         ]
-        return subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.base_env,
-            timeout=60,
-        )
+        return _captured(cmd, self.base_env, 60)
 
     def test_preserves_config_environment_and_vendor_bundle(self) -> None:
         for name in ("100", "200", "300"):
@@ -229,7 +239,8 @@ class UpgradeCenterTests(unittest.TestCase):
                 "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from hosts').fetchone()[0], c.execute('select count(*) from metrics_history').fetchone()[0])",
                 os.path.join(self.install, "data", "monitor.db"),
             ],
-            universal_newlines=True,
+            encoding="utf-8",
+            errors="replace",
         )
         hosts, hist = conn_hosts.split()
         self.assertEqual(hosts, "1")
@@ -340,54 +351,109 @@ class PushSshTests(unittest.TestCase):
         self.env.pop("MONITOR_SSH_CMD_OVERRIDE", None)
         self.env["PATH"] = self.bin + os.pathsep + "/usr/bin:/bin"
         self.env["MONITOR_PUSH_DRY"] = "1"
+        self._upgrade_script = None
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def _require_git(self) -> str:
+        git = shutil.which("git")
+        if not git:
+            self.skipTest("本机没有 git，跳过 push_upgrade.sh 仓库测试")
+        return git
+
+    def _copy_push_scripts(self, repo: str) -> str:
+        dest_dir = os.path.join(repo, "scripts", "lib")
+        os.makedirs(dest_dir)
+        script = os.path.join(repo, "scripts", "push_upgrade.sh")
+        shutil.copy(os.path.join(ROOT, "scripts", "push_upgrade.sh"), script)
+        shutil.copy(
+            os.path.join(ROOT, "scripts", "lib", "ssh_cmd.sh"),
+            os.path.join(dest_dir, "ssh_cmd.sh"),
+        )
+        return script
+
+    def _upgrade_in_git_repo(self) -> str:
+        """脚本按自身所在目录找仓库。git archive 解包没有 .git，所以拷到临时仓库再跑。"""
+        if self._upgrade_script:
+            return self._upgrade_script
+        git = self._require_git()
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(repo)
+        script = self._copy_push_scripts(repo)
+        git_env = dict(self.env)
+        git_env.pop("MONITOR_PUSH_DRY", None)
+
+        def git_ok(args):
+            proc = subprocess.run(
+                args,
+                cwd=repo,
+                env=git_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                raise AssertionError(proc.stdout)
+            return proc
+
+        git_ok([git, "-c", "init.defaultBranch=master", "-c", "advice.defaultBranchName=false", "init", "-q"])
+        git_ok(
+            [
+                git,
+                "-c",
+                "user.email=monitor-test@example.com",
+                "-c",
+                "user.name=monitor-test",
+                "-c",
+                "commit.gpgsign=false",
+                "add",
+                "scripts",
+            ]
+        )
+        git_ok(
+            [
+                git,
+                "-c",
+                "user.email=monitor-test@example.com",
+                "-c",
+                "user.name=monitor-test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "test",
+            ]
+        )
+        self._upgrade_script = script
+        return script
+
+    def _run_push(self, args, env):
+        return _captured(["bash", self._upgrade_in_git_repo()] + list(args), env, 20)
+
     def test_sshpass_env_wraps_ssh(self) -> None:
         self.env["SSHPASS"] = "secret-token"
-        proc = subprocess.run(
-            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.env,
-            timeout=20,
-        )
+        proc = self._run_push(["root@center", "HEAD"], self.env)
         self.assertEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("SSH=sshpass -e ssh", proc.stdout)
         self.assertNotIn("secret-token", proc.stdout)
+        self.assertRegex(proc.stdout, r"SHA=[0-9a-f]{7,40}")
         self.assertFalse(os.path.exists(self.log))
 
     def test_plain_ssh_without_sshpass_env(self) -> None:
-        proc = subprocess.run(
-            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.env,
-            timeout=20,
-        )
+        proc = self._run_push(["root@center", "HEAD"], self.env)
         self.assertEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("SSH=ssh\n", proc.stdout)
         self.assertNotIn("sshpass", proc.stdout)
+        self.assertRegex(proc.stdout, r"SHA=[0-9a-f]{7,40}")
 
     def test_ssh_cmd_override_skips_sshpass(self) -> None:
         self.env["SSHPASS"] = "secret-token"
-        proc = subprocess.run(
-            [
-                "bash",
-                os.path.join(ROOT, "scripts", "push_upgrade.sh"),
-                "--ssh-cmd",
-                "fake-ssh -o BatchMode=yes",
-                "root@center",
-                "HEAD",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.env,
-            timeout=20,
+        proc = self._run_push(
+            ["--ssh-cmd", "fake-ssh -o BatchMode=yes", "root@center", "HEAD"],
+            self.env,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("SSH=fake-ssh -o BatchMode=yes", proc.stdout)
@@ -402,16 +468,19 @@ class PushSshTests(unittest.TestCase):
             os.symlink(src, os.path.join(clean, name))
         self.env["SSHPASS"] = "secret-token"
         self.env["PATH"] = clean
-        proc = subprocess.run(
-            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.env,
-            timeout=20,
-        )
+        proc = self._run_push(["root@center", "HEAD"], self.env)
         self.assertNotEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("没有 sshpass", proc.stdout)
+
+    def test_dry_run_outside_git_repo_does_not_fail(self) -> None:
+        self._require_git()
+        plain = os.path.join(self.tmp, "not-a-repo")
+        script = self._copy_push_scripts(plain)
+        proc = _captured(["bash", script, "root@center", "HEAD"], self.env, 20)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("SHA=unknown", proc.stdout)
+        self.assertNotIn("not a git repository", proc.stdout)
+        self.assertIn("SSH=ssh\n", proc.stdout)
 
     def test_push_upgrade_plans_bundle_mkdir(self) -> None:
         bundle = os.path.join(self.tmp, "vendor")
@@ -419,14 +488,7 @@ class PushSshTests(unittest.TestCase):
         with open(os.path.join(bundle, "cpython.tar.gz"), "wb") as fh:
             fh.write(b"bundle")
         self.env["MONITOR_PUSH_BUNDLE_DIR"] = bundle
-        proc = subprocess.run(
-            ["bash", os.path.join(ROOT, "scripts", "push_upgrade.sh"), "root@center", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=self.env,
-            timeout=20,
-        )
+        proc = self._run_push(["root@center", "HEAD"], self.env)
         self.assertEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("BUNDLES=sync", proc.stdout)
         self.assertIn("MKDIR=/opt/monitor/vendor/python", proc.stdout)
@@ -440,7 +502,7 @@ class PushSshTests(unittest.TestCase):
             fh.write(b"bundle")
         env = dict(self.env)
         env.pop("MONITOR_PUSH_DRY", None)
-        proc = subprocess.run(
+        proc = _captured(
             [
                 "bash",
                 os.path.join(ROOT, "scripts", "push_python_bundles.sh"),
@@ -449,11 +511,8 @@ class PushSshTests(unittest.TestCase):
                 "root@center",
                 local,
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            env=env,
-            timeout=20,
+            env,
+            20,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout)
         with open(self.log, encoding="utf-8") as fh:

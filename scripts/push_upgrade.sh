@@ -11,6 +11,7 @@
 # 本地 vendor/python（或 MONITOR_PUSH_BUNDLE_DIR）里如果有 *.tar.gz，
 # 会先在中心 mkdir -p /opt/monitor/vendor/python 再同步过去。
 # MONITOR_PUSH_DRY=1 只打印将要使用的 SSH 命令，不连接。
+# 干跑时 git rev-parse 失败（例如 git archive 解出来的目录没有 .git）不退出，SHA 记为 unknown。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -83,7 +84,17 @@ if [[ -z "$MONITOR_SSH_CMD_OVERRIDE" ]]; then
 fi
 monitor_init_ssh || exit 1
 
-SHA="$(git rev-parse "$REF")"
+# 干跑只检查 SSH 怎么拼。git archive 解包没有 .git 时 rev-parse 会失败，
+# 不能因此让 upgrade_center.sh 的同步前测试整批退出。
+SHA=""
+if [[ "${MONITOR_PUSH_DRY:-}" == "1" ]]; then
+  if ! SHA="$(git rev-parse "$REF" 2>/dev/null)"; then
+    SHA="unknown"
+  fi
+elif ! SHA="$(git rev-parse "$REF")"; then
+  echo "无法解析 git 版本 ${REF}: ${ROOT} 不是 git 仓库" >&2
+  exit 1
+fi
 REMOTE_DIR="/tmp/monitor-upgrade-src"
 BUNDLE_DIR="${MONITOR_PUSH_BUNDLE_DIR:-$ROOT/vendor/python}"
 BUNDLE_REMOTE="/opt/monitor/vendor/python"
