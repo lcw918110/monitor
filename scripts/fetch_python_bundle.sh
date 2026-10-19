@@ -21,8 +21,8 @@ usage() {
 从 bundles.json 下载 python-build-standalone install_only（glibc >= 2.17），
 并按清单里的 sha256 校验。默认目录是仓库的 vendor/python/。
 
-离线放到中心:
-  scp -r vendor/python/ <中心>:/opt/monitor/vendor/python/
+离线放到中心（远端目录不存在时会先 mkdir -p）:
+  scripts/push_python_bundles.sh <中心>
 EOF
 }
 
@@ -79,5 +79,5 @@ if [[ "${MONITOR_FETCH_PYTHON_DRY:-0}" == "1" ]]; then
 fi
 echo
 echo "已放到 $DEST"
-echo "拷到中心: scp -r \"$DEST\" <中心>:/opt/monitor/vendor/python"
+echo "拷到中心: scripts/push_python_bundles.sh <中心> \"$DEST\""
 echo "或在 config/center.json 设置 deploy.python_bundles 指向该目录。"

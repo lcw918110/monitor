@@ -83,7 +83,7 @@
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  
 - 保留「测试连通/部署条件」（SSH + 目录可写），已去掉独立「探测勾选」按钮
 - 编辑目标可以改 IP 和 host_id（与其他目标 IP 冲突则拒绝，密码留空保持原密码）。清单「停用 / 恢复」只提交 `retired`。同机改址用监测台「更换 IP」：新 IP 目标的 host_id 改到原主机，旧 IP 目标标为已停用（不删除、不再部署）。详情里在有撤销记录时显示「撤销更换 IP」
-- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`），保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`
+- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`）。先在新包上跑测试，通过后才同步。保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`。健康检查失败只回滚代码和单元，不覆盖 `data/`。`SSHPASS` 或 `--ssh-cmd` 用于非交互登录。便携包用 `scripts/push_python_bundles.sh`
 
 ## 下一步
 

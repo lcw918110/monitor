@@ -226,12 +226,27 @@ class ResolvePythonScriptTests(unittest.TestCase):
         path = os.path.join(directory, name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if need_ld:
+            # 按物理路径比较：macOS 上 /tmp 与 /private/tmp、readlink 结果可能不同。
             check = (
-                'case ":${LD_LIBRARY_PATH:-}:" in\n'
-                "  *:%s:*) ;;\n"
-                '  *) echo "error while loading shared libraries: libpython" >&2; exit 127 ;;\n'
-                "esac\n"
-            ) % need_ld
+                "want=''\n"
+                "if [[ -d '%s' ]]; then want=\"$(cd '%s' && pwd -P)\"; fi\n"
+                "[[ -n \"$want\" ]] || want='%s'\n"
+                "found=0\n"
+                "rest=\"${LD_LIBRARY_PATH:-}\"\n"
+                "while [[ -n \"$rest\" ]]; do\n"
+                "  p=\"${rest%%%%:*}\"\n"
+                "  case \"$rest\" in\n"
+                "    *:*) rest=\"${rest#*:}\" ;;\n"
+                "    *) rest='' ;;\n"
+                "  esac\n"
+                "  got=\"$p\"\n"
+                "  if [[ -d \"$p\" ]]; then got=\"$(cd \"$p\" && pwd -P)\"; fi\n"
+                "  if [[ \"$got\" == \"$want\" || \"$p\" == \"$want\" ]]; then found=1; fi\n"
+                "done\n"
+                "if [[ \"$found\" != 1 ]]; then\n"
+                '  echo "error while loading shared libraries: libpython" >&2; exit 127\n'
+                "fi\n"
+            ) % (need_ld, need_ld, need_ld)
         else:
             check = ""
         body = (
@@ -324,7 +339,12 @@ class ResolvePythonScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("PY=" + fake, proc.stdout)
-        self.assertIn("LD=" + libdir, proc.stdout)
+        reported = ""
+        for line in proc.stdout.splitlines():
+            if line.startswith("LD="):
+                reported = line[3:]
+        self.assertTrue(reported, proc.stdout + proc.stderr)
+        self.assertEqual(os.path.realpath(reported), os.path.realpath(libdir))
 
     def test_error_when_none_usable(self):
         tmp = tempfile.mkdtemp()
