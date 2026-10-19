@@ -507,6 +507,7 @@ class UnitEnvTests(unittest.TestCase):
                     unit,
                 ],
                 text=True,
+                stdin=subprocess.DEVNULL,
             )
             lines = [line for line in out.splitlines() if line.strip()]
             self.assertIn("Environment=PYTHONPATH=/opt/monitor", lines)
@@ -526,6 +527,7 @@ class UnitEnvTests(unittest.TestCase):
                     unit,
                 ],
                 text=True,
+                stdin=subprocess.DEVNULL,
             )
             self.assertIn("Environment=LD_LIBRARY_PATH=/old/lib", kept)
             self.assertIn("Environment=PATH=/usr/local/python3/bin:/usr/bin", kept)

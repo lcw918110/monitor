@@ -302,6 +302,7 @@ class BundleShellTests(unittest.TestCase):
     def test_fetch_dry_run_uses_pinned_hash(self) -> None:
         proc = subprocess.run(
             ["bash", os.path.join(ROOT, "scripts", "fetch_python_bundle.sh")],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
@@ -328,6 +329,7 @@ class BundleShellTests(unittest.TestCase):
         ):
             proc = subprocess.run(
                 ["bash", "-n", os.path.join(ROOT, name)],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,

@@ -29,6 +29,14 @@ monitor_init_ssh() {
   SSH_ARGV=(ssh)
 }
 
+# 不向远端喂数据。-n 且 </dev/null，避免 ssh（以及假 ssh 里的 cat）
+# 读走调用方一直不关的 stdin。推包、解包这类要吃管道的调用不要走这里。
+monitor_ssh_exec() {
+  local target="$1"
+  shift
+  "${SSH_ARGV[@]}" -n "$target" "$@" </dev/null
+}
+
 # 把本地目录同步到远端。目录里没有 *.tar.gz 时返回 2（调用方可以跳过）。
 # 先在远端 mkdir -p，避免 /opt/monitor/vendor/python 的父目录不存在时 scp 失败。
 monitor_push_bundles() {
@@ -52,7 +60,7 @@ monitor_push_bundles() {
   if [[ -z "$found" ]]; then
     return 2
   fi
-  "${SSH_ARGV[@]}" "$target" "mkdir -p '$remote_dir'"
+  monitor_ssh_exec "$target" "mkdir -p '$remote_dir'"
   # macOS tar 默认把 AppleDouble / com.apple.provenance 写进包，Linux tar 会报
   # unknown extended header。COPYFILE_DISABLE 关掉 copyfile；--no-xattrs /
   # --disable-copyfile 只在当前 tar 支持时加上。

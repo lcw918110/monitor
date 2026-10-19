@@ -94,7 +94,7 @@ remote_has_rsync() {
   local user="$1" ip="$2"
   shift 2
   local out
-  out="$(ssh "$@" "${user}@${ip}" "command -v rsync" 2>/dev/null || true)"
+  out="$(ssh -n "$@" "${user}@${ip}" "command -v rsync" </dev/null 2>/dev/null || true)"
   [[ -n "$out" ]]
 }
 
@@ -110,7 +110,7 @@ deploy_one() {
   local out rc method="tar" part
 
   if command -v rsync >/dev/null 2>&1 && [[ -z "${MONITOR_SYNC_DISABLE_RSYNC:-}" ]]; then
-    if ssh_run_retry "$ip" ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "mkdir -p '$REMOTE_DIR' /tmp/monitor-agent-src && command -v rsync" >/dev/null; then
+    if ssh_run_retry "$ip" ssh -n "${ssh_opts[@]}" "${SSH_USER}@${ip}" "mkdir -p '$REMOTE_DIR' /tmp/monitor-agent-src && command -v rsync" </dev/null >/dev/null; then
       set +e
       out=""
       rc=0
@@ -161,7 +161,7 @@ deploy_one() {
   echo "[$ip] [sync] method=$method"
 
   local bundle_args="" bundle_arch bundle_out bundle_path bundle_sha
-  bundle_arch="$(ssh "${ssh_opts[@]}" "${SSH_USER}@${ip}" "uname -m" 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)"
+  bundle_arch="$(ssh -n "${ssh_opts[@]}" "${SSH_USER}@${ip}" "uname -m" </dev/null 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)"
   if [[ -n "$bundle_arch" ]]; then
     bundle_out="$(
       PYTHONPATH="$ROOT" python3 - "$bundle_arch" "$ROOT" <<'PY' || true

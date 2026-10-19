@@ -5,9 +5,12 @@
 #
 # 用法（在中心上）:
 #   bash scripts/upgrade_center.sh <包目录或 tar.gz> --sha <git-sha> --dir /opt/monitor
+#   bash scripts/upgrade_center.sh <包目录> --sha <git-sha> --dir /opt/monitor --check-only
 #
 # 保留 config/center.json、data/、vendor/python 里的 tar.gz。
 # 先在新包上跑测试，失败则直接退出，不备份、不同步、不重启。
+# 同步之前的测试把标准输入接到 /dev/null，避免继承一直不关的 SSH stdin。
+# --check-only 跑完测试和磁盘预检就退出，不备份、不同步、不重启。
 # 同步之后只做健康检查。回滚只恢复代码和 systemd 单元，不碰 data/，
 # 失败的代码留在同级的 <安装目录名>-failed-<时间> 目录里。
 # 跑 Python 之前，在脚本顶层从 systemd 单元读出 LD_LIBRARY_PATH 和 PATH 并 export。
@@ -25,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="${MONITOR_UPGRADE_DIR:-/opt/monitor}"
 SHA=""
 KEEP_BACKUPS=5
+CHECK_ONLY=0
 PKG_INPUT=""
 WORK=""
 BACKUP_DIR=""
@@ -33,9 +37,10 @@ UPGRADE_DONE=0
 
 usage() {
   cat <<EOF
-用法: $0 <包目录或 tar.gz> [--dir /opt/monitor] [--sha SHA] [--keep-backups N]
+用法: $0 <包目录或 tar.gz> [--dir /opt/monitor] [--sha SHA] [--keep-backups N] [--check-only]
 
-在中心机执行。先在新包上跑测试，失败则不改安装目录。
+在中心机执行。先在新包上跑测试（标准输入接到 /dev/null），失败则不改安装目录。
+--check-only 在测试和磁盘预检之后打印结果并退出，不备份、不同步、不重启。
 通过后再用 Python sqlite3 backup 做一致的数据库副本并 quick_check。
 同步时不覆盖 config/center.json、data/ 和已放置的便携 Python 包。
 重启后只做健康检查（health / hosts / reports，以及主机和历史上报条数没有减少）。
@@ -48,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --sha) SHA="$2"; shift 2 ;;
     --keep-backups) KEEP_BACKUPS="$2"; shift 2 ;;
+    --check-only) CHECK_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) echo "未知参数: $1"; usage; exit 1 ;;
@@ -433,7 +439,8 @@ if [[ ! -d "$PKG/tests" ]]; then
   exit 1
 fi
 # 不传 -t：tests/ 不是包（没有 __init__.py）。cwd 与 PYTHONPATH 指向新包，测试不得去写现场数据库。
-if ! (cd "$PKG" && PYTHONPATH="$PKG" "$PY" -m unittest discover -s tests); then
+# </dev/null：push_upgrade 的 SSH 会话 stdin 不会关闭，测试不能去读它。
+if ! (cd "$PKG" && PYTHONPATH="$PKG" "$PY" -m unittest discover -s tests) </dev/null; then
   echo "新包测试未通过，未改动安装目录"
   exit 1
 fi
@@ -450,6 +457,12 @@ free_bytes=$(( ${free_kb:-0} * 1024 ))
 if [[ "$free_bytes" -lt "$need_bytes" ]]; then
   echo "磁盘空间不足: 可用 ${free_bytes} 字节，至少需要 ${need_bytes}（约 3 倍数据库再加 20MB）"
   exit 1
+fi
+
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  echo "[ok] 检查通过（未改动安装目录）"
+  echo "目录=${INSTALL_DIR} sha=${SHA:-未指定} Python=${PY} 磁盘可用=${free_bytes} 需要=${need_bytes}"
+  exit 0
 fi
 
 TS="$(date +%Y%m%d%H%M%S)"

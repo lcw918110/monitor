@@ -2,7 +2,7 @@
 
 | 文档版本 | 1.0 |
 | 编制日期 | 2026-07-28 |
-| 对应基线 | README v1.9.2 |
+| 对应基线 | README v1.9.3 |
 
 状态约定：`todo` / `doing` / `done` / `blocked`
 
@@ -15,7 +15,7 @@
 - 主机类型：`auto` | `cpu` | `gpu`
 - 监测台三页签：实时监控（排序、完整 IP、资源组、负责人/用途、规格与利用率分列、离线不展示实时数字、隐藏/导入资产）、时段统计、使用诊断（日/周/月报告入库；中心按时生成，错过不补；排行和闲忙带负责人/用途）
 - `retention_days` 可配。展示地址优先手工地址 / 未停用清单 / host_id，跳过 `198.18.0.0/15`。同机改址保留 host_id 和历史上报，旧 IP 进历史，旧部署目标停用；apply 时记下可撤销状态。`previous_ips: []` 可清空历史 IP，部署目标可用 `retired` 恢复
-- Agent 下限仍是 3.6。没有合适解释器时使用中心上的便携 CPython。中心升级走 `scripts/push_upgrade.sh` / `scripts/upgrade_center.sh`：先从单元套用 `LD_LIBRARY_PATH`/`PATH` 再测新包，通过才同步；回滚不动 `data/`。便携包用 `scripts/push_python_bundles.sh` 放到中心（远端目录不存在也会创建）
+- Agent 下限仍是 3.6。没有合适解释器时使用中心上的便携 CPython。中心升级走 `scripts/push_upgrade.sh` / `scripts/upgrade_center.sh`：先从单元套用 `LD_LIBRARY_PATH`/`PATH` 再测新包，通过才同步；回滚不动 `data/`。`--check-only` 只上传到 `/tmp` 并做同步前测试和磁盘预检。不喂数据的 ssh 使用 `ssh -n`，预同步测试的 stdin 接到 `/dev/null`。便携包用 `scripts/push_python_bundles.sh` 放到中心（远端目录不存在也会创建）
 - 部署：只走 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。Excel/CSV 导入；密码登录需要**中心机**的 `sshpass`（或改用私钥）。Agent 默认 `/opt/monitor-agent`，Center 默认 `/opt/monitor`。笔记本 sshpass/scp 装 Agent 已废弃
 - 本地守护：`scripts/local_up.sh` / `local_down.sh`
 
