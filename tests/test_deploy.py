@@ -336,6 +336,26 @@ class SyncTreeTests(unittest.TestCase):
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dst, ignore_errors=True)
 
+    def test_rsync_keeps_vendor_python_tarball(self) -> None:
+        if shutil.which("rsync") is None:
+            self.skipTest("rsync 不在 PATH")
+        src = self._make_tree()
+        dst = tempfile.mkdtemp(prefix="sync-dst-")
+        bundle = os.path.join(dst, "vendor", "python")
+        os.makedirs(bundle)
+        tar_path = os.path.join(bundle, "already.tar.gz")
+        with open(tar_path, "w", encoding="utf-8") as fh:
+            fh.write("keep-bundle")
+        try:
+            proc = self._run_sync(src, dst)
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("method=rsync", proc.stdout)
+            with open(tar_path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "keep-bundle")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dst, ignore_errors=True)
+
     def test_tar_fallback_when_rsync_disabled(self) -> None:
         src = self._make_tree()
         dst = tempfile.mkdtemp(prefix="sync-dst-")

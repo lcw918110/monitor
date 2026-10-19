@@ -561,7 +561,7 @@ def _linked_deploy_targets(deploy_store: Any, host: Dict[str, Any]) -> List[int]
 def handle_host_meta_update(
     storage: Storage, host_id: str, body: bytes
 ) -> Tuple[int, Dict[str, Any]]:
-    from center.hostmeta import sanitize_asset_patch
+    from center.hostmeta import sanitize_asset_patch, sanitize_previous_ips_value
 
     err, data = _parse_json_object(body)
     if err:
@@ -569,9 +569,14 @@ def handle_host_meta_update(
     err, patch = sanitize_asset_patch(data, allow_clear=True)
     if err:
         return _bad_request(err)
-    if not patch:
+    err, previous_ips = sanitize_previous_ips_value(data)
+    if err:
+        return _bad_request(err)
+    if not patch and previous_ips is None:
         return _bad_request("没有可更新的资产字段")
-    err, asset = storage.update_host_asset(host_id, patch)
+    err, asset = storage.update_host_asset(
+        host_id, patch, previous_ips=previous_ips
+    )
     if err:
         code = 404 if err == "主机不存在" else 400
         return code, {"ok": False, "error": err}
@@ -675,7 +680,7 @@ def handle_host_readdress(
     deploy_store: Any = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """预览或执行同机改址。默认只预览；``apply: true`` 才写库。"""
-    from center.readdress import plan_readdress
+    from center.readdress import plan_readdress, readdress_undo_record
 
     err, data = _parse_json_object(body)
     if err:
@@ -726,7 +731,10 @@ def handle_host_readdress(
                 deploy_store.set_target_retired(tid, True)
                 touched.append(("retired", tid, ""))
         err, _asset = storage.set_host_readdress(
-            host_id, plan["address"], plan["previous_ips"]
+            host_id,
+            plan["address"],
+            plan["previous_ips"],
+            undo=readdress_undo_record(host, plan),
         )
         if err:
             raise ValueError(err)
@@ -740,6 +748,86 @@ def handle_host_readdress(
     result["history_rows"] = storage.history_count(host_id)
     result["address"] = fresh.get("address") or plan["address"]
     result["previous_ips"] = fresh.get("previous_ips") or plan["previous_ips"]
+    return 200, result
+
+
+def handle_host_readdress_undo(
+    storage: Storage,
+    host_id: str,
+    body: bytes,
+    deploy_store: Any = None,
+) -> Tuple[int, Dict[str, Any]]:
+    """撤销上一次改址。默认只预览；``apply: true`` 才写库。
+
+    没有 apply 时记下的记录（例如这次功能上线前已经改过的地址）会 400。
+    """
+    from center.readdress import plan_readdress_undo
+
+    err, data = _parse_json_object(body)
+    if err:
+        return _bad_request(err)
+    host = storage.get_host(host_id)
+    if not host:
+        return 404, {"ok": False, "error": "主机不存在"}
+    targets: List[Dict[str, Any]] = []
+    if deploy_store is not None:
+        try:
+            targets = deploy_store.list_targets()
+        except Exception:  # noqa: BLE001
+            targets = []
+    err, plan = plan_readdress_undo(host, targets)
+    if err or not plan:
+        return _bad_request(err or "无法撤销改址")
+    apply = data.get("apply") is True or data.get("apply") == 1
+    result: Dict[str, Any] = {
+        "ok": True,
+        "apply": bool(apply),
+        "host_id": plan["host_id"],
+        "clear_address": True,
+        "remove_previous_ip": plan.get("remove_previous_ip") or "",
+        "previous_ips": plan.get("previous_ips") or [],
+        "targets": plan.get("targets") or [],
+        "old_ip": plan.get("old_ip") or "",
+        "new_ip": plan.get("new_ip") or "",
+        "note": plan.get("note") or "",
+        "history_rows": storage.history_count(host_id),
+        "history_rewritten": False,
+    }
+    if not apply:
+        return 200, result
+
+    touched: List[Tuple[str, int, str]] = []
+    try:
+        if deploy_store is not None:
+            for item in plan.get("targets") or []:
+                tid = int(item["id"])
+                if item.get("host_id_from") != item.get("host_id_to"):
+                    deploy_store.assign_target_host_id(tid, item.get("host_id_to") or "")
+                    touched.append(("host_id", tid, str(item.get("host_id_from") or "")))
+                if bool(item.get("retired_from")) != bool(item.get("retired_to")):
+                    deploy_store.set_target_retired(tid, bool(item.get("retired_to")))
+                    kind = "retired" if item.get("retired_to") else "unretired"
+                    touched.append((kind, tid, ""))
+        err, _asset = storage.set_host_readdress(
+            host_id,
+            "",
+            list(plan.get("previous_ips") or []),
+            undo=None,
+            allow_clear_address=True,
+        )
+        if err:
+            raise ValueError(err)
+    except ValueError as exc:
+        _rollback_readdress(deploy_store, touched)
+        text = str(exc)
+        code = 404 if text == "主机不存在" else 400
+        return code, {"ok": False, "error": text}
+
+    fresh = storage.get_host(host_id) or {}
+    result["history_rows"] = storage.history_count(host_id)
+    result["address"] = fresh.get("asset", {}).get("address") or ""
+    result["previous_ips"] = fresh.get("previous_ips") or []
+    result["readdress_undo"] = None
     return 200, result
 
 

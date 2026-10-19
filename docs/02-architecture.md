@@ -60,7 +60,7 @@
 | AMD GPU 采集 | `agent/metrics/amd.py` | `rocm-smi` 优先，`amd-smi` 回退 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
-| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。`scripts/lib/resolve_python.sh` 复用本机 Python；`scripts/lib/sync_tree.sh` 同步回退；`scripts/lib/unit_env.sh` 重写 systemd 单元时保留自定义 `Environment=`；`scripts/lib/deploy_ssh.sh` 端口/重试 |
+| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。中心升级只走 `push_upgrade.sh` → 新包里的 `upgrade_center.sh`。`scripts/lib/resolve_python.sh` 与 `python_min.sh` 复用本机 Python（Agent 3.6 / 中心 3.8）；`python_bundle.sh` 解压便携解释器；`scripts/lib/sync_tree.sh` 同步回退并保留 `vendor/python/*.tar.gz`；`scripts/lib/unit_env.sh` 重写 systemd 单元时保留自定义 `Environment=`；`scripts/lib/deploy_ssh.sh` 端口/重试 |
 
 ---
 

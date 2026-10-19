@@ -7,6 +7,7 @@
 #
 # 排除项与历史 rsync 调用保持一致：
 #   data/  config/center.json  config/agent.json  .git/  .deploy-*/  __pycache__/  *.db
+#   vendor/python/*.tar.gz 与 *.sha256（中心上已放置的便携解释器不能被 --delete 清掉）
 #
 # 测试用环境变量（生产勿设）：
 #   MONITOR_SYNC_DISABLE_RSYNC=1  假装没有 rsync
@@ -45,6 +46,8 @@ _sync_tar() {
     --exclude=.deploy-\* \
     --exclude=__pycache__ \
     --exclude=\*.db \
+    --exclude=vendor/python/\*.tar.gz \
+    --exclude=vendor/python/\*.sha256 \
     -cf - . | tar -C "$dst_abs" -xf -
 }
 
@@ -59,6 +62,12 @@ _sync_copy_filtered() {
       data|.git|__pycache__) continue ;;
       .deploy-*) continue ;;
       *.db) continue ;;
+      vendor)
+        # 合并进去，不能 rm 掉中心上已经放好的 tar.gz。
+        mkdir -p "$dst/vendor"
+        cp -a "$item/." "$dst/vendor/"
+        continue
+        ;;
     esac
     if [[ "$base" == "config" && -d "$item" ]]; then
       mkdir -p "$dst/config"
@@ -107,6 +116,8 @@ sync_tree() {
       --exclude '.deploy-*/' \
       --exclude '__pycache__/' \
       --exclude '*.db' \
+      --exclude 'vendor/python/*.tar.gz' \
+      --exclude 'vendor/python/*.sha256' \
       "$src_abs/" "$dst_abs/"
     echo "[sync] method=rsync"
     return 0
@@ -313,7 +324,14 @@ prune_agent_install_dir() {
     [[ -e "$name" ]] || continue
     bn="$(basename "$name")"
     case "$bn" in
-      agent|common|scripts|config|run|data|README.md) continue ;;
+      agent|common|scripts|config|run|data|README.md|python) continue ;;
+      vendor)
+        if [[ "$base" == "monitor" ]]; then
+          continue
+        fi
+        echo "[cleanup] 删除旧版本残留: $bn"
+        rm -rf "$name"
+        ;;
       center)
         if [[ "$base" == "monitor" ]]; then
           continue

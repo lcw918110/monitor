@@ -205,6 +205,13 @@
           '<button type="button" class="btn btn-sm" data-edit="' +
           t.id +
           '">编辑</button> ' +
+          '<button type="button" class="btn btn-sm" data-retire="' +
+          t.id +
+          '" data-retired="' +
+          (t.retired ? "1" : "0") +
+          '">' +
+          (t.retired ? "恢复" : "停用") +
+          "</button> " +
           '<button type="button" class="btn btn-sm" data-test-row="' +
           t.id +
           '">测试</button> ' +
@@ -216,6 +223,27 @@
         );
       })
       .join("");
+
+    Array.from(document.querySelectorAll("[data-retire]")).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-retire");
+        const retired = btn.getAttribute("data-retired") === "1";
+        const next = !retired;
+        const label = next ? "停用" : "恢复";
+        if (!confirm("确认" + label + "该部署目标？停用后不再参与部署，密码保留。")) return;
+        const res = await fetch("/api/v1/deploy/targets/" + id, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ retired: next }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert((data && data.error) || label + "失败");
+          return;
+        }
+        loadTargets();
+      });
+    });
 
     Array.from(document.querySelectorAll("[data-del]")).forEach((btn) => {
       btn.addEventListener("click", async () => {

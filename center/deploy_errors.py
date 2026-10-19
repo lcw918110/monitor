@@ -17,6 +17,11 @@ SSHPASS_MISSING = "sshpass_missing"
 KEY_MISSING = "key_missing"
 NO_PYTHON = "no_python"
 PYTHON_INSTALL_FAIL = "python_install_fail"
+PYTHON_BUNDLE_MISSING = "python_bundle_missing"
+PYTHON_BUNDLE_CHECKSUM = "python_bundle_checksum"
+PYTHON_BUNDLE_ARCH = "python_bundle_arch"
+PYTHON_BUNDLE_EXTRACT = "python_bundle_extract"
+PYTHON_BUNDLE_EXEC = "python_bundle_exec"
 SYNC_TOOL_MISSING = "sync_tool_missing"
 DIR_NOT_WRITABLE = "dir_not_writable"
 SUDO_REQUIRED = "sudo_required"
@@ -123,6 +128,16 @@ def classify_deploy_failure(
 
     if "ssh 私钥不存在" in blob:
         return KEY_MISSING, _msg("SSH 私钥不存在")
+    if "python_bundle_checksum" in blob:
+        return PYTHON_BUNDLE_CHECKSUM, _msg("便携 Python 校验失败")
+    if "python_bundle_missing" in blob:
+        return PYTHON_BUNDLE_MISSING, _msg("中心未放置该架构的便携 Python")
+    if "python_bundle_arch" in blob:
+        return PYTHON_BUNDLE_ARCH, _msg("没有适合目标机架构的便携 Python")
+    if "python_bundle_extract" in blob:
+        return PYTHON_BUNDLE_EXTRACT, _msg("解压便携 Python 失败")
+    if "python_bundle_exec" in blob:
+        return PYTHON_BUNDLE_EXEC, _msg("便携 Python 无法启动")
     if "python_install_fail" in blob or (
         "yum" in blob
         and "python3" in blob
@@ -222,6 +237,25 @@ def classify_deploy_failure(
             "部署失败"
         )
     return default_code, default_message or _msg("部署失败")
+
+
+def failure_from_remote_output(
+    text: str,
+    *,
+    exc: Optional[BaseException] = None,
+    default_code: str = UNKNOWN,
+    default_message: str = "",
+) -> Tuple[str, str]:
+    """远端输出里若有 ``[fail]`` 行，以最后一条为准，不用子串覆盖。"""
+    parsed = parse_fail_line(text or "")
+    if parsed:
+        return parsed[0], parsed[1] or default_message or parsed[0]
+    return classify_deploy_failure(
+        text,
+        exc=exc,
+        default_code=default_code,
+        default_message=default_message,
+    )
 
 
 def run_ssh_with_retry(

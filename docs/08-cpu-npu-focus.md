@@ -71,7 +71,7 @@
 - 中心安装目录必须保留 **`agent/`** 包：产品从这里打 **采集端包**（`agent/` `common/` `scripts/`），不以 `center/` 为主内容。缺包会 `package_incomplete`，不会静默省略。
 - Agent 默认目录 **`/opt/monitor-agent`**（避免覆盖同机 Center 的 `/opt/monitor`）。已有库/清单里的 `/opt/monitor` 不自动改写。
 - `deploy_agent.sh`：本机变量 `INSTALL_DIR`；**无 sudo 的非 root** 若目录是 `/opt/monitor-agent` 或 `/opt/monitor` 会改到 `~/monitor-agent`。中心 SSH 部署对 `/opt` 会 `sudo` 再跑该脚本，从而保住 systemd。  
-  - **Python**：先复用已有解释器（`PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`），要求 **≥ 3.6**；都没有且为 root 时再 apt/yum/dnf 安装 `python3`  
+  - **Python**：下限是 **3.6**（`scripts/lib/python_min.sh`；采集代码不使用 3.7 的 annotations）。顺序为 `PYTHON_BIN` → PATH 中 `python3.15`…`python3.6` → `/usr/local/python3.*` → `python3`，然后 root 下 apt/yum/dnf。安装失败（包括 apt 被 `appstreamcli` 打断）不退出，继续解压中心上传的便携包到 `$INSTALL_DIR/python` 或 root 的 `/usr/local/monitor-python`，systemd 与 `run/start_agent.sh` 使用该解释器  
   - `/usr/local/python3.x` 若 libpython 不在默认链接路径，自动设置 `LD_LIBRARY_PATH`  
   - **同步**：只同步 `agent/` `common/` `scripts/`（及配置模板）；优先 `rsync --delete`，否则先删再 `tar` / `cp`（`sync_agent_tree`）。覆盖安装会先停旧 `monitor-agent`/pidfile/`python -m agent`，再清 AppleDouble `._*`、`__pycache__` 与多余顶层目录（如误拷的 `center/`）。**保留** `config/agent.json` 与 `data/`。包先解到 `/tmp/monitor-agent-src` 再同步进安装目录，避免 inplace 留旧文件。 
 - SSH 在线部署：远端使用 `REMOTE_DIR`（勿再嵌套未赋值的 `INSTALL_DIR`）  
@@ -82,7 +82,8 @@
   - 非 root 安装到 `/opt/...` 时远端 `sudo -n`，失败则用同一 SSH 密码 `sudo -S`（短码 `sudo_required`）  
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  
 - 保留「测试连通/部署条件」（SSH + 目录可写），已去掉独立「探测勾选」按钮
-- 编辑目标可以改 IP 和 host_id（与其他目标 IP 冲突则拒绝，密码留空保持原密码）。同机改址用监测台「更换 IP」：新 IP 目标的 host_id 改到原主机，旧 IP 目标标为已停用（不删除、不再部署）  
+- 编辑目标可以改 IP 和 host_id（与其他目标 IP 冲突则拒绝，密码留空保持原密码）。清单「停用 / 恢复」只提交 `retired`。同机改址用监测台「更换 IP」：新 IP 目标的 host_id 改到原主机，旧 IP 目标标为已停用（不删除、不再部署）。详情里在有撤销记录时显示「撤销更换 IP」
+- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`），保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`
 
 ## 下一步
 

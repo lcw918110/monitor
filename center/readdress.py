@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from center.hostaddr import normalize_ip
-from center.hostmeta import parse_previous_ips, target_matches_host
+from center.hostmeta import parse_previous_ips, parse_readdress_undo, target_matches_host
 
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -137,4 +137,105 @@ def plan_readdress(
         "deploy_targets_retired": retired,
         "host_id_unchanged": True,
         "history_rewritten": False,
+    }
+
+
+def readdress_undo_record(
+    host: Dict[str, Any], plan: Dict[str, Any]
+) -> Dict[str, Any]:
+    """apply 前的目标 host_id / retired，以及这次新追加的那条历史 IP。"""
+    asset = host.get("asset") if isinstance(host.get("asset"), dict) else {}
+    before = {
+        item["ip"]
+        for item in parse_previous_ips(
+            asset.get("previous_ips") or host.get("previous_ips")
+        )
+    }
+    old = normalize_ip(plan.get("old_ip")) or ""
+    after = {item["ip"] for item in parse_previous_ips(plan.get("previous_ips"))}
+    added = old if old and old not in before and old in after else ""
+    targets: List[Dict[str, Any]] = []
+    for item in plan.get("deploy_targets_retargeted") or []:
+        targets.append(
+            {
+                "id": int(item["id"]),
+                "host_id": str(item.get("host_id_from") or ""),
+                "retired": bool(item.get("was_retired")),
+                "ip": item.get("ip") or "",
+            }
+        )
+    for item in plan.get("deploy_targets_retired") or []:
+        targets.append(
+            {
+                "id": int(item["id"]),
+                "host_id": str(item.get("host_id") or ""),
+                "retired": False,
+                "ip": item.get("ip") or "",
+            }
+        )
+    return {
+        "added_previous_ip": added,
+        "new_ip": plan.get("new_ip") or "",
+        "old_ip": old,
+        "note": plan.get("note") or "",
+        "targets": targets,
+    }
+
+
+def plan_readdress_undo(
+    host: Dict[str, Any],
+    targets: Sequence[Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """只计算如何撤销上一次改址。记录里的目标不在了就失败，不写库。"""
+    asset = host.get("asset") if isinstance(host.get("asset"), dict) else {}
+    record = parse_readdress_undo(
+        asset.get("readdress_undo")
+        if "readdress_undo" in asset
+        else host.get("readdress_undo")
+    )
+    if not record:
+        return "没有可撤销的改址记录", None
+    by_id: Dict[int, Dict[str, Any]] = {}
+    for target in targets:
+        try:
+            by_id[int(target.get("id"))] = target
+        except (TypeError, ValueError):
+            continue
+    missing: List[int] = []
+    restores: List[Dict[str, Any]] = []
+    for item in record["targets"]:
+        row = by_id.get(int(item["id"]))
+        if row is None:
+            missing.append(int(item["id"]))
+            continue
+        restores.append(
+            {
+                "id": int(item["id"]),
+                "ip": normalize_ip(row.get("ip")) or item.get("ip") or "",
+                "host_id_from": str(row.get("host_id") or ""),
+                "host_id_to": str(item.get("host_id") or ""),
+                "retired_from": bool(row.get("retired")),
+                "retired_to": bool(item.get("retired")),
+            }
+        )
+    if missing:
+        ids = ", ".join("#%s" % tid for tid in missing)
+        return "撤销记录里的部署目标已不存在（%s）" % ids, None
+    prev = [
+        item
+        for item in parse_previous_ips(
+            asset.get("previous_ips") or host.get("previous_ips")
+        )
+        if item["ip"] != record["added_previous_ip"] or not record["added_previous_ip"]
+    ]
+    return None, {
+        "host_id": str(host.get("host_id") or ""),
+        "clear_address": True,
+        "remove_previous_ip": record["added_previous_ip"],
+        "previous_ips": prev,
+        "targets": restores,
+        "added_previous_ip": record["added_previous_ip"],
+        "old_ip": record["old_ip"],
+        "new_ip": record["new_ip"],
+        "note": record["note"],
     }

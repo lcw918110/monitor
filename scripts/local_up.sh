@@ -10,8 +10,8 @@ PORT="${MONITOR_PORT:-8080}"
 # shellcheck source=lib/resolve_python.sh
 . "$ROOT/scripts/lib/resolve_python.sh"
 MONITOR_INSTALL_PYTHON=0
-# 本地同时跑中心端，需要 Python 3.8+
-ensure_python 3 8 || exit 1
+# 本地同时跑中心端。下限见 scripts/lib/python_min.sh。
+ensure_python "$MONITOR_CENTER_PY_MIN_MAJOR" "$MONITOR_CENTER_PY_MIN_MINOR" || exit 1
 log_python_choice
 apply_python_ld_library_path
 PYTHON_BIN="$PY"
