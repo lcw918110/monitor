@@ -1,13 +1,15 @@
 # 简易多机监控系统 — 软件需求规格说明书（SRS）
 
-## 实现现状（v1.5，与代码冲突时以本节为准）
+## 实现现状（v1.7，与代码冲突时以本节为准）
 
 下面这些已经在产品里，文档和操作步骤按此描述，不再把它们写成待办或旁路：
 
 - 主机类型是 `auto` | `cpu` | `gpu`（gpu 表示各类加速卡）。旧值 `app`→cpu、`npu`→gpu 仅兼容
 - 加速卡：英伟达、AMD（`rocm-smi` / `amd-smi`）、华为昇腾、寒武纪、瑞芯微 RKNN。列表展示 `accel_summary`（厂商 + 型号 + 数量），与「加速卡使用率」分列
 - 多挂载 `disks[]`：列表一条汇总百分比另加磁盘数；详情展开分盘。见 `docs/12-disk-mounts.md`
-- 主机列表可排序；地址优先部署清单或 host_id 中的完整 IP，跳过 `198.18.0.0/15` 隧道假 IP
+- 主机列表可排序；地址优先部署清单或 host_id 中的完整 IP，跳过 `198.18.0.0/15` 隧道假 IP。负责人、用途为列，可排序、可按负责人筛选、可搜索
+- 手工资产信息（负责人、用途、CPU/内存/硬盘/GPU/型号资产编号/备注）存在中心，Agent 上报不覆盖。详情同时展示采集规格
+- 主机可隐藏（可恢复）或在 `confirm=delete` 后硬删除。隐藏后不计入在线/离线统计和之后的诊断报告。CSV/xlsx 可按 IP 导入资产，凭据列丢弃。示例 `config/hosts-meta.example.csv`
 - 资源组只存在中心 SQLite，实时页可筛选
 - 监测台页签：实时监控、时段统计（`docs/11-period-utilization.md`）、使用诊断（`docs/13-diagnostic-reports.md`）
 - 离线主机不把末次快照数字显示成实时利用率
@@ -209,8 +211,12 @@
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/v1/metrics` | Agent 上报 |
-| GET | `/api/v1/hosts` | 主机列表 |
-| GET | `/api/v1/hosts/{host_id}` | 主机详情 |
+| GET | `/api/v1/hosts` | 主机列表（默认不含已隐藏） |
+| GET | `/api/v1/hosts/{host_id}` | 主机详情（含 `asset` 与 `hardware`） |
+| POST | `/api/v1/hosts/{host_id}/meta` | 更新手工资产 |
+| POST | `/api/v1/hosts/{host_id}/hide` 与 `/restore` | 隐藏 / 恢复 |
+| DELETE | `/api/v1/hosts/{host_id}?confirm=delete` | 硬删除主机与历史 |
+| POST | `/api/v1/hosts/meta/import` | 按 IP 预览或写入资产表 |
 | GET | `/api/v1/stats` | 集群统计 |
 | GET | `/` | Web 控制台（实时监控 / 时段统计 / 使用诊断） |
 | POST | `/api/v1/reports/generate` | 生成并保存诊断报告（同一窗口覆盖） |

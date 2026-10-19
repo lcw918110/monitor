@@ -68,7 +68,17 @@
     filterType: document.getElementById("filterType"),
     filterStatus: document.getElementById("filterStatus"),
     filterGroup: document.getElementById("filterGroup"),
+    filterOwner: document.getElementById("filterOwner"),
     btnGroups: document.getElementById("btnGroups"),
+    btnHidden: document.getElementById("btnHidden"),
+    btnImport: document.getElementById("btnImport"),
+    hiddenPanel: document.getElementById("hiddenPanel"),
+    hiddenList: document.getElementById("hiddenList"),
+    importPanel: document.getElementById("importPanel"),
+    importFile: document.getElementById("importFile"),
+    btnImportPreview: document.getElementById("btnImportPreview"),
+    btnImportApply: document.getElementById("btnImportApply"),
+    importResult: document.getElementById("importResult"),
     groupPanel: document.getElementById("groupPanel"),
     groupList: document.getElementById("groupList"),
     newGroupName: document.getElementById("newGroupName"),
@@ -218,6 +228,8 @@
       return (h.address || h.hostname || h.host_id || "").toLowerCase();
     }
     if (key === "group") return (h.group_name || "").toLowerCase();
+    if (key === "owner") return (h.owner || "").toLowerCase();
+    if (key === "purpose") return (h.purpose || "").toLowerCase();
     if (key === "type") return normalizedType(h.host_type);
     if (key === "cpu_percent") return numOrNull(h.cpu_percent);
     if (key === "mem_percent") return numOrNull(h.mem_percent);
@@ -243,6 +255,8 @@
   function periodSortValue(h, key) {
     if (key === "host") return (h.address || h.hostname || h.host_id || "").toLowerCase();
     if (key === "group") return (h.group_name || "").toLowerCase();
+    if (key === "owner") return (h.owner || "").toLowerCase();
+    if (key === "purpose") return (h.purpose || "").toLowerCase();
     if (key === "samples") return numOrNull(h.sample_count);
     if (key === "cpu_avg") return periodMetric(h, "cpu_percent", "avg");
     if (key === "cpu_p95") return periodMetric(h, "cpu_percent", "p95");
@@ -331,10 +345,12 @@
     const addr = String(h.address || "").trim();
     const name = String(h.hostname || "").trim();
     const hid = String(h.host_id || "").trim();
+    const assetName = String((h.asset && h.asset.name) || "").trim();
     const primary = addr || name || hid || "-";
     const extras = [];
     if (name && name !== primary) extras.push(name);
-    if (hid && hid !== primary && hid !== name) extras.push(hid);
+    if (assetName && assetName !== primary && assetName !== name) extras.push(assetName);
+    if (hid && hid !== primary && hid !== name && hid !== assetName) extras.push(hid);
     let html = '<div class="host-addr">' + escapeHtml(primary) + "</div>";
     if (extras.length) {
       html += '<div class="muted">' + escapeHtml(extras.join(" · ")) + "</div>";
@@ -356,6 +372,37 @@
             g.id +
             '">' +
             escapeHtml(g.name) +
+            "</option>"
+        )
+        .join("");
+    if (cur && Array.from(sel.options).some((o) => o.value === cur)) {
+      sel.value = cur;
+    }
+  }
+
+  function fillOwnerFilter() {
+    const sel = el.filterOwner;
+    if (!sel) return;
+    const cur = sel.value;
+    const seen = {};
+    const owners = [];
+    allHosts.forEach((h) => {
+      const name = String(h.owner || "").trim();
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      owners.push(name);
+    });
+    owners.sort((a, b) => a.localeCompare(b, "zh"));
+    sel.innerHTML =
+      '<option value="">全部负责人</option>' +
+      '<option value="__none__">未填负责人</option>' +
+      owners
+        .map(
+          (name) =>
+            '<option value="' +
+            escapeHtml(name) +
+            '">' +
+            escapeHtml(name) +
             "</option>"
         )
         .join("");
@@ -932,6 +979,8 @@
       '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
       '<th class="sortable" data-sort="host">主机 / 地址</th>' +
       '<th class="sortable" data-sort="group">资源组</th>' +
+      '<th class="sortable" data-sort="owner">负责人</th>' +
+      '<th class="sortable" data-sort="purpose">用途</th>' +
       '<th class="sortable" data-sort="accel_id">加速卡</th>' +
       '<th class="sortable" data-sort="samples">样本</th>' +
       '<th class="sortable" data-sort="cpu_avg">CPU 均</th>' +
@@ -957,6 +1006,8 @@
       const row = Object.assign({}, h, {
         address: h.address || live.address,
         group_name: h.group_name || live.group_name,
+        owner: h.owner || live.owner,
+        purpose: h.purpose || live.purpose,
         accel_summary: h.accel_summary || live.accel_summary,
         accel_count: h.accel_count != null ? h.accel_count : live.accel_count,
       });
@@ -971,6 +1022,14 @@
         hostAddressCell(row) +
         "</td><td>" +
         escapeHtml(row.group_name || "未分组") +
+        '</td><td class="col-clip" title="' +
+        escapeHtml(row.owner || h.owner || "") +
+        '">' +
+        escapeHtml(row.owner || h.owner || "—") +
+        '</td><td class="col-clip" title="' +
+        escapeHtml(row.purpose || h.purpose || "") +
+        '">' +
+        escapeHtml(row.purpose || h.purpose || "—") +
         '</td><td class="accel-id-cell" title="' +
         escapeHtml(accelId) +
         '">' +
@@ -1282,6 +1341,7 @@
     const t = el.filterType.value;
     const s = el.filterStatus.value;
     const g = el.filterGroup ? el.filterGroup.value : "";
+    const ownerFilter = el.filterOwner ? el.filterOwner.value : "";
     return sortHostRows(
       allHosts.filter((h) => {
         const nt = normalizedType(h.host_type);
@@ -1293,13 +1353,24 @@
         } else if (g) {
           if (String(h.group_id) !== String(g)) return false;
         }
+        if (ownerFilter === "__none__") {
+          if ((h.owner || "").trim()) return false;
+        } else if (ownerFilter && (h.owner || "") !== ownerFilter) {
+          return false;
+        }
         if (!q) return true;
+        const asset = h.asset || {};
         const hay = [
           h.hostname,
           h.host_id,
           h.address,
           h.group_name,
+          h.owner,
+          h.purpose,
           h.accel_summary,
+          asset.name,
+          asset.model,
+          asset.notes,
         ]
           .join(" ")
           .toLowerCase();
@@ -1317,13 +1388,14 @@
 
 function renderHosts(hosts) {
     allHosts = hosts || [];
+    fillOwnerFilter();
     const view = filteredHosts();
     el.hostCount.textContent = "显示 " + view.length + " / " + allHosts.length;
     const hostTable = el.hostBody && el.hostBody.closest("table");
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
       el.hostBody.innerHTML =
-        '<tr><td colspan="13" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="15" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
       return;
     }
     el.hostBody.innerHTML = view
@@ -1354,6 +1426,16 @@ function renderHosts(hosts) {
           "</td>" +
           "<td>" +
           groupSelectHtml(h) +
+          "</td>" +
+          '<td class="col-clip" title="' +
+          escapeHtml(h.owner || "") +
+          '">' +
+          escapeHtml(h.owner || "—") +
+          "</td>" +
+          '<td class="col-clip" title="' +
+          escapeHtml(h.purpose || "") +
+          '">' +
+          escapeHtml(h.purpose || "—") +
           "</td>" +
           "<td>" +
           typeTag(h.host_type) +
@@ -1472,6 +1554,8 @@ function renderHosts(hosts) {
     }
     html +=
       '<p class="muted"><a class="link" href="#period" id="gotoPeriodTab">查看该机时段统计</a></p>';
+
+    html += renderAssetSection(data);
 
     html +=
       '<div class="section-title">CPU / 基础资源（' +
@@ -1742,6 +1826,348 @@ function renderHosts(hosts) {
         setTab("period");
       });
     }
+    bindAssetActions(data);
+  }
+
+  const ASSET_FIELDS = [
+    ["owner", "负责人", "text"],
+    ["purpose", "用途", "text"],
+    ["name", "名称", "text"],
+    ["category", "分类", "text"],
+    ["vm_host", "宿主机", "text"],
+    ["cpu", "CPU（手工）", "text"],
+    ["memory", "内存（手工）", "text"],
+    ["disk", "硬盘（手工）", "area"],
+    ["gpu", "GPU（手工）", "area"],
+    ["model", "型号 / 资产编号", "area"],
+    ["notes", "备注", "area"],
+  ];
+
+  function assetValue(data, key) {
+    const asset = (data && data.asset) || {};
+    return asset[key] == null ? "" : String(asset[key]);
+  }
+
+  function fmtMemTotal(mb) {
+    const n = Number(mb);
+    if (!n || Number.isNaN(n)) return "-";
+    if (n >= 1024) return (n / 1024).toFixed(1) + " GB";
+    return n.toFixed(0) + " MB";
+  }
+
+  function renderCollectedHardware(hw) {
+    hw = hw || {};
+    const disks = hw.disks || [];
+    let diskText = "-";
+    if (disks.length) {
+      diskText = disks
+        .map((d) => {
+          const mount = d.mount || "（挂载名为空）";
+          const total =
+            d.total_gb == null || d.total_gb === ""
+              ? ""
+              : " " + fmtNum(d.total_gb, 1) + " GB";
+          return mount + total;
+        })
+        .join("；");
+    } else if (hw.disk_total_gb != null) {
+      diskText = fmtNum(hw.disk_total_gb, 1) + " GB";
+      if (hw.disk_count) diskText += " · " + hw.disk_count + " 块";
+    }
+    const cpu =
+      [hw.cpu_model || "", hw.cpu_count != null && hw.cpu_count !== "" ? hw.cpu_count + " 核" : ""]
+        .filter(Boolean)
+        .join(" · ") || "-";
+    return (
+      '<div class="kv">' +
+      '<div class="k">CPU</div><div class="v">' +
+      escapeHtml(cpu) +
+      "</div>" +
+      '<div class="k">内存</div><div class="v">' +
+      escapeHtml(fmtMemTotal(hw.mem_total_mb)) +
+      "</div>" +
+      '<div class="k">硬盘</div><div class="v">' +
+      escapeHtml(diskText) +
+      "</div>" +
+      '<div class="k">加速卡</div><div class="v">' +
+      escapeHtml(hw.accel_summary || (hw.accel_count ? "×" + hw.accel_count : "无")) +
+      "</div></div>"
+    );
+  }
+
+  function renderAssetSection(data) {
+    let fields = "";
+    ASSET_FIELDS.forEach((spec) => {
+      const key = spec[0];
+      const label = spec[1];
+      const kind = spec[2];
+      const value = escapeHtml(assetValue(data, key));
+      const control =
+        kind === "area"
+          ? '<textarea id="asset-' +
+            key +
+            '" rows="2">' +
+            value +
+            "</textarea>"
+          : '<input id="asset-' + key + '" type="text" value="' + value + '" />';
+      fields +=
+        '<label class="asset-field"><span>' +
+        escapeHtml(label) +
+        "</span>" +
+        control +
+        "</label>";
+    });
+    const flag = assetValue(data, "monitor_flag");
+    return (
+      '<div class="section-title">资产信息（手工维护，Agent 不会覆盖）</div>' +
+      '<div class="asset-grid">' +
+      '<div><form id="assetForm" class="asset-form">' +
+      fields +
+      (flag
+        ? '<p class="muted">表格「是否资源监控」：' + escapeHtml(flag) + "</p>"
+        : "") +
+      '<div class="asset-actions">' +
+      '<button type="button" class="btn btn-sm" id="btnSaveAsset">保存</button>' +
+      '<span class="muted" id="assetSaveHint"></span></div></form>' +
+      '<div class="asset-actions asset-danger">' +
+      '<button type="button" class="btn btn-sm" id="btnHideHost">从列表隐藏</button>' +
+      '<label class="muted"><input type="checkbox" id="hideAlsoDeploy" /> 同时移除部署清单里对应的目标</label>' +
+      '<button type="button" class="btn btn-sm btn-danger" id="btnDeleteHost">彻底删除…</button>' +
+      "</div></div>" +
+      '<div><div class="spec-label">采集规格（Agent 上报，只读）</div>' +
+      renderCollectedHardware(data.hardware) +
+      "</div></div>"
+    );
+  }
+
+  function bindAssetActions(data) {
+    const hostId = data && data.host_id;
+    const save = document.getElementById("btnSaveAsset");
+    if (save && hostId) {
+      save.addEventListener("click", () => saveAsset(hostId));
+    }
+    const hide = document.getElementById("btnHideHost");
+    if (hide && hostId) {
+      hide.addEventListener("click", () => hideHost(hostId));
+    }
+    const del = document.getElementById("btnDeleteHost");
+    if (del && hostId) {
+      del.addEventListener("click", () => deleteHost(hostId, data));
+    }
+  }
+
+  async function saveAsset(hostId) {
+    const body = {};
+    ASSET_FIELDS.forEach((spec) => {
+      const node = document.getElementById("asset-" + spec[0]);
+      body[spec[0]] = node ? node.value : "";
+    });
+    const hint = document.getElementById("assetSaveHint");
+    try {
+      const res = await fetch("/api/v1/hosts/" + encodeURIComponent(hostId) + "/meta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error((payload && payload.error) || "保存失败");
+      if (hint) hint.textContent = "已保存";
+      await refresh();
+    } catch (e) {
+      if (hint) hint.textContent = e.message || "保存失败";
+    }
+  }
+
+  async function hideHost(hostId) {
+    if (
+      !window.confirm(
+        "从列表隐藏这台主机？它不再计入在线/离线统计和之后的诊断报告。历史上报保留，可以恢复。"
+      )
+    ) {
+      return;
+    }
+    const also = document.getElementById("hideAlsoDeploy");
+    try {
+      const res = await fetch("/api/v1/hosts/" + encodeURIComponent(hostId) + "/hide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          remove_deploy_target: !!(also && also.checked),
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error((payload && payload.error) || "隐藏失败");
+      if (selectedId === hostId) selectedId = null;
+      await refresh();
+      if (el.hiddenPanel && !el.hiddenPanel.hidden) await loadHiddenHosts();
+    } catch (e) {
+      window.alert(e.message || "隐藏失败");
+    }
+  }
+
+  async function deleteHost(hostId, data) {
+    const label = (data && (data.address || data.hostname)) || hostId;
+    if (
+      !window.confirm(
+        "彻底删除 " + label + " 及其历史上报？这一步不能恢复。"
+      )
+    ) {
+      return;
+    }
+    const typed = window.prompt("输入 delete 确认硬删除");
+    if (String(typed || "").trim().toLowerCase() !== "delete") return;
+    const also = document.getElementById("hideAlsoDeploy");
+    let url = "/api/v1/hosts/" + encodeURIComponent(hostId) + "?confirm=delete";
+    if (also && also.checked) url += "&remove_deploy_target=1";
+    try {
+      const res = await fetch(url, { method: "DELETE" });
+      const payload = await res.json();
+      if (!res.ok) throw new Error((payload && payload.error) || "删除失败");
+      if (selectedId === hostId) selectedId = null;
+      await refresh();
+    } catch (e) {
+      window.alert(e.message || "删除失败");
+    }
+  }
+
+  async function loadHiddenHosts() {
+    if (!el.hiddenList) return;
+    try {
+      const res = await fetch("/api/v1/hosts?hidden=1");
+      const data = await res.json();
+      const hosts = data.hosts || [];
+      if (!hosts.length) {
+        el.hiddenList.innerHTML = '<p class="muted">没有已隐藏的主机</p>';
+        return;
+      }
+      el.hiddenList.innerHTML = hosts
+        .map((h) => {
+          return (
+            '<div class="hidden-row">' +
+            "<div><strong>" +
+            escapeHtml(h.address || h.hostname || h.host_id) +
+            "</strong> " +
+            '<span class="muted">' +
+            escapeHtml(h.host_id) +
+            " · " +
+            escapeHtml(h.owner || "未填负责人") +
+            " · " +
+            escapeHtml(h.purpose || "未填用途") +
+            "</span></div>" +
+            '<button type="button" class="btn btn-sm" data-restore="' +
+            encodeURIComponent(h.host_id) +
+            '">恢复</button></div>'
+          );
+        })
+        .join("");
+      Array.from(el.hiddenList.querySelectorAll("[data-restore]")).forEach((btn) => {
+        btn.addEventListener("click", () => {
+          restoreHost(decodeURIComponent(btn.getAttribute("data-restore")));
+        });
+      });
+    } catch (e) {
+      el.hiddenList.innerHTML =
+        '<p class="muted">加载失败：' + escapeHtml(e.message) + "</p>";
+    }
+  }
+
+  async function restoreHost(hostId) {
+    try {
+      const res = await fetch(
+        "/api/v1/hosts/" + encodeURIComponent(hostId) + "/restore",
+        { method: "POST" }
+      );
+      const payload = await res.json();
+      if (!res.ok) throw new Error((payload && payload.error) || "恢复失败");
+      await loadHiddenHosts();
+      await refresh();
+    } catch (e) {
+      window.alert(e.message || "恢复失败");
+    }
+  }
+
+  async function postImport(apply) {
+    const file = el.importFile && el.importFile.files && el.importFile.files[0];
+    if (!file) {
+      window.alert("先选择 CSV 或 xlsx");
+      return;
+    }
+    const buf = await file.arrayBuffer();
+    const url = "/api/v1/hosts/meta/import" + (apply ? "?apply=1" : "");
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: buf,
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      throw new Error((payload && payload.error) || "导入失败");
+    }
+    return payload;
+  }
+
+  function renderImportResult(payload) {
+    if (!el.importResult) return;
+    const summary = (payload && payload.summary) || {};
+    const ignored = (payload && payload.ignored_columns) || [];
+    let html =
+      "<p>匹配 " +
+      (summary.matched || 0) +
+      "，将更新 " +
+      (summary.will_update != null ? summary.will_update : summary.updated || 0) +
+      "，未匹配 " +
+      (summary.unmatched || 0) +
+      "，多台命中 " +
+      (summary.ambiguous || 0) +
+      "，跳过 " +
+      (summary.skipped || 0) +
+      "。</p>";
+    if (ignored.length) {
+      html +=
+        '<p class="muted">已忽略凭据列：' +
+        escapeHtml(ignored.join("、")) +
+        "（不会入库）</p>";
+    }
+    const rows = []
+      .concat(payload.matched || [])
+      .concat(payload.unmatched || [])
+      .concat(payload.ambiguous || [])
+      .concat(payload.skipped || []);
+    if (rows.length) {
+      html +=
+        '<div class="table-wrap"><table class="import-table"><thead><tr>' +
+        "<th>行</th><th>IP</th><th>主机</th><th>结果</th><th>负责人</th><th>用途</th>" +
+        "</tr></thead><tbody>";
+      rows.forEach((row) => {
+        let state = "未匹配";
+        if (row.host_id && row.skipped_apply) state = "同一 IP 的后续行会覆盖";
+        else if (row.host_id) state = row.hidden ? "匹配（当前已隐藏）" : "匹配";
+        if (row.host_ids) state = "多台主机，不写入";
+        if (!row.ip && row.reason) state = row.reason;
+        if (row.reason && !row.host_id && !row.host_ids) state = row.reason;
+        const patch = row.patch || {};
+        html +=
+          "<tr><td>" +
+          (row.row || "") +
+          "</td><td>" +
+          escapeHtml(row.ip || "") +
+          "</td><td>" +
+          escapeHtml(row.address || row.host_id || "") +
+          "</td><td>" +
+          escapeHtml(state) +
+          "</td><td>" +
+          escapeHtml(patch.owner || "") +
+          "</td><td>" +
+          escapeHtml(patch.purpose || "") +
+          "</td></tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    if (payload.apply && payload.applied) {
+      html +=
+        "<p>已写入 " + (payload.applied.updated || []).length + " 台。</p>";
+    }
+    el.importResult.innerHTML = html;
   }
 
   async function loadDetail(hostId) {
@@ -1782,7 +2208,11 @@ function renderHosts(hosts) {
       } else if (currentTab === "reports") {
         // 诊断预览来自已入库报告，定时刷新不重算、不打断阅读
       } else if (selectedId) {
-        await loadDetail(selectedId);
+        const editing =
+          document.activeElement &&
+          document.activeElement.closest &&
+          document.activeElement.closest("#assetForm");
+        if (!editing) await loadDetail(selectedId);
       }
     } catch (e) {
       console.error(e);
@@ -2053,6 +2483,51 @@ function renderHosts(hosts) {
   el.filterStatus.addEventListener("change", () => renderHosts(allHosts));
   if (el.filterGroup) {
     el.filterGroup.addEventListener("change", () => renderHosts(allHosts));
+  }
+  if (el.filterOwner) {
+    el.filterOwner.addEventListener("change", () => renderHosts(allHosts));
+  }
+  if (el.btnHidden && el.hiddenPanel) {
+    el.btnHidden.addEventListener("click", () => {
+      el.hiddenPanel.hidden = !el.hiddenPanel.hidden;
+      if (!el.hiddenPanel.hidden) loadHiddenHosts();
+    });
+  }
+  if (el.btnImport && el.importPanel) {
+    el.btnImport.addEventListener("click", () => {
+      el.importPanel.hidden = !el.importPanel.hidden;
+    });
+  }
+  if (el.btnImportPreview) {
+    el.btnImportPreview.addEventListener("click", async () => {
+      try {
+        const payload = await postImport(false);
+        renderImportResult(payload);
+        if (el.btnImportApply) {
+          el.btnImportApply.disabled = !((payload.summary || {}).will_update > 0);
+        }
+      } catch (e) {
+        window.alert(e.message || "预览失败");
+      }
+    });
+  }
+  if (el.btnImportApply) {
+    el.btnImportApply.addEventListener("click", async () => {
+      try {
+        const payload = await postImport(true);
+        renderImportResult(payload);
+        el.btnImportApply.disabled = true;
+        await refresh();
+      } catch (e) {
+        window.alert(e.message || "写入失败");
+      }
+    });
+  }
+  if (el.importFile && el.btnImportApply) {
+    el.importFile.addEventListener("change", () => {
+      el.btnImportApply.disabled = true;
+      if (el.importResult) el.importResult.innerHTML = "";
+    });
   }
   if (el.btnGroups && el.groupPanel) {
     el.btnGroups.addEventListener("click", () => {

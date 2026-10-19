@@ -46,6 +46,8 @@ RANKING_CSV_FIELDS = [
     "address",
     "hostname",
     "group_name",
+    "owner",
+    "purpose",
     "online",
     "pole",
     "pole_reason",
@@ -618,16 +620,41 @@ def _metric_row(name: str, metric: Dict[str, Any], comment: str, as_percent: boo
     ]
 
 
+def _filled(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "未填"
+
+
+def _owner_purpose(host: Dict[str, Any]) -> Tuple[str, str]:
+    return _filled(host.get("owner")), _filled(host.get("purpose"))
+
+
 def _rank_headers() -> List[str]:
-    return ["地址", "资源组", "在线", "CPU 平均", "CPU P95", "CPU 繁忙", "加速卡平均", "加速卡 P95", "加速卡繁忙", "样本"]
+    return [
+        "地址",
+        "资源组",
+        "负责人",
+        "用途",
+        "在线",
+        "CPU 平均",
+        "CPU P95",
+        "CPU 繁忙",
+        "加速卡平均",
+        "加速卡 P95",
+        "加速卡繁忙",
+        "样本",
+    ]
 
 
 def _rank_row(host: Dict[str, Any]) -> List[str]:
     cpu = _metric(host, "cpu_percent")
     accel = _metric(host, "accel_util_avg")
+    owner, purpose = _owner_purpose(host)
     return [
         _host_label(host),
         host.get("group_name") or "未分组",
+        owner,
+        purpose,
         "在线" if host.get("online") else "离线",
         _fmt_num(cpu, "avg", 1, "%"),
         _fmt_num(cpu, "p95", 1, "%"),
@@ -838,7 +865,7 @@ def build_report(
         % bounds["label"],
         "时间窗：%s。" % bounds["range_text"],
         "对比窗：%s。" % bounds["compare_range_text"],
-        "集群范围：中心已入库的全部主机（%d 台）。加速卡库存：%s。"
+        "集群范围：未隐藏的已入库主机（%d 台）。已隐藏主机不计入在线率、排行和闲忙。加速卡库存：%s。"
         % (
             total,
             current.get("accel_summary") or "无加速卡",
@@ -936,6 +963,7 @@ def build_report(
     ranks = _section("4. 主机排行")
     ranks["paragraphs"] = [
         "地址用完整 IPv4（优先部署清单 / host_id 内嵌地址，跳过 198.18.0.0/15 隧道地址）。下列为窗口内历史聚合，不是离线主机的末次快照。",
+        "负责人、用途来自中心手工维护的资产信息，采集端不会改写。没填的格子写「未填」。已隐藏主机不出现在这张表里。",
     ]
     _add_table(
         ranks,
@@ -1020,11 +1048,13 @@ def build_report(
     if high_rows:
         _add_table(
             poles,
-            ["高负荷", "资源组", "原因", "CPU 繁忙", "CPU P95", "加速卡繁忙", "加速卡 P95"],
+            ["高负荷", "资源组", "负责人", "用途", "原因", "CPU 繁忙", "CPU P95", "加速卡繁忙", "加速卡 P95"],
             [
                 [
                     _host_label(c["host"]),
                     c["host"].get("group_name") or "未分组",
+                    _owner_purpose(c["host"])[0],
+                    _owner_purpose(c["host"])[1],
                     c["pole_reason"],
                     _fmt_busy(_metric(c["host"], "cpu_percent")),
                     _fmt_num(_metric(c["host"], "cpu_percent"), "p95", 1, "%"),
@@ -1043,11 +1073,13 @@ def build_report(
     if idle_rows:
         _add_table(
             poles,
-            ["基本不用", "资源组", "原因", "CPU 平均", "CPU 繁忙", "加速卡平均", "加速卡繁忙"],
+            ["基本不用", "资源组", "负责人", "用途", "原因", "CPU 平均", "CPU 繁忙", "加速卡平均", "加速卡繁忙"],
             [
                 [
                     _host_label(c["host"]),
                     c["host"].get("group_name") or "未分组",
+                    _owner_purpose(c["host"])[0],
+                    _owner_purpose(c["host"])[1],
                     c["pole_reason"],
                     _fmt_num(_metric(c["host"], "cpu_percent"), "avg", 1, "%"),
                     _fmt_busy(_metric(c["host"], "cpu_percent")),
@@ -1235,11 +1267,13 @@ def build_report(
     preview_hosts = hosts[:100]
     _add_table(
         appendix,
-        ["地址", "资源组", "归类", "CPU 平均", "CPU 繁忙", "加速卡", "磁盘最高", "样本"],
+        ["地址", "资源组", "负责人", "用途", "归类", "CPU 平均", "CPU 繁忙", "加速卡", "磁盘最高", "样本"],
         [
             [
                 _host_label(h),
                 h.get("group_name") or "未分组",
+                _owner_purpose(h)[0],
+                _owner_purpose(h)[1],
                 next(c["pole"] for c in classified if c["host"] is h),
                 _fmt_num(_metric(h, "cpu_percent"), "avg", 1, "%"),
                 _fmt_busy(_metric(h, "cpu_percent")),
@@ -1253,7 +1287,7 @@ def build_report(
             ]
             for h in preview_hosts
         ]
-        or [["样本不足", "样本不足", "样本不足", "样本不足", "样本不足", "样本不足", "样本不足", "样本不足"]],
+        or [["样本不足"] * 10],
     )
     if len(hosts) > len(preview_hosts):
         appendix["notes"].append("附录表格仅列出前 100 台，其余见 CSV。")
@@ -1273,6 +1307,8 @@ def build_report(
                 "address": host.get("address") or "",
                 "hostname": host.get("hostname") or "",
                 "group_name": host.get("group_name") or "",
+                "owner": host.get("owner") or "",
+                "purpose": host.get("purpose") or "",
                 "online": 1 if host.get("online") else 0,
                 "pole": item["pole"],
                 "pole_reason": item["pole_reason"],
