@@ -299,8 +299,9 @@ def judge_host_payload(
         vendor = n.get("vendor_label") or n.get("vendor") or "加速卡"
         card_findings: List[Dict[str, Any]] = []
         score = 0
-        health = (n.get("health") or "").upper()
-        if health and health not in ("OK", "", "UNKNOWN"):
+        health = (n.get("health") or "").strip().upper()
+        # cnmon 的 Device 是 Good；华为是 OK。表头误读成的 State 仍然告警。
+        if health and health not in ("OK", "", "UNKNOWN", "GOOD", "HEALTHY", "NORMAL", "PASS"):
             if health in ("CRITICAL", "ALARM"):
                 score = max(score, 2)
                 level = "critical"

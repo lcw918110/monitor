@@ -1,0 +1,158 @@
+{
+  "CnmonInfo": [
+    {
+      "CRCErr": {
+        "D2DCRCError": 0,
+        "D2DCRCErrorOverflow": 0
+      },
+      "CardNum": 0,
+      "ChannelMemUsage": [
+        0
+      ],
+      "ComputeMode": "Default",
+      "DDRBandWidth": 307200,
+      "DDRDataWidths": 384,
+      "DDRTransferRate": 6400,
+      "DevSysMemUsage": {
+        "Free": 381740,
+        "Total": 545760,
+        "Used": 164020
+      },
+      "Driver": "v5.10.13",
+      "FanSpeed": 0,
+      "FastAllocMemory": {
+        "Free": 0,
+        "Total": 0,
+        "Used": 0
+      },
+      "Firmware": "v1.1.6",
+      "Frequency": {
+        "IPU": "1000"
+      },
+      "HealthState": {
+        "Device": "Good",
+        "Driver": "Running"
+      },
+      "Initialized": true,
+      "PCI": {
+        "Bus": "01",
+        "CurrentSpeed": "8 GT/s",
+        "CurrentWidth": "x16",
+        "Device": "00",
+        "DeviceID": "0x370",
+        "DomainID": "0000",
+        "Function": "0",
+        "MaxSpeed": "16 GT/s",
+        "MaxWidth": "x16",
+        "NUMANodeID": -1,
+        "PCIeReplayCounter": 0,
+        "PhysicalSlot": "Unknown",
+        "SlotID": 0,
+        "SubSystemID": "0x53",
+        "SubVendorID": "0xcabc",
+        "SwitchLinkSpeed": "Unknown",
+        "VendorID": "0xcabc"
+      },
+      "PhysicalMemUsage": {
+        "Free": 23365,
+        "Total": 23365,
+        "Used": 0
+      },
+      "Power": {
+        "Cap": 75.0,
+        "MaxPowerCap": "75.00",
+        "MinPowerCap": "40.00",
+        "ThermalDesignPower": 75,
+        "Usage": 28.0
+      },
+      "ProductName": "MLU370-S4",
+      "RetiredPages": {
+        "IsFailed": "No",
+        "IsPending": "No",
+        "PageRetirement": "Off"
+      },
+      "RowRemapping": {
+        "CorrectableRows": 0,
+        "Failed Rows": 0,
+        "PendingRows": 0,
+        "UncorrectableRows": 0
+      },
+      "SN": "000000000002",
+      "Temperature": {
+        "Board": 64,
+        "Chip": 73,
+        "Memory": 57
+      },
+      "UUID": "00000000-0000-4000-8000-000000000002",
+      "Utilization": {
+        "DEVICECPU": [
+          4,
+          100,
+          0,
+          0
+        ],
+        "DeviceCPUChip": 26,
+        "DeviceCPUSamplingInterval": 100,
+        "ImageCodec": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "MLU": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "MLUAverage": 0,
+        "MLUBusy": 0,
+        "MLUIdle": 24,
+        "VideoCodec": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "VirtualMemUsage": {
+        "Free": 1038336,
+        "Total": 1048576,
+        "Used": 10240
+      }
+    }
+  ],
+  "CnmonVersion": "v5.10.13"
+}

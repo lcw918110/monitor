@@ -1,0 +1,14 @@
+	DDR Capacity(MB)               : 21527
+	DDR Usage Rate(%)              : 12
+	DDR Hugepages Total(page)      : 321
+	DDR Hugepages Usage Rate(%)    : 100
+	Aicore Usage Rate(%)           : 3
+	Aicpu Usage Rate(%)            : 1
+	Ctrlcpu Usage Rate(%)          : 2
+	Vectorcore Usage Rate(%)       : 0
+	DDR Bandwidth Usage Rate(%)    : 1
+	DVPP VDEC Usage Rate(%)        : 1
+	DVPP VPC Usage Rate(%)         : 1
+	DVPP VENC Usage Rate(%)        : 1
+	DVPP JPEGE Usage Rate(%)       : 0
+	DVPP JPEGD Usage Rate(%)       : 0

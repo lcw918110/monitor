@@ -1,0 +1,7 @@
+device,Temperature (Sensor edge) (C),Temperature (Sensor junction) (C),Temperature (Sensor memory) (C),Average Graphics Package Power (W),GPU use (%),VRAM Total Memory (B),VRAM Total Used Memory (B),Card Series,Card Model,Card Vendor,Card SKU,Subsystem ID,Device Rev,Node ID,GUID,GFX Version
+card0,47.0,48.0,50.0,10.0,6,17163091968,17268736,AMD Radeon RX 6800,0x73bf,Advanced Micro Devices Inc. [AMD/ATI],D4140EXL,0x2407,0xc3,5,20006,gfx1030
+card1,53.0,60.0,58.0,36.0,1,17163091968,17268736,AMD Radeon RX 6800,0x73bf,Advanced Micro Devices Inc. [AMD/ATI],N/A,0x6705,0xc3,3,12005,gfx1030
+card2,46.0,47.0,48.0,10.0,3,17163091968,17268736,AMD Radeon RX 6800,0x73bf,Advanced Micro Devices Inc. [AMD/ATI],N/A,0x6705,0xc3,4,55968,gfx1030
+card3,45.0,50.0,58.0,34.0,3,17163091968,17268736,AMD Radeon RX 6800,0x73bf,Advanced Micro Devices Inc. [AMD/ATI],N/A,0x6705,0xc3,2,35171,gfx1030
+card4,51.0,56.0,60.0,38.0,2,17163091968,9584529408,AMD Radeon RX 6800,0x73bf,Advanced Micro Devices Inc. [AMD/ATI],2E4392U,-0x1bc7,0xc3,1,57087,gfx1030
+

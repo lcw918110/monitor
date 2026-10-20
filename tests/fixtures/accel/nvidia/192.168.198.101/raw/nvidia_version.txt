@@ -1,0 +1,2 @@
+ERROR: Option --version is not recognized. Please run 'nvidia-smi -h'.
+

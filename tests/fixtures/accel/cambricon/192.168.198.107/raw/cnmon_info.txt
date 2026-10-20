@@ -1,0 +1,100 @@
+================CNMON 1.19.5================
+Card 0
+    Product Name                   : MLU270-F4 
+    SN                             : 000000000003 
+    UUID                           : 00000000-0000-4000-8000-000000000003 
+    Firmware                       : v1.1.4 
+    Driver                         : v4.9.9 
+    Utilization                    :  
+        Image Codec 0-1            : 0 % 0 % 
+        Image Codec 2-3            : 0 % 0 % 
+        Image Codec 4-5            : 0 % 0 % 
+        Video Codec 0-1            : 0 % 0 % 
+        Video Codec 2-3            : 5 % 0 % 
+        Video Codec 4-5            : 0 % 0 % 
+        MLU Average                : 0 %
+        MLU 0-3                    : 0 % 0 % 0 % 0 % 
+        MLU 4-7                    : 0 % 0 % 0 % 0 % 
+        MLU 8-11                   : 0 % 0 % 0 % 0 % 
+        MLU 12-15                  : 0 % 0 % 0 % 0 % 
+        idle                       : 16 
+        busy                       : 0 
+        Device CPU Chip            : 26 %
+        Device CPU Core 0-1        : 0 % 100 % 
+        Device CPU Core 2-3        : 0 % 0 % 
+        CPU Sampling Interval      : 100 ms
+    Codec Turbo                    : N/A 
+    Fan Speed                      : 17 %
+    Temperature                    :  
+        Board                      : 46 C
+        Cluster 0                  : 47 C
+        Cluster 1                  : 47 C
+        Cluster 2                  : 47 C
+        Cluster 3                  : 47 C
+    Frequency                      :  
+        IPU                        : 1000 MHz
+    Physical Memory Usage          :  
+        Total                      : 16384 MiB
+        Used                       : 4021 MiB
+        Free                       : 12363 MiB
+    Channel Memory Usage           :  
+        Channel 0                  : 1711 MiB
+        Channel 1                  : 788 MiB
+        Channel 2                  : 767 MiB
+        Channel 3                  : 755 MiB
+    DDR Data Widths                : 256 bit
+    DDR BandWidth                  : 102 GB/s
+    DDR Transfer Rate              : 3200 Mbps
+    Virtual Memory Usage           :  
+        Total                      : 1048576 MiB
+        Used                       : 11296 MiB
+        Free                       : 1037280 MiB
+    Fast Alloc Memory              :  
+        Total                      : 6656 KB
+        Used                       : 1662 KB
+        Free                       : 4994 KB
+    Power                          :  
+        Usage                      : 23 W
+        Cap                        : 150 W
+    Initialized                    : On 
+    DDR ECC Err Count              : 0 
+        Corrected Err              : 0 
+            One Bit Err            : 0 
+            Mul One Bit Err        : 0 
+        Uncorrected Err            : 0 
+            Mul Bits Err           : 0 
+            Mul Mul Bits Err       : 0 
+    Cache                          :  
+        Total                      : N/A 
+        Hit                        : N/A 
+    PCI                            :  
+        Vendor ID                  : 0xcabc  
+        Device ID                  : 0x270  
+        Sub-Vendor ID              : 0xcabc  
+        Sub-System ID              : 0x18  
+        Domain ID                  : 0000  
+        Bus num                    : 02  
+        Device                     : 00  
+        Function                   : 0  
+        Physical Slot              : 3  
+        Max Speed                  : 8 GT/s 
+        Max Width                  : x16 
+        Current Speed              : 8 GT/s 
+        Current Width              : x16 
+        Switch Link Speed          : 8 GT/s 
+        NUMA node id               : 0 
+    Bandwidth                      : N/A 
+    PCIe throughput                : N/A 
+    Local memory                   : N/A 
+    Chassis                        : N/A 
+    Retired Pages                  : N/A 
+    Row-Remapping                  : N/A 
+    Processes                      :  
+        Process                    : 0 
+            PID                    : 8492 
+            cmdline                : ./main 
+            MLU Memory Usage       : 531 MiB
+        Process                    : 1 
+            PID                    : 6984 
+            cmdline                : ./main 
+            MLU Memory Usage       : 524 MiB

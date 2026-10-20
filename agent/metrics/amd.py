@@ -5,7 +5,6 @@ import io
 import json
 import re
 import shutil
-import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -13,6 +12,15 @@ _CARD_KEY_RE = re.compile(r"^card(\d+)$", re.I)
 _GPU_LINE_RE = re.compile(
     r"^GPU\[(\d+)\]\s*:\s*(.+?)\s*[:=]\s*(.+?)\s*$", re.I
 )
+
+
+def _first(*values):
+    # type: (Any) -> Any
+    """0 是有效读数。用 or 串联会把 gfx_activity=0 当成缺失。"""
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -35,16 +43,22 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
+_LAST_ERROR = ""
+
+
+def last_error():
+    # type: () -> str
+    return _LAST_ERROR
+
+
 def _run(cmd: List[str], timeout: float) -> str:
-    try:
-        return subprocess.check_output(
-            cmd,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    global _LAST_ERROR
+    from agent.metrics.probe import run_cmd
+
+    result = run_cmd(cmd, timeout=timeout)
+    if result.error:
+        _LAST_ERROR = "%s %s" % (cmd[0], result.error)
+    return result.text
 
 
 def _loads_json(text: str) -> Any:
@@ -432,28 +446,41 @@ def parse_amd_smi_json(
             if total is None:
                 total = s_total
         util = _to_float(
-            _dig(obj, ["usage", "gfx_activity"])
-            or _dig(obj, ["average_gfx_activity"])
-            or _dig(obj, ["gfx_activity"])
-            or _dig(obj, ["gpu_activity"])
-            or _dig(obj, ["usage", "gpu_activity"])
+            _first(
+                _dig(obj, ["usage", "gfx_activity"]),
+                _dig(obj, ["average_gfx_activity"]),
+                _dig(obj, ["gfx_activity"]),
+                _dig(obj, ["gpu_activity"]),
+                _dig(obj, ["usage", "gpu_activity"]),
+            )
         )
         temp = _to_float(
-            _dig(obj, ["temperature", "edge"])
-            or _dig(obj, ["temperature", "hotspot"])
-            or _dig(obj, ["temperature", "junction"])
-            or _dig(obj, ["edge_temperature"])
+            _first(
+                _dig(obj, ["temperature", "edge"]),
+                _dig(obj, ["temperature", "hotspot"]),
+                _dig(obj, ["temperature", "junction"]),
+                _dig(obj, ["edge_temperature"]),
+            )
         )
         power = _to_float(
-            _dig(obj, ["power", "socket_power"])
-            or _dig(obj, ["power", "average_socket_power"])
-            or _dig(obj, ["socket_power"])
+            _first(
+                _dig(obj, ["power", "socket_power"]),
+                _dig(obj, ["power", "average_socket_power"]),
+                _dig(obj, ["socket_power"]),
+            )
         )
         limit = _to_float(
-            _dig(obj, ["power", "power_limit"])
-            or _dig(obj, ["power", "slowdown_power"])
-            or _dig(obj, ["power_cap"])
+            _first(
+                _dig(obj, ["power", "power_limit"]),
+                _dig(obj, ["power", "slowdown_power"]),
+                _dig(obj, ["power_cap"]),
+            )
         )
+        bus_id = None
+        if static_obj:
+            raw_bus = _dig(static_obj, ["bus", "bdf"])
+            if raw_bus is not None and str(raw_bus).strip():
+                bus_id = str(raw_bus).strip()
         name = _amd_smi_name(static_obj, obj)
         if util is None and used is None and total is None and name == "AMD GPU":
             continue
@@ -473,6 +500,7 @@ def parse_amd_smi_json(
                 "power_limit_w": limit,
                 "fan_percent": _to_float(_dig(obj, ["fan", "speed"])),
                 "health": None,
+                "bus_id": bus_id,
                 "source": "amd-smi",
             }
         )
@@ -542,8 +570,19 @@ def _collect_amd_smi(timeout: float) -> List[Dict[str, Any]]:
 
 
 def collect_amd_gpus(timeout: float = 8.0) -> List[Dict[str, Any]]:
-    """优先 rocm-smi；无卡或命令失败时回退 amd-smi。"""
+    """优先 rocm-smi --json，其次 csv / 文本，再回退 amd-smi --json。"""
+    global _LAST_ERROR
+    _LAST_ERROR = ""
     cards = _collect_rocm_smi(timeout)
     if cards:
+        _LAST_ERROR = ""
         return cards
-    return _collect_amd_smi(timeout)
+    cards = _collect_amd_smi(timeout)
+    if cards:
+        _LAST_ERROR = ""
+        return cards
+    if not shutil.which("rocm-smi") and not shutil.which("amd-smi"):
+        _LAST_ERROR = ""
+    elif not _LAST_ERROR:
+        _LAST_ERROR = "rocm-smi/amd-smi 无可用输出"
+    return []

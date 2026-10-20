@@ -1,0 +1,6 @@
+	NPU ID                         : 1
+	Chip Count                     : 1
+
+	Power Dissipation(W)           : 33.8
+	Chip Name                      : MCU
+

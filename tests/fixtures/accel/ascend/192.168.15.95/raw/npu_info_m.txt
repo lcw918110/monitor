@@ -1,0 +1,3 @@
+	NPU ID                         Chip ID                        Chip Logic ID                  Chip Name                     
+	1                              0                              0                              Ascend 310P3
+	1                              1                              -                              Mcu                           
