@@ -1,0 +1,4 @@
+NVIDIA-SMI version  : 580.173.02
+NVML version        : 580.173
+DRIVER version      : 580.173.02
+CUDA Version        : 13.0

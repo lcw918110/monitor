@@ -1,0 +1,125 @@
+================CNMON v5.10.13================
+Card 0
+    Product Name                   : MLU370-S4 
+    SN                             : 000000000001 
+    UUID                           : 00000000-0000-4000-8000-000000000001 
+    Firmware                       : v1.1.6 
+    Driver                         : v5.10.13 
+    Compute Mode                   : Default 
+    SRIOV Mode                     : N/A 
+    Health State                   :  
+        Device                     : Good 
+        Driver                     : Running 
+    Utilization                    :  
+        Image Codec 0              : 0 % 
+        Image Codec 1              : 0 % 
+        Image Codec 2              : 0 % 
+        Image Codec 3              : 0 % 
+        Image Codec 4              : 0 % 
+        Image Codec 5              : 0 % 
+        Image Codec 6              : 0 % 
+        Image Codec 7              : 0 % 
+        Video Decoder 0            : 2 % 
+        Video Decoder 1            : 0 % 
+        Video Decoder 2            : 0 % 
+        Video Decoder 3            : 0 % 
+        Video Decoder 4            : 0 % 
+        Video Decoder 5            : 0 % 
+        Video Decoder 6            : 0 % 
+        Video Decoder 7            : 0 % 
+        Video Decoder 8            : 0 % 
+        Video Decoder 9            : 0 % 
+        Video Encoder 10           : 1 % 
+        Video Encoder 11           : 0 % 
+        MLU Average                : 18 %
+        MLU 0-3                    : 37 % 36 % 36 % 36 % 
+        MLU 4-7                    : 17 % 17 % 17 % 16 % 
+        MLU 8-11                   : 16 % 16 % 17 % 17 % 
+        MLU 12-15                  : 16 % 16 % 16 % 16 % 
+        MLU 16-19                  : 14 % 14 % 13 % 13 % 
+        MLU 20-23                  : 9 % 9 % 9 % 9 % 
+        idle                       : 0 
+        busy                       : 24 
+        DEVICE CPU Chip            : 30 %
+        DEVICE CPU Core 0-1        : 8 % 100 % 
+        DEVICE CPU Core 2-3        : 4 % 8 % 
+        CPU Sampling Interval      : 100 ms
+    Codec Turbo                    : N/A 
+    Fan Speed                      : 0 %
+    Temperature                    :  
+        Board                      : 65 C
+        Chip                       : 74 C
+        Memory                     : 59 C
+    Frequency                      :  
+        IPU                        : 1000 MHz
+    Physical Memory Usage          :  
+        Total                      : 23365 MiB
+        Used                       : 445 MiB
+        Free                       : 22920 MiB
+    Channel Memory Usage           :  
+        Channel 0                  : 445 MiB
+    DDR Data Widths                : 384 Bit
+    DDR BandWidth                  : 307200 MB/s
+    DDR Transfer Rate              : 6400 Mbps
+    Virtual Memory Usage           :  
+        Total                      : 1048576 MiB
+        Used                       : 10543 MiB
+        Free                       : 1038033 MiB
+    Device System Memory Usage     :  
+        Total                      : 545760 KB
+        Used                       : 173932 KB
+        Free                       : 371828 KB
+    Fast Alloc Memory              :  
+        Total                      : 196608 KB
+        Used                       : 117464 KB
+        Free                       : 79144 KB
+    Power                          :  
+        Usage                      : 42 W
+        Cap                        : 75 W
+        Thermal Design Power       : 75 W
+        Max Power Cap              : 75.00 W
+        Min Power Cap              : 40.00 W
+    Initialized                    : On 
+    DDR ECC Err Count              : N/A 
+    CRC Err Count                  :  
+        Die2Die CRC Error          : 0 
+        Die2Die CRC Error Overflow : 0 
+    PCI                            :  
+        Vendor ID                  : 0xcabc  
+        Device ID                  : 0x370  
+        Sub-Vendor ID              : 0xcabc  
+        Sub-System ID              : 0x53  
+        Domain ID                  : 0000  
+        Bus num                    : 86  
+        Device                     : 00  
+        Function                   : 0  
+        Slot ID                    : 0 
+        Physical Slot              : 4-1  
+        Max Speed                  : 16 GT/s 
+        Max Width                  : x16 
+        Current Speed              : 8 GT/s 
+        Current Width              : x16 
+        Switch Link Speed          : Unknown 
+        NUMA node id               : 1 
+        PCIe Replay Counter        : 0 
+    Chassis                        :  
+    Retired Pages                  :  
+        Page Retirement            : Off 
+        Single Bit ECC             : 0 
+        Double Bit ECC             : 0 
+        is Pending                 : No 
+        is Failed                  : No 
+    Row-Remapping                  :  
+        Correctable Rows           : 0 
+        Uncorrectable Rows         : 0 
+        Pending Rows               : 0 
+        Failed Rows                : 0 
+    Processes                      :  
+        Process                    : 0 
+            PID                    : 16074 
+            cmdline                : ./main 
+            MLU Memory Usage       : 292 MiB
+        Process                    : 1 
+            PID                    : 9083 
+            cmdline                : ./main 
+            MLU Memory Usage       : 50 MiB

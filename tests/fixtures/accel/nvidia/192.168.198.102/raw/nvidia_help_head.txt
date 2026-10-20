@@ -1,0 +1,5 @@
+NVIDIA System Management Interface -- v595.99.02
+
+NVSMI provides monitoring information for Tesla and select Quadro devices.
+The data is presented in either a plain text or an XML format, via stdout or a file.
+NVSMI also provides several management operations for changing the device state.

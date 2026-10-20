@@ -1,0 +1,141 @@
+{
+  "CnmonInfo": [
+    {
+      "CardNum": 0,
+      "ChannelMemUsage": [
+        1711,
+        788,
+        767,
+        755
+      ],
+      "DDRBandWidth": 102.0,
+      "DDRDataWidths": 256.0,
+      "DDRECCErr": {
+        "CorrectesErr": {
+          "MulOneBitErr": 0,
+          "OneBitErr": 0
+        },
+        "UncorrectedErr": {
+          "MulBitsErr": 0,
+          "MulMulBitsErr": 0
+        }
+      },
+      "DDRTransferRate": 3200,
+      "Driver": "v4.9.9",
+      "FanSpeed": 17,
+      "FastAllocMemory": {
+        "Free": 4994,
+        "Total": 6656,
+        "Used": 1662
+      },
+      "Firmware": "v1.1.4",
+      "Frequency": {
+        "IPU": "1000"
+      },
+      "Initialized": true,
+      "PCI": {
+        "Bus": "02",
+        "CurrentSpeed": "8 GT/s",
+        "CurrentWidth": "x16",
+        "Device": "00",
+        "DeviceID": "0x270",
+        "DomainID": "0000",
+        "Function": "0",
+        "MaxSpeed": "8 GT/s",
+        "MaxWidth": "x16",
+        "NUMANodeID": 0,
+        "PhysicalSlot": "3",
+        "SubSystemID": "0x18",
+        "SubVendorID": "0xcabc",
+        "SwitchLinkSpeed": "8 GT/s",
+        "VendorID": "0xcabc"
+      },
+      "PhysicalMemUsage": {
+        "Free": 12363,
+        "Total": 16384,
+        "Used": 4021
+      },
+      "Power": {
+        "Cap": 150.0,
+        "Usage": 23.0
+      },
+      "Process": [
+        {
+          "Cmdline": "./main",
+          "MLUMemUsage": 544365,
+          "Pid": 8492
+        },
+        {
+          "Cmdline": "./main",
+          "MLUMemUsage": 537278,
+          "Pid": 6984
+        }
+      ],
+      "ProductName": "MLU270-F4",
+      "SN": "000000000003",
+      "Temperature": {
+        "Board": 46,
+        "Cluster": [
+          47,
+          47,
+          47,
+          47
+        ]
+      },
+      "UUID": "00000000-0000-4000-8000-000000000004",
+      "Utilization": {
+        "DEVICECPU": [
+          0,
+          100,
+          0,
+          0
+        ],
+        "DeviceCPUChip": 24,
+        "DeviceCPUSamplingInterval": 100,
+        "ImageCodec": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "MLU": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "MLUAverage": 0,
+        "MLUBusy": 0,
+        "MLUIdle": 16,
+        "VideoCodec": [
+          0,
+          0,
+          6,
+          0,
+          0,
+          0
+        ]
+      },
+      "VirtualMemUsage": {
+        "Free": 1037280,
+        "Total": 1048576,
+        "Used": 11296
+      }
+    }
+  ],
+  "CnmonVersion": "1.19.5"
+}

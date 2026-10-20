@@ -2,7 +2,6 @@
 
 import re
 import shutil
-import subprocess
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
@@ -29,18 +28,47 @@ def _to_float(value: str) -> Optional[float]:
         return None
 
 
+_LAST_ERROR = ""
+
+
+def last_error():
+    # type: () -> str
+    return _LAST_ERROR
+
+
+def output_is_npu_error(text: str) -> bool:
+    """`-i 0` 的 Invalid card id、`-t power` 不支持、`-t common` 的参数错误。"""
+    low = (text or "").lower()
+    return (
+        "invalid card id" in low
+        or "does not support" in low
+        or "error parameter" in low
+    )
+
+
 def _run_npu_smi(args: List[str], timeout: float = 10.0) -> Optional[str]:
+    global _LAST_ERROR
     if not shutil.which("npu-smi"):
+        _LAST_ERROR = "npu-smi 不在 PATH"
         return None
-    try:
-        return subprocess.check_output(
-            ["npu-smi", *args],
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError):
+    from agent.metrics.probe import run_cmd
+
+    result = run_cmd(["npu-smi"] + list(args), timeout=timeout)
+    if result.error:
+        _LAST_ERROR = "npu-smi " + result.error
+        if output_is_npu_error(result.text):
+            return None
         return None
+    if output_is_npu_error(result.text):
+        detail = ""
+        for line in result.text.splitlines():
+            if line.strip():
+                detail = line.strip()
+                break
+        if detail:
+            _LAST_ERROR = "npu-smi " + detail[:180]
+        return None
+    return result.text
 
 
 def _norm_field(name: str) -> str:
@@ -535,6 +563,8 @@ def _enrich_with_typed_queries(
 
 
 def collect_npus(timeout: float = 10.0) -> List[Dict[str, Any]]:
+    global _LAST_ERROR
+    _LAST_ERROR = ""
     out = _run_npu_smi(["info"], timeout=timeout)
     npus: List[Dict[str, Any]] = []
     if out:
@@ -560,7 +590,10 @@ def collect_npus(timeout: float = 10.0) -> List[Dict[str, Any]]:
     npus = _dedup_cards(npus)
     npus = _sanitize_parsed_metrics(npus)
     if not npus:
+        if not _LAST_ERROR and not shutil.which("npu-smi"):
+            _LAST_ERROR = "npu-smi 不在 PATH"
         return []
+    _LAST_ERROR = ""
     try:
         return _enrich_with_typed_queries(npus, timeout=mapping_timeout)
     except Exception:  # noqa: BLE001

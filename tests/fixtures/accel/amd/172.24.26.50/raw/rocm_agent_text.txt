@@ -1,0 +1,94 @@
+
+
+============================ ROCm System Management Interface ============================
+====================================== Temperature =======================================
+GPU[0]		: Temperature (Sensor edge) (C): 48.0
+GPU[0]		: Temperature (Sensor junction) (C): 48.0
+GPU[0]		: Temperature (Sensor memory) (C): 52.0
+GPU[1]		: Temperature (Sensor edge) (C): 54.0
+GPU[1]		: Temperature (Sensor junction) (C): 60.0
+GPU[1]		: Temperature (Sensor memory) (C): 56.0
+GPU[2]		: Temperature (Sensor edge) (C): 47.0
+GPU[2]		: Temperature (Sensor junction) (C): 47.0
+GPU[2]		: Temperature (Sensor memory) (C): 48.0
+GPU[3]		: Temperature (Sensor edge) (C): 46.0
+GPU[3]		: Temperature (Sensor junction) (C): 51.0
+GPU[3]		: Temperature (Sensor memory) (C): 56.0
+GPU[4]		: Temperature (Sensor edge) (C): 52.0
+GPU[4]		: Temperature (Sensor junction) (C): 56.0
+GPU[4]		: Temperature (Sensor memory) (C): 58.0
+==========================================================================================
+=================================== Power Consumption ====================================
+GPU[0]		: Average Graphics Package Power (W): 17.0
+GPU[1]		: Average Graphics Package Power (W): 38.0
+GPU[2]		: Average Graphics Package Power (W): 16.0
+GPU[3]		: Average Graphics Package Power (W): 34.0
+GPU[4]		: Average Graphics Package Power (W): 46.0
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 0
+GPU[2]		: GPU use (%): 0
+GPU[3]		: GPU use (%): 0
+GPU[4]		: GPU use (%): 1
+==========================================================================================
+================================== Memory Usage (Bytes) ==================================
+GPU[0]		: VRAM Total Memory (B): 17163091968
+GPU[0]		: VRAM Total Used Memory (B): 9588805632
+GPU[1]		: VRAM Total Memory (B): 17163091968
+GPU[1]		: VRAM Total Used Memory (B): 9584627712
+GPU[2]		: VRAM Total Memory (B): 17163091968
+GPU[2]		: VRAM Total Used Memory (B): 9586712576
+GPU[3]		: VRAM Total Memory (B): 17163091968
+GPU[3]		: VRAM Total Used Memory (B): 9607774208
+GPU[4]		: VRAM Total Memory (B): 17163091968
+GPU[4]		: VRAM Total Used Memory (B): 9606156288
+==========================================================================================
+====================================== Product Info ======================================
+GPU[0]		: Card Series: 		AMD Radeon RX 6800
+GPU[0]		: Card Model: 		0x73bf
+GPU[0]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[0]		: Card SKU: 		D4140EXL
+GPU[0]		: Subsystem ID: 	0x2407
+GPU[0]		: Device Rev: 		0xc3
+GPU[0]		: Node ID: 		5
+GPU[0]		: GUID: 		20006
+GPU[0]		: GFX Version: 		gfx1030
+GPU[1]		: Card Series: 		AMD Radeon RX 6800
+GPU[1]		: Card Model: 		0x73bf
+GPU[1]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[1]		: Card SKU: 		N/A
+GPU[1]		: Subsystem ID: 	0x6705
+GPU[1]		: Device Rev: 		0xc3
+GPU[1]		: Node ID: 		3
+GPU[1]		: GUID: 		12005
+GPU[1]		: GFX Version: 		gfx1030
+GPU[2]		: Card Series: 		AMD Radeon RX 6800
+GPU[2]		: Card Model: 		0x73bf
+GPU[2]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[2]		: Card SKU: 		N/A
+GPU[2]		: Subsystem ID: 	0x6705
+GPU[2]		: Device Rev: 		0xc3
+GPU[2]		: Node ID: 		4
+GPU[2]		: GUID: 		55968
+GPU[2]		: GFX Version: 		gfx1030
+GPU[3]		: Card Series: 		AMD Radeon RX 6800
+GPU[3]		: Card Model: 		0x73bf
+GPU[3]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[3]		: Card SKU: 		N/A
+GPU[3]		: Subsystem ID: 	0x6705
+GPU[3]		: Device Rev: 		0xc3
+GPU[3]		: Node ID: 		2
+GPU[3]		: GUID: 		35171
+GPU[3]		: GFX Version: 		gfx1030
+GPU[4]		: Card Series: 		AMD Radeon RX 6800
+GPU[4]		: Card Model: 		0x73bf
+GPU[4]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[4]		: Card SKU: 		2E4392U
+GPU[4]		: Subsystem ID: 	-0x1bc7
+GPU[4]		: Device Rev: 		0xc3
+GPU[4]		: Node ID: 		1
+GPU[4]		: GUID: 		57087
+GPU[4]		: GFX Version: 		gfx1030
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

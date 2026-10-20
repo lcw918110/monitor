@@ -1,0 +1,5 @@
+nvidia-smi: -
+rocm-smi: -
+amd-smi: -
+npu-smi: -
+cnmon: -
