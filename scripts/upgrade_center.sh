@@ -93,6 +93,9 @@ _upgrade_assert_not_live_data() {
 }
 
 cleanup() {
+  if [[ -n "${SANDBOX_DIR:-}" && -d "$SANDBOX_DIR" ]]; then
+    rm -rf "$SANDBOX_DIR"
+  fi
   if [[ -n "${WORK:-}" && -d "$WORK" ]]; then
     if declare -F _upgrade_assert_not_live_data >/dev/null 2>&1; then
       _upgrade_assert_not_live_data "$WORK" || return 0
@@ -114,6 +117,63 @@ upgrade_systemctl() {
     return
   fi
   command systemctl "$@"
+}
+
+_unit_active() {
+  local unit="$1"
+  if upgrade_systemctl is-active --quiet "$unit"; then
+    echo active
+  else
+    echo inactive
+  fi
+}
+
+# 预同步测试用的假命令。只在测试子 shell 的 PATH 最前面，升级本身仍用原来的 systemctl。
+_upgrade_prepare_test_tools() {
+  local tool
+  SANDBOX_DIR="$(mktemp -d /tmp/monitor-upgrade-sandbox.XXXXXX)"
+  SANDBOX_BIN="${SANDBOX_DIR}/bin"
+  SANDBOX_HOME="${SANDBOX_DIR}/home"
+  mkdir -p "$SANDBOX_BIN" "$SANDBOX_HOME"
+  if [[ -z "${MONITOR_TEST_FAKE_LOG:-}" ]]; then
+    MONITOR_TEST_FAKE_LOG="${SANDBOX_DIR}/commands.log"
+  fi
+  : >> "$MONITOR_TEST_FAKE_LOG"
+  for tool in systemctl pkill kill ssh sshpass scp; do
+    cat > "${SANDBOX_BIN}/${tool}" <<EOF
+#!/bin/bash
+printf '%s %s\n' "${tool}" "\$*" >> "\$MONITOR_TEST_FAKE_LOG"
+exit 0
+EOF
+    chmod 755 "${SANDBOX_BIN}/${tool}"
+  done
+}
+
+# 测试前是 active、现在不是，就拉起来并告警。结果写到 UNIT_NOW。
+_ensure_recorded_unit() {
+  local unit="$1"
+  local before="$2"
+  local now
+  now="$(_unit_active "$unit")"
+  if [[ "$before" == "active" && "$now" != "active" ]]; then
+    echo "[warn] ${unit} 在测试前是 active，现在是 ${now}，尝试重新启动"
+    upgrade_systemctl start "$unit" >/dev/null 2>&1 || true
+    now="$(_unit_active "$unit")"
+    if [[ "$now" == "active" ]]; then
+      echo "[ok] 已重新启动 ${unit}"
+    else
+      echo "[warn] ${unit} 未能恢复为 active"
+    fi
+  elif [[ "$before" == "active" && "$now" == "active" ]]; then
+    echo "[ok] ${unit} 仍为 active"
+  else
+    echo "[info] ${unit} 测试前=${before} 现在=${now}"
+  fi
+  UNIT_NOW="$now"
+}
+
+_print_unit_summary() {
+  echo "  服务: monitor-agent ${AGENT_BEFORE:-未知}->${AGENT_AFTER:-未知}；monitor-center ${CENTER_BEFORE:-未知}->${CENTER_AFTER:-未知}"
 }
 
 upgrade_curl() {
@@ -440,8 +500,34 @@ if [[ ! -d "$PKG/tests" ]]; then
 fi
 # 不传 -t：tests/ 不是包（没有 __init__.py）。cwd 与 PYTHONPATH 指向新包，测试不得去写现场数据库。
 # </dev/null：push_upgrade 的 SSH 会话 stdin 不会关闭，测试不能去读它。
-if ! (cd "$PKG" && PYTHONPATH="$PKG" "$PY" -m unittest discover -s tests) </dev/null; then
+# 测试进程使用临时 HOME、假 systemctl/kill/ssh，并打开 MONITOR_TEST_SANDBOX，
+# 避免用例在中心上 systemctl stop monitor-agent。
+AGENT_BEFORE="$(_unit_active monitor-agent)"
+CENTER_BEFORE="$(_unit_active monitor-center)"
+echo "[info] 测试前 monitor-agent=${AGENT_BEFORE} monitor-center=${CENTER_BEFORE}"
+_upgrade_prepare_test_tools
+test_rc=0
+if ! (
+  cd "$PKG" || exit 1
+  export PYTHONPATH="$PKG"
+  export MONITOR_TEST_SANDBOX=1
+  export MONITOR_CLEANUP_SKIP_SYSTEMCTL=1
+  export MONITOR_CLEANUP_SKIP_PKILL=1
+  export MONITOR_AGENT_PID_DIRS=""
+  export HOME="$SANDBOX_HOME"
+  export PATH="${SANDBOX_BIN}:${PATH}"
+  export MONITOR_TEST_FAKE_LOG
+  "$PY" -m unittest discover -s tests
+) </dev/null; then
+  test_rc=1
+fi
+_ensure_recorded_unit monitor-agent "$AGENT_BEFORE"
+AGENT_AFTER="$UNIT_NOW"
+_ensure_recorded_unit monitor-center "$CENTER_BEFORE"
+CENTER_AFTER="$UNIT_NOW"
+if [[ "$test_rc" != 0 ]]; then
   echo "新包测试未通过，未改动安装目录"
+  _print_unit_summary
   exit 1
 fi
 echo "[ok] 新包测试通过"
@@ -462,6 +548,7 @@ fi
 if [[ "$CHECK_ONLY" == "1" ]]; then
   echo "[ok] 检查通过（未改动安装目录）"
   echo "目录=${INSTALL_DIR} sha=${SHA:-未指定} Python=${PY} 磁盘可用=${free_bytes} 需要=${need_bytes}"
+  _print_unit_summary
   exit 0
 fi
 
@@ -588,3 +675,8 @@ echo "  主机: ${HOSTS_BEFORE} -> ${HOSTS_AFTER}"
 echo "  历史上报: ${HIST_BEFORE} -> ${HIST_AFTER}"
 echo "  健康检查: ${health_body}"
 echo "  测试: 同步前已通过"
+_ensure_recorded_unit monitor-agent "$AGENT_BEFORE"
+AGENT_AFTER="$UNIT_NOW"
+_ensure_recorded_unit monitor-center "$CENTER_BEFORE"
+CENTER_AFTER="$UNIT_NOW"
+_print_unit_summary

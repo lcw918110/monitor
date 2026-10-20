@@ -6,6 +6,7 @@
 - 华为昇腾 Huawei Ascend：`npu-smi`
 - 寒武纪 Cambricon MLU：`cnmon`
 - 瑞芯微 Rockchip RKNN 系列：`/sys/kernel/debug/rknpu/load` 等
+- 没有厂商工具和设备节点时，从 `/sys/bus/pci/devices` 识别已知加速卡（不依赖 lspci）
 
 返回统一字段，便于中心端阈值判定与展示。
 """
@@ -359,6 +360,167 @@ def _from_rockchip_rknn() -> List[Dict[str, Any]]:
     return [item]
 
 
+# (vendor_id, device_id) -> (vendor, vendor_label, card_kind, name)
+_PCI_DEVICE_NAMES = {
+    ("cabc", "0270"): ("cambricon", "寒武纪", "mlu", "MLU270"),
+    ("cabc", "0290"): ("cambricon", "寒武纪", "mlu", "MLU290"),
+    ("cabc", "0370"): ("cambricon", "寒武纪", "mlu", "MLU370"),
+    ("cabc", "0580"): ("cambricon", "寒武纪", "mlu", "MLU580"),
+    ("19e5", "d100"): ("huawei", "华为昇腾", "npu", "Ascend 310"),
+}
+
+_PCI_VENDOR_META = {
+    "cambricon": ("寒武纪", "mlu", "Cambricon MLU"),
+    "nvidia": ("英伟达", "gpu", "NVIDIA GPU"),
+    "amd": ("AMD", "gpu", "AMD GPU"),
+    "huawei": ("华为昇腾", "npu", "Huawei Ascend"),
+}
+
+
+def _pci_hex(text: Optional[str]) -> str:
+    raw = (text or "").strip().lower()
+    if raw.startswith("0x"):
+        raw = raw[2:]
+    return raw
+
+
+def _pci_class_code(text: Optional[str]) -> str:
+    """sysfs class 是 24 位，例如 0x120000。取高字节 12 / 03。"""
+    raw = _pci_hex(text)
+    if len(raw) < 2:
+        return ""
+    if len(raw) >= 6:
+        return raw[:2]
+    return raw[:2]
+
+
+def _pci_read(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def pci_sysfs_root() -> str:
+    return os.environ.get("MONITOR_SYSFS_PCI") or "/sys/bus/pci/devices"
+
+
+def _classify_pci(vendor: str, class_code: str) -> str:
+    """返回内部厂商键；不认识则空串。寒武纪只做加速卡，class 读失败也保留。"""
+    if vendor == "cabc":
+        return "cambricon"
+    if vendor == "10de" and class_code in ("03", "12"):
+        return "nvidia"
+    if vendor == "1002" and class_code == "03":
+        return "amd"
+    if vendor == "19e5" and class_code == "12":
+        return "huawei"
+    return ""
+
+
+def _pci_note(revision: str) -> str:
+    if revision == "ff":
+        return "设备无响应 (rev ff)"
+    return "驱动/管理工具缺失"
+
+
+def _pci_card(bdf: str, vendor_id: str, device_id: str, revision: str, vendor_key: str) -> Dict[str, Any]:
+    named = _PCI_DEVICE_NAMES.get((vendor_id, device_id))
+    if named:
+        _key, label, kind, name = named
+    else:
+        label, kind, fallback = _PCI_VENDOR_META[vendor_key]
+        name = "%s (%s:%s)" % (fallback, vendor_id, device_id)
+    return {
+        "vendor": vendor_key,
+        "vendor_label": label,
+        "card_kind": kind,
+        "index": 0,
+        "name": name,
+        "pci": "%s:%s" % (vendor_id, device_id),
+        "bdf": bdf,
+        "util_percent": None,
+        "mem_used_mb": None,
+        "mem_total_mb": None,
+        "mem_percent": None,
+        "temp_c": None,
+        "health": "abnormal",
+        "power_w": None,
+        "note": _pci_note(revision),
+        "source": "pci",
+    }
+
+
+def collect_pci_accelerators(
+    sysfs_root: Optional[str] = None,
+    skip_vendors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """扫描 sysfs PCI 设备。skip_vendors 里的厂商已经由工具报过，不再重复。"""
+    root = sysfs_root or pci_sysfs_root()
+    if not os.path.isdir(root):
+        return []
+    skip = set(v.lower() for v in (skip_vendors or []))
+    found: List[Dict[str, Any]] = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    for name in names:
+        slot = os.path.join(root, name)
+        if not os.path.isdir(slot):
+            continue
+        vendor_id = _pci_hex(_pci_read(os.path.join(slot, "vendor")))
+        device_id = _pci_hex(_pci_read(os.path.join(slot, "device")))
+        class_code = _pci_class_code(_pci_read(os.path.join(slot, "class")))
+        revision = _pci_hex(_pci_read(os.path.join(slot, "revision")))
+        if not vendor_id or not device_id:
+            continue
+        vendor_key = _classify_pci(vendor_id, class_code)
+        if not vendor_key or vendor_key in skip:
+            continue
+        found.append(_pci_card(name, vendor_id, device_id, revision, vendor_key))
+    for idx, card in enumerate(found):
+        card["index"] = idx
+    return found
+
+
+def _vendor_tool_vendors() -> List[str]:
+    """厂商工具或设备节点还在时，不要再用 PCI 补一张卡。"""
+    covered = []
+    if (
+        shutil.which("nvidia-smi")
+        or os.path.exists("/dev/nvidiactl")
+        or os.path.exists("/dev/nvidia0")
+    ):
+        covered.append("nvidia")
+    if shutil.which("rocm-smi") or shutil.which("amd-smi") or os.path.exists("/dev/kfd"):
+        covered.append("amd")
+    if (
+        shutil.which("npu-smi")
+        or os.path.exists("/dev/davinci0")
+        or os.path.exists("/dev/davinci_manager")
+    ):
+        covered.append("huawei")
+    if (
+        shutil.which("cnmon")
+        or os.path.isfile("/usr/local/neuware/bin/cnmon")
+        or os.path.exists("/dev/cambricon_dev0")
+        or os.path.exists("/dev/cambricon_ctl")
+    ):
+        covered.append("cambricon")
+    return covered
+
+
+def _pci_skip_vendors(found: List[Dict[str, Any]]) -> List[str]:
+    skip = list(_vendor_tool_vendors())
+    for card in found:
+        vendor = (card.get("vendor") or "").lower()
+        if vendor and vendor not in skip:
+            skip.append(vendor)
+    return skip
+
+
 def collect_accelerators() -> List[Dict[str, Any]]:
     """探测并采集本机全部已支持厂商的加速卡。"""
     cards: List[Dict[str, Any]] = []
@@ -367,6 +529,7 @@ def collect_accelerators() -> List[Dict[str, Any]]:
     cards.extend(_from_huawei())
     cards.extend(_from_cambricon())
     cards.extend(_from_rockchip_rknn())
+    cards.extend(collect_pci_accelerators(skip_vendors=_pci_skip_vendors(cards)))
     return cards
 
 

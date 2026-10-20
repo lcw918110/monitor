@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.9.3**
+当前版本：**v1.9.4**
 
 运行环境：
 
@@ -17,7 +17,7 @@
 ## 定位
 
 - **项目性质**：轻量、可本地一把梭部署的**基础资源监控**，适合实验室 / 小机房快速看一眼；不是企业级可观测平台
-- **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）
+- **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
 - **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV（见 `docs/13-diagnostic-reports.md`）
@@ -171,7 +171,7 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src
 # --check-only 时上面那条命令末尾再加 --check-only
 ```
 
-脚本先从 systemd 单元读出 `LD_LIBRARY_PATH` 和 `PATH` 再选 Python（`PYTHONPATH` 指向新包，不是现场安装树），然后在**新包**上跑测试。预同步测试的标准输入接到 `/dev/null`；不喂数据的 `ssh` 使用 `ssh -n` 且 `</dev/null`，避免现场 SSH 会话的 stdin 一直不关时测试挂住。失败则直接退出，不备份、不同步、不重启。`--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出，不把便携包写入现场目录，也不备份、不同步、不重启。正式升级通过后做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，正式推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
+脚本先从 systemd 单元读出 `LD_LIBRARY_PATH` 和 `PATH` 再选 Python（`PYTHONPATH` 指向新包，不是现场安装树），然后在**新包**上跑测试。预同步测试的标准输入接到 `/dev/null`；不喂数据的 `ssh` 使用 `ssh -n` 且 `</dev/null`，避免现场 SSH 会话的 stdin 一直不关时测试挂住。测试进程打开 `MONITOR_TEST_SANDBOX=1`，PATH 前面是只记日志的 `systemctl` / `kill` / `ssh`，临时 `HOME`，并且不再扫描 `/opt/monitor`。这样用例不会 `systemctl stop monitor-agent`。测试前后记下 `monitor-agent` 和 `monitor-center` 是否 active；若测试前是 active、之后不是，就重新拉起并在摘要里告警。失败则直接退出，不备份、不同步、不重启。`--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出，不把便携包写入现场目录，也不备份、不同步、不重启。正式升级通过后做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，正式推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
 
 批量：
 

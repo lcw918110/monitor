@@ -170,7 +170,11 @@ class AcceleratorWireTests(unittest.TestCase):
                                 "agent.metrics.accelerators._from_rockchip_rknn",
                                 return_value=[],
                             ):
-                                cards = collect_accelerators()
+                                with mock.patch(
+                                    "agent.metrics.accelerators.collect_pci_accelerators",
+                                    return_value=[],
+                                ):
+                                    cards = collect_accelerators()
         self.assertEqual(len(cards), 5)
         self.assertTrue(all(c["vendor"] == "amd" for c in cards))
         parts = split_for_payload(cards)
