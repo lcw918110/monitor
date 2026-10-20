@@ -161,6 +161,9 @@
     if (utilOutOfRange(pct)) {
       return '<div class="bar" title="无效"></div>';
     }
+    if (pct === null || pct === undefined || pct === "" || Number.isNaN(Number(pct))) {
+      return '<div class="bar" title="无采样"></div>';
+    }
     const v = Math.max(0, Math.min(100, Number(pct) || 0));
     return (
       '<div class="bar" title="' +
@@ -1793,6 +1796,9 @@ function renderHosts(hosts) {
           escapeHtml(n.vendor_label || n.vendor || "-") +
           "</td><td>" +
           escapeHtml(n.name || "-") +
+          (n.note
+            ? '<div class="muted">' + escapeHtml(n.note) + "</div>"
+            : "") +
           "</td><td>" +
           escapeHtml(n.health || "-") +
           "</td><td>" +

@@ -505,6 +505,71 @@ class UpgradeCenterTests(unittest.TestCase):
         self.assertIn("检查通过（未改动安装目录）", out)
         self._assert_install_untouched(inode, live)
 
+    def test_presync_suite_does_not_stop_monitor_agent(self) -> None:
+        """升级脚本的预同步测试必须打到假 systemctl，不能 stop/restart monitor-agent。"""
+        lib = os.path.join(ROOT, "scripts", "lib", "sync_tree.sh")
+        sandbox = os.path.join(ROOT, "scripts", "lib", "sandbox.sh")
+        with open(lib, encoding="utf-8") as fh:
+            sync_src = fh.read()
+        with open(sandbox, encoding="utf-8") as fh:
+            sandbox_src = fh.read()
+        inner = textwrap.dedent(
+            """
+            import os
+            import subprocess
+            import tempfile
+            import unittest
+
+            class Stop(unittest.TestCase):
+                def test_calls_stop_previous_agent(self):
+                    root = os.getcwd()
+                    lib = os.path.join(root, "scripts", "lib", "sync_tree.sh")
+                    dst = tempfile.mkdtemp(prefix="agent-run-")
+                    proc = subprocess.run(
+                        [
+                            "bash", "-c",
+                            '. "$1"; stop_previous_agent "$2"; systemctl is-active monitor-agent; systemctl is-active monitor-center',
+                            "bash", lib, dst,
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        universal_newlines=True,
+                        stdin=subprocess.DEVNULL,
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stdout)
+            """
+        )
+        self._package(
+            {
+                "build-id.txt": "brand-new-marker\n",
+                "tests/test_stop_host_unit.py": inner,
+                "scripts/lib/sync_tree.sh": sync_src,
+                "scripts/lib/sandbox.sh": sandbox_src,
+            }
+        )
+        log = os.path.join(self.tmp, "suite-commands.log")
+        env = dict(self.base_env)
+        env["MONITOR_TEST_FAKE_LOG"] = log
+        proc = self._run(["--check-only"], env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("检查通过（未改动安装目录）", proc.stdout)
+        self.assertIn("monitor-agent", proc.stdout)
+        self.assertIn("仍为 active", proc.stdout)
+        with open(log, encoding="utf-8") as fh:
+            calls = fh.read()
+        self.assertIn("is-active", calls)
+        self.assertNotIn("stop monitor-agent", calls)
+        self.assertNotIn("restart monitor-agent", calls)
+        self.assertNotIn("stop monitor-center", calls)
+        self.assertNotIn("restart monitor-center", calls)
+        with open(self.syslog, encoding="utf-8") as fh:
+            syslog = fh.read()
+        self.assertNotIn("stop monitor-agent", syslog)
+        self.assertNotIn("restart monitor-agent", syslog)
+        self.assertNotIn("restart monitor-center", syslog)
+        with open(os.path.join(self.install, "build-id.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "old-marker")
+
     def test_health_rollback_keeps_data_and_failed_tree(self) -> None:
         live = os.path.join(self.install, "data", "live-only.txt")
         during = os.path.join(self.install, "data", "written-during-upgrade")

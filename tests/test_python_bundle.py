@@ -324,6 +324,7 @@ class BundleShellTests(unittest.TestCase):
             "scripts/push_python_bundles.sh",
             "scripts/lib/python_bundle.sh",
             "scripts/lib/ssh_cmd.sh",
+            "scripts/lib/sandbox.sh",
             "scripts/deploy_agent.sh",
             "scripts/deploy_fleet.sh",
         ):

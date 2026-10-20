@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import shlex
 import shutil
@@ -843,18 +844,63 @@ class PackageTreeTests(unittest.TestCase):
         finally:
             shutil.rmtree(parent, ignore_errors=True)
 
+    def _fake_tool(self, directory, name, body):
+        path = os.path.join(directory, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(path, 0o755)
+        return path
+
+    def _stop_env(self, fake_bin, home, extra=None):
+        env = os.environ.copy()
+        env["PATH"] = fake_bin + os.pathsep + "/usr/bin:/bin"
+        env["HOME"] = home
+        env["MONITOR_TEST_SANDBOX"] = "1"
+        env["MONITOR_CLEANUP_SKIP_SYSTEMCTL"] = "1"
+        env["MONITOR_CLEANUP_SKIP_PKILL"] = "1"
+        env["MONITOR_AGENT_PID_DIRS"] = ""
+        env.pop("MONITOR_TEST_FAKE_LOG", None)
+        if extra:
+            env.update(extra)
+        return env
+
     def test_stop_previous_agent_kills_pidfile(self) -> None:
         dst = tempfile.mkdtemp(prefix="agent-run-")
+        home = tempfile.mkdtemp(prefix="agent-home-")
+        fake = tempfile.mkdtemp(prefix="agent-fake-")
+        log = os.path.join(fake, "calls.log")
         proc = None
+        home_proc = None
         try:
+            self._fake_tool(
+                fake,
+                "systemctl",
+                "#!/bin/bash\nprintf 'systemctl %%s\\n' \"$*\" >> %s\nexit 0\n" % json.dumps(log),
+            )
+            self._fake_tool(
+                fake,
+                "pkill",
+                "#!/bin/bash\nprintf 'pkill %%s\\n' \"$*\" >> %s\nexit 0\n" % json.dumps(log),
+            )
+            self._fake_tool(
+                fake,
+                "kill",
+                "#!/bin/bash\nprintf 'kill %%s\\n' \"$*\" >> %s\nexec /bin/kill \"$@\"\n"
+                % json.dumps(log),
+            )
             os.makedirs(os.path.join(dst, "run"))
             proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
             with open(os.path.join(dst, "run", "agent.pid"), "w", encoding="utf-8") as f:
                 f.write(str(proc.pid))
+            # 家目录里的旧 pid 不在覆盖列表里，不能被停掉。
+            home_agent = os.path.join(home, "monitor", "run")
+            os.makedirs(home_agent)
+            home_proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
+            with open(os.path.join(home_agent, "agent.pid"), "w", encoding="utf-8") as f:
+                f.write(str(home_proc.pid))
             script = textwrap.dedent(
                 """
                 set -euo pipefail
-                export MONITOR_CLEANUP_SKIP_PKILL=1
                 . "{root}/scripts/lib/sync_tree.sh"
                 stop_previous_agent "{dst}"
                 """
@@ -865,15 +911,131 @@ class PackageTreeTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=self._stop_env(fake, home),
             )
             self.assertEqual(out.returncode, 0, out.stdout)
+            self.assertIn("跳过 systemctl", out.stdout)
             proc.wait(timeout=5)
-            self.assertNotEqual(proc.returncode, None)
+            self.assertIsNotNone(proc.returncode)
+            self.assertFalse(os.path.isfile(os.path.join(dst, "run", "agent.pid")))
+            self.assertIsNone(home_proc.poll())
+            with open(log, encoding="utf-8") as fh:
+                calls = fh.read()
+            self.assertNotIn("systemctl", calls)
+            self.assertNotIn("pkill", calls)
+            self.assertIn(str(proc.pid), calls)
+        finally:
+            for item in (proc, home_proc):
+                if item is not None and item.poll() is None:
+                    item.kill()
+                    item.wait(timeout=5)
+            shutil.rmtree(dst, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
+            shutil.rmtree(fake, ignore_errors=True)
+
+    def test_stop_previous_agent_calls_systemctl_without_sandbox(self) -> None:
+        dst = tempfile.mkdtemp(prefix="agent-run-")
+        home = tempfile.mkdtemp(prefix="agent-home-")
+        fake = tempfile.mkdtemp(prefix="agent-fake-")
+        log = os.path.join(fake, "calls.log")
+        proc = None
+        try:
+            self._fake_tool(
+                fake,
+                "systemctl",
+                "#!/bin/bash\nprintf 'systemctl %%s\\n' \"$*\" >> %s\nexit 0\n" % json.dumps(log),
+            )
+            self._fake_tool(
+                fake,
+                "pkill",
+                "#!/bin/bash\nprintf 'pkill %%s\\n' \"$*\" >> %s\nexit 0\n" % json.dumps(log),
+            )
+            self._fake_tool(
+                fake,
+                "kill",
+                "#!/bin/bash\nprintf 'kill %%s\\n' \"$*\" >> %s\nexec /bin/kill \"$@\"\n"
+                % json.dumps(log),
+            )
+            os.makedirs(os.path.join(dst, "run"))
+            proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
+            with open(os.path.join(dst, "run", "agent.pid"), "w", encoding="utf-8") as f:
+                f.write(str(proc.pid))
+            env = self._stop_env(fake, home)
+            env.pop("MONITOR_TEST_SANDBOX", None)
+            env.pop("MONITOR_CLEANUP_SKIP_SYSTEMCTL", None)
+            env.pop("MONITOR_CLEANUP_SKIP_PKILL", None)
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                stop_previous_agent "{dst}"
+                """
+            ).format(root=ROOT, dst=dst)
+            out = subprocess.run(
+                ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(out.returncode, 0, out.stdout)
+            with open(log, encoding="utf-8") as fh:
+                calls = fh.read()
+            self.assertIn("systemctl stop monitor-agent", calls)
+            proc.wait(timeout=5)
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            shutil.rmtree(dst, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
+            shutil.rmtree(fake, ignore_errors=True)
+
+    def test_sandbox_refuses_real_systemctl_and_nontemp_dir(self) -> None:
+        home = tempfile.mkdtemp(prefix="agent-home-")
+        dst = tempfile.mkdtemp(prefix="agent-run-")
+        proc = None
+        try:
+            os.makedirs(os.path.join(dst, "run"))
+            proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
+            with open(os.path.join(dst, "run", "agent.pid"), "w", encoding="utf-8") as f:
+                f.write(str(proc.pid))
+            env = os.environ.copy()
+            env["PATH"] = "/usr/bin:/bin"
+            env["HOME"] = home
+            env["MONITOR_TEST_SANDBOX"] = "1"
+            env.pop("MONITOR_CLEANUP_SKIP_SYSTEMCTL", None)
+            env.pop("MONITOR_CLEANUP_SKIP_PKILL", None)
+            env["MONITOR_AGENT_PID_DIRS"] = "/etc"
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+                . "{root}/scripts/lib/sync_tree.sh"
+                stop_previous_agent "{dst}"
+                """
+            ).format(root=ROOT, dst=dst)
+            out = subprocess.run(
+                ["bash", "-c", script],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(out.returncode, 0, out.stdout)
+            self.assertIn("拒绝在非临时目录停止进程", out.stdout)
+            if shutil.which("systemctl"):
+                self.assertIn("拒绝调用真实 systemctl", out.stdout)
+            proc.wait(timeout=5)
+            self.assertIsNotNone(proc.returncode)
             self.assertFalse(os.path.isfile(os.path.join(dst, "run", "agent.pid")))
         finally:
             if proc is not None and proc.poll() is None:
                 proc.kill()
+                proc.wait(timeout=5)
             shutil.rmtree(dst, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
 
     def test_sync_agent_tree_fails_without_agent(self) -> None:
         src = tempfile.mkdtemp(prefix="agent-miss-")

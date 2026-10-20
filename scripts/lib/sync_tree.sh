@@ -12,8 +12,17 @@
 # 测试用环境变量（生产勿设）：
 #   MONITOR_SYNC_DISABLE_RSYNC=1  假装没有 rsync
 #   MONITOR_SYNC_DISABLE_TAR=1    假装没有 tar
+#   MONITOR_TEST_SANDBOX=1        拒绝真实 systemctl/pkill，以及非临时目录上的 kill
+#   MONITOR_CLEANUP_SKIP_SYSTEMCTL=1  不执行 systemctl stop monitor-agent
+#   MONITOR_CLEANUP_SKIP_PKILL=1  不执行 pkill
+#   MONITOR_AGENT_PID_DIRS        冒号分隔。一旦设置（含空串），只停调用方目录和这份列表，
+#                                 不再扫 $HOME/monitor、$HOME/monitor-agent、/opt/monitor-agent、/opt/monitor
 #
 # shellcheck shell=bash
+
+_SYNC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=sandbox.sh
+. "$_SYNC_LIB_DIR/sandbox.sh"
 
 _sync_abspath() {
   local p="$1"
@@ -276,13 +285,17 @@ _stop_agent_pidfile() {
   local dir="$1"
   local pid=""
   [[ -n "$dir" && -f "$dir/run/agent.pid" ]] || return 0
+  if monitor_sandbox_deny_kill_path "$dir"; then
+    return 0
+  fi
   pid="$(tr -d ' \t\n' < "$dir/run/agent.pid" 2>/dev/null || true)"
-  if [[ -n "${pid:-}" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+  # env：避开 bash 内建 kill，测试才能把 PATH 里的假 kill 放到前面。
+  if [[ -n "${pid:-}" && "$pid" =~ ^[0-9]+$ ]] && env kill -0 "$pid" 2>/dev/null; then
     echo "[cleanup] 停止进程 pid=$pid ($dir)"
-    kill "$pid" 2>/dev/null || true
+    env kill "$pid" 2>/dev/null || true
     sleep 1
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -9 "$pid" 2>/dev/null || true
+    if env kill -0 "$pid" 2>/dev/null; then
+      env kill -9 "$pid" 2>/dev/null || true
     fi
   fi
   rm -f "$dir/run/agent.pid"
@@ -293,20 +306,45 @@ _stop_agent_pidfile() {
 stop_previous_agent() {
   local install_dir="${1:-}"
   local d
+  local -a dirs=()
+  local -a extra=()
   echo "[cleanup] 停止旧 Agent，再覆盖安装目录"
-  if command -v systemctl >/dev/null 2>&1; then
+  if [[ "${MONITOR_CLEANUP_SKIP_SYSTEMCTL:-}" == "1" ]]; then
+    echo "[cleanup] 跳过 systemctl stop monitor-agent"
+  elif monitor_sandbox_deny_tool systemctl; then
+    true
+  elif command -v systemctl >/dev/null 2>&1; then
     systemctl stop monitor-agent >/dev/null 2>&1 || true
   fi
-  for d in "$install_dir" \
-           "${HOME}/monitor-agent" \
-           "${HOME}/monitor" \
-           /opt/monitor-agent \
-           /opt/monitor; do
+  if [[ -n "${MONITOR_AGENT_PID_DIRS+x}" ]]; then
+    dirs=("$install_dir")
+    IFS=':' read -r -a extra <<< "${MONITOR_AGENT_PID_DIRS}"
+    for d in "${extra[@]}"; do
+      [[ -n "${d:-}" ]] || continue
+      dirs+=("$d")
+    done
+  else
+    dirs=(
+      "$install_dir"
+      "${HOME:-}/monitor-agent"
+      "${HOME:-}/monitor"
+      /opt/monitor-agent
+      /opt/monitor
+    )
+  fi
+  for d in "${dirs[@]}"; do
     [[ -n "${d:-}" && -d "$d" ]] || continue
+    if monitor_sandbox_deny_kill_path "$d"; then
+      continue
+    fi
     _stop_agent_pidfile "$d"
   done
   if [[ -z "${MONITOR_CLEANUP_SKIP_PKILL:-}" ]]; then
-    pkill -f '[Pp]ython[0-9.]* -m agent' >/dev/null 2>&1 || true
+    if monitor_sandbox_deny_tool pkill; then
+      true
+    else
+      pkill -f '[Pp]ython[0-9.]* -m agent' >/dev/null 2>&1 || true
+    fi
   fi
 }
 
