@@ -58,6 +58,8 @@
 
   const el = {
     anomalySummary: document.getElementById("anomalySummary"),
+    attentionList: document.getElementById("attentionList"),
+    attentionNames: document.getElementById("attentionNames"),
     stats: document.getElementById("stats"),
     hostBody: document.getElementById("hostBody"),
     hostCount: document.getElementById("hostCount"),
@@ -103,6 +105,18 @@
   let reportPeriod = "day";
   let activeReportId = null;
   let activeReport = null;
+  let attentionKey = "";
+  const UX = window.MonitorUX || {
+    accelHealthLabel: function (health) {
+      return health || "-";
+    },
+    attentionTags: function () {
+      return [];
+    },
+    parseLocationHash: function () {
+      return { tab: "realtime", hostId: "", focus: "" };
+    },
+  };
 
   function fmtPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
@@ -702,10 +716,30 @@
     return allHosts.find((h) => h.host_id === id) || null;
   }
 
+  function locationState() {
+    return UX.parseLocationHash(location.hash);
+  }
+
   function tabFromHash() {
-    if (location.hash === "#period") return "period";
-    if (location.hash === "#reports") return "reports";
-    return "realtime";
+    return locationState().tab;
+  }
+
+  function syncShellNav() {
+    const parsed = locationState();
+    const key =
+      parsed.tab === "reports" ? "reports" : parsed.focus === "hosts" ? "hosts" : "overview";
+    Array.from(document.querySelectorAll(".shell-link")).forEach((link) => {
+      const on = link.getAttribute("data-shell") === key;
+      link.classList.toggle("active", on);
+      if (on) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
+  }
+
+  function replaceHash(hash) {
+    if (location.hash === hash) return;
+    if (history.replaceState) history.replaceState(null, "", hash);
+    else location.hash = hash.replace(/^#/, "");
   }
 
   function applyTabVisibility(next) {
@@ -726,15 +760,9 @@
     const fromHash = opts && opts.fromHash;
     applyTabVisibility(next);
     if (!fromHash) {
-      const hash = "#" + next;
-      if (location.hash !== hash) {
-        if (history.replaceState) {
-          history.replaceState(null, "", hash);
-        } else {
-          location.hash = next;
-        }
-      }
+      replaceHash("#" + next);
     }
+    syncShellNav();
     if (next === "period") {
       loadPeriodUtil();
       if (selectedId) loadPeriodHostDetail(selectedId);
@@ -1283,21 +1311,134 @@
     return html;
   }
 
+  function hostAttention(h) {
+    return UX.attentionTags(h, thresholds);
+  }
+
+  function hostJumpButton(label, hostId) {
+    if (!hostId) return escapeHtml(label);
+    return (
+      '<button type="button" class="host-jump" data-host-id="' +
+      encodeURIComponent(hostId) +
+      '">' +
+      escapeHtml(label) +
+      "</button>"
+    );
+  }
+
+  function openHost(id) {
+    if (!id) return;
+    selectedId = id;
+    replaceHash("#host=" + encodeURIComponent(id));
+    if (currentTab !== "realtime") {
+      setTab("realtime", { fromHash: true });
+    } else {
+      loadDetail(selectedId);
+      syncShellNav();
+    }
+    renderHosts(allHosts);
+    const row =
+      el.hostBody &&
+      el.hostBody.querySelector('tr[data-id="' + encodeURIComponent(id) + '"]');
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+  }
+
+  function renderAttention(hosts) {
+    if (!el.attentionList) return;
+    const defs = [
+      ["offline", "离线"],
+      ["disk", "磁盘快满"],
+      ["accel", "卡异常"],
+      ["load", "高负载"],
+    ];
+    const buckets = { offline: [], disk: [], accel: [], load: [] };
+    (hosts || []).forEach((h) => {
+      hostAttention(h).forEach((tag) => {
+        if (buckets[tag]) buckets[tag].push(h);
+      });
+    });
+    el.attentionList.innerHTML = defs
+      .map((pair) => {
+        const key = pair[0];
+        const label = pair[1];
+        const on = attentionKey === key ? " active" : "";
+        return (
+          '<button type="button" class="attention-chip' +
+          on +
+          '" data-attention="' +
+          key +
+          '">' +
+          label +
+          '<span class="count">' +
+          buckets[key].length +
+          "</span></button>"
+        );
+      })
+      .join("");
+    const shown = attentionKey ? buckets[attentionKey] || [] : [];
+    const names = [];
+    const seen = {};
+    shown.forEach((h) => {
+      if (!h || seen[h.host_id]) return;
+      seen[h.host_id] = true;
+      names.push(h);
+    });
+    if (!el.attentionNames) return;
+    if (!attentionKey) {
+      el.attentionNames.innerHTML =
+        '<span class="muted">点上面的数字可筛到主机表。点主机名打开详情。</span>';
+      return;
+    }
+    if (!names.length) {
+      el.attentionNames.innerHTML = '<span class="muted">这一类现在没有主机。</span>';
+      return;
+    }
+    el.attentionNames.innerHTML = names
+      .slice(0, 12)
+      .map((h) => {
+        const label = h.address || h.hostname || h.host_id;
+        return (
+          '<button type="button" class="attention-name" data-host-id="' +
+          encodeURIComponent(h.host_id) +
+          '">' +
+          escapeHtml(label) +
+          "</button>"
+        );
+      })
+      .join("");
+    if (names.length > 12) {
+      el.attentionNames.innerHTML +=
+        '<span class="muted">另有 ' + (names.length - 12) + " 台，用筛选看全表</span>";
+    }
+  }
+
   function renderAnomalySummary(data) {
     if (data && data.thresholds) {
       thresholds = Object.assign({}, thresholds, data.thresholds);
     }
     const s = (data && data.summary) || {};
+    const current = el.filterStatus ? el.filterStatus.value : "";
+    function anomalyPill(level, label, count) {
+      const on = current === level ? " active" : "";
+      return (
+        '<button type="button" class="pill ' +
+        level +
+        on +
+        '" data-anomaly="' +
+        level +
+        '">' +
+        label +
+        " " +
+        (count || 0) +
+        "</button>"
+      );
+    }
     el.anomalySummary.innerHTML =
-      '<span class="pill normal">正常 ' +
-      (s.normal || 0) +
-      '</span><span class="pill warn">偏高 ' +
-      (s.warn || 0) +
-      '</span><span class="pill critical">异常 ' +
-      (s.critical || 0) +
-      '</span><span class="pill unknown">未知/离线 ' +
-      (s.unknown || 0) +
-      '</span><span class="muted threshold-hint">阈值：CPU≥' +
+      anomalyPill("normal", "正常", s.normal) +
+      anomalyPill("warn", "偏高", s.warn) +
+      anomalyPill("critical", "异常", s.critical) +
+      anomalyPill("unknown", "未知/离线", s.unknown) +
+      '<span class="muted threshold-hint">阈值：CPU≥' +
       (thresholds.cpu_warn_percent || 80) +
       "% 黄 / ≥" +
       (thresholds.cpu_critical_percent || 95) +
@@ -1361,6 +1502,7 @@
         } else if (ownerFilter && (h.owner || "") !== ownerFilter) {
           return false;
         }
+        if (attentionKey && hostAttention(h).indexOf(attentionKey) < 0) return false;
         if (!q) return true;
         const asset = h.asset || {};
         const hay = [
@@ -1395,14 +1537,18 @@
 
 function renderHosts(hosts) {
     allHosts = hosts || [];
+    renderAttention(allHosts);
     fillOwnerFilter();
     const view = filteredHosts();
     el.hostCount.textContent = "显示 " + view.length + " / " + allHosts.length;
     const hostTable = el.hostBody && el.hostBody.closest("table");
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
+      const hint = attentionKey
+        ? "今日关注里这一类没有主机"
+        : "无匹配主机（可调整筛选或部署 Agent）";
       el.hostBody.innerHTML =
-        '<tr><td colspan="15" class="muted">无匹配主机（可调整筛选或部署 Agent）</td></tr>';
+        '<tr><td colspan="15" class="muted">' + hint + "</td></tr>";
       return;
     }
     el.hostBody.innerHTML = view
@@ -1486,12 +1632,7 @@ function renderHosts(hosts) {
 
     Array.from(el.hostBody.querySelectorAll("tr[data-id]")).forEach((tr) => {
       tr.addEventListener("click", () => {
-        selectedId = decodeURIComponent(tr.getAttribute("data-id"));
-        loadDetail(selectedId);
-        Array.from(el.hostBody.querySelectorAll("tr")).forEach((r) =>
-          r.classList.remove("active")
-        );
-        tr.classList.add("active");
+        openHost(decodeURIComponent(tr.getAttribute("data-id")));
       });
     });
     Array.from(el.hostBody.querySelectorAll(".host-group-select")).forEach((sel) => {
@@ -1800,7 +1941,11 @@ function renderHosts(hosts) {
             ? '<div class="muted">' + escapeHtml(n.note) + "</div>"
             : "") +
           "</td><td>" +
-          escapeHtml(n.health || "-") +
+          '<span title="原始健康：' +
+          escapeHtml(n.health || "未上报") +
+          '">' +
+          escapeHtml(UX.accelHealthLabel(n.health, n.note)) +
+          "</span>" +
           "</td><td>" +
           (coreN == null ? "-" : coreN) +
           "</td><td>" +
@@ -2371,7 +2516,10 @@ function renderHosts(hosts) {
       renderAnomalySummary(await anomalyRes.json());
       const hostsData = await hostsRes.json();
       const hosts = hostsData.hosts || [];
-      if (!selectedId && hosts.length) {
+      const wanted = locationState().hostId;
+      if (wanted && hosts.some((h) => h.host_id === wanted)) {
+        selectedId = wanted;
+      } else if (!selectedId && hosts.length) {
         selectedId = hosts[0].host_id;
       }
       renderHosts(hosts);
@@ -2468,10 +2616,16 @@ function renderHosts(hosts) {
           html += "<th>" + escapeHtml(h) + "</th>";
         });
         html += "</tr></thead><tbody>";
-        (table.rows || []).forEach((row) => {
+        const hostIds = table.host_ids || [];
+        (table.rows || []).forEach((row, rowIndex) => {
+          const hostId = hostIds[rowIndex] || "";
           html += "<tr>";
           headers.forEach((_, i) => {
-            html += "<td>" + escapeHtml(row[i] == null ? "" : row[i]) + "</td>";
+            const cell = row[i] == null ? "" : row[i];
+            html +=
+              "<td>" +
+              (i === 0 ? hostJumpButton(cell, hostId) : escapeHtml(cell)) +
+              "</td>";
           });
           html += "</tr>";
         });
@@ -2482,6 +2636,11 @@ function renderHosts(hosts) {
       });
     });
     el.reportPreview.innerHTML = html;
+    Array.from(el.reportPreview.querySelectorAll(".host-jump")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        openHost(decodeURIComponent(btn.getAttribute("data-host-id") || ""));
+      });
+    });
     if (el.reportActions) {
       const id = report.id;
       el.reportActions.innerHTML =
@@ -2753,15 +2912,67 @@ function renderHosts(hosts) {
   if (el.btnGenerateReport) {
     el.btnGenerateReport.addEventListener("click", () => generateReport());
   }
+  if (el.anomalySummary) {
+    el.anomalySummary.addEventListener("click", (ev) => {
+      const btn = ev.target.closest && ev.target.closest("button[data-anomaly]");
+      if (!btn || !el.filterStatus) return;
+      const level = btn.getAttribute("data-anomaly") || "";
+      el.filterStatus.value = el.filterStatus.value === level ? "" : level;
+      attentionKey = "";
+      renderHosts(allHosts);
+      Array.from(el.anomalySummary.querySelectorAll("button[data-anomaly]")).forEach((item) => {
+        item.classList.toggle("active", item.getAttribute("data-anomaly") === el.filterStatus.value);
+      });
+    });
+  }
+  const attentionRoot = document.getElementById("attention");
+  if (attentionRoot) {
+    attentionRoot.addEventListener("click", (ev) => {
+      const chip = ev.target.closest && ev.target.closest("button[data-attention]");
+      const nameBtn = ev.target.closest && ev.target.closest(".attention-name");
+      if (chip) {
+        const key = chip.getAttribute("data-attention") || "";
+        attentionKey = attentionKey === key ? "" : key;
+        if (attentionKey && el.filterStatus) {
+          el.filterStatus.value = "";
+          if (el.anomalySummary) {
+            Array.from(el.anomalySummary.querySelectorAll("button[data-anomaly]")).forEach(
+              (item) => item.classList.remove("active")
+            );
+          }
+        }
+        renderHosts(allHosts);
+        return;
+      }
+      if (nameBtn) {
+        openHost(decodeURIComponent(nameBtn.getAttribute("data-host-id") || ""));
+      }
+    });
+  }
   window.addEventListener("hashchange", () => {
-    const name = tabFromHash();
-    if (name !== currentTab) setTab(name, { fromHash: true });
+    const parsed = locationState();
+    if (parsed.tab !== currentTab) setTab(parsed.tab, { fromHash: true });
+    else syncShellNav();
+    if (parsed.hostId && parsed.hostId !== selectedId) {
+      selectedId = parsed.hostId;
+      renderHosts(allHosts);
+      if (currentTab === "realtime") loadDetail(selectedId);
+    }
+    if (parsed.focus === "hosts") {
+      const table = document.getElementById("hostTable");
+      if (table && table.scrollIntoView) table.scrollIntoView({ block: "start" });
+    }
   });
   renderPeriodControls();
   applyTabVisibility(tabFromHash());
+  syncShellNav();
   if (tabFromHash() === "reports") {
     loadReportList();
     refreshReportWindowHint();
+  }
+  if (locationState().focus === "hosts") {
+    const table = document.getElementById("hostTable");
+    if (table && table.scrollIntoView) table.scrollIntoView({ block: "start" });
   }
   refresh();
   setInterval(refresh, REFRESH_MS);

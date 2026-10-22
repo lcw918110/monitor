@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from center.status_text import accel_health_label
 from center.storage import Storage
 
 
@@ -313,7 +314,8 @@ def judge_host_payload(
                     "resource": "accel",
                     "level": level,
                     "code": "accel_health",
-                    "message": "%s#%s Health=%s" % (vendor, idx, n.get("health")),
+                    "message": "%s#%s %s"
+                    % (vendor, idx, accel_health_label(n.get("health"), n.get("note"))),
                     "value": n.get("health"),
                 }
             )

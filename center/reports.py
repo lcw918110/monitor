@@ -421,14 +421,21 @@ def _add_table(
     headers: List[str],
     rows: List[List[Any]],
     caption: str = "",
+    host_ids: Optional[List[Any]] = None,
 ) -> None:
-    section["tables"].append(
-        {
-            "caption": caption,
-            "headers": headers,
-            "rows": [[_cell(c) for c in row] for row in rows],
-        }
-    )
+    cleaned = [[_cell(c) for c in row] for row in rows]
+    table: Dict[str, Any] = {
+        "caption": caption,
+        "headers": headers,
+        "rows": cleaned,
+    }
+    # 与 rows 对齐。空串表示这一行不是单台主机。Markdown 不输出该字段。
+    if host_ids is not None:
+        ids = [str(item or "") for item in host_ids]
+        if len(ids) < len(cleaned):
+            ids.extend([""] * (len(cleaned) - len(ids)))
+        table["host_ids"] = ids[: len(cleaned)]
+    section["tables"].append(table)
 
 
 def render_markdown(title: str, sections: List[Dict[str, Any]]) -> str:
@@ -970,6 +977,7 @@ def build_report(
         _rank_headers(),
         [_rank_row(h) for h in cpu_top] or [["样本不足"] * len(_rank_headers())],
         caption="CPU 繁忙或 P95",
+        host_ids=[h.get("host_id") or "" for h in cpu_top] or [""],
     )
     if accel_hosts:
         _add_table(
@@ -977,9 +985,13 @@ def build_report(
             _rank_headers(),
             [_rank_row(h) for h in accel_top],
             caption="加速卡繁忙或 P95",
+            host_ids=[h.get("host_id") or "" for h in accel_top],
         )
     else:
         ranks["notes"].append("加速卡排行：无加速卡或样本不足。")
+    disk_rank_hosts = [
+        h for h in disk_top if _sample_count(_metric(h, "disk_percent"))
+    ]
     _add_table(
         ranks,
         ["磁盘占用（按窗口内最高）", "最高", "平均", "最满挂载"],
@@ -992,10 +1004,10 @@ def build_report(
                 if float(_metric(h, "disk_percent").get("max") or 0) >= disk_warn
                 else "未单列挂载（未到容量偏高）",
             ]
-            for h in disk_top
-            if _sample_count(_metric(h, "disk_percent"))
+            for h in disk_rank_hosts
         ]
         or [["样本不足", "样本不足", "样本不足", "样本不足"]],
+        host_ids=[h.get("host_id") or "" for h in disk_rank_hosts] or [""],
     )
     if mem_high:
         _add_table(
@@ -1010,10 +1022,12 @@ def build_report(
                 ]
                 for h in mem_high[:8]
             ],
+            host_ids=[h.get("host_id") or "" for h in mem_high[:8]],
         )
     else:
         ranks["notes"].append("内存偏高：无主机在样本足够时达到平均或 P95 ≥85%。内存不进入闲忙。")
     anomaly_rows: List[List[str]] = []
+    anomaly_ids: List[str] = []
     for host in offline_hosts:
         anomaly_rows.append(
             [
@@ -1024,6 +1038,7 @@ def build_report(
                 % (_fmt_ts(host.get("last_seen")), host.get("sample_count") or 0),
             ]
         )
+        anomaly_ids.append(str(host.get("host_id") or ""))
     for host, message in live_findings:
         anomaly_rows.append(
             [
@@ -1033,8 +1048,14 @@ def build_report(
                 message + "（这是生成时刻的在线快照，不是窗口平均）",
             ]
         )
+        anomaly_ids.append(str(host.get("host_id") or ""))
     if anomaly_rows:
-        _add_table(ranks, ["异常 / 离线", "资源组", "类别", "说明"], anomaly_rows)
+        _add_table(
+            ranks,
+            ["异常 / 离线", "资源组", "类别", "说明"],
+            anomaly_rows,
+            host_ids=anomaly_ids,
+        )
     else:
         ranks["notes"].append("异常 / 离线：无离线主机，当前在线主机也没有偏高或异常判定。")
     sections.append(ranks)
@@ -1067,6 +1088,7 @@ def build_report(
                 ]
                 for c in high_rows
             ],
+            host_ids=[c["host"].get("host_id") or "" for c in high_rows],
         )
     else:
         poles["notes"].append("高负荷：无主机达到繁忙占比 ≥40% 或 P95 ≥85%（样本足够时）。")
@@ -1092,6 +1114,7 @@ def build_report(
                 ]
                 for c in idle_rows
             ],
+            host_ids=[c["host"].get("host_id") or "" for c in idle_rows],
         )
     else:
         poles["notes"].append("基本不用：没有同时满足在线、样本足够且 CPU/加速卡都低于 5% 的主机。")
@@ -1107,6 +1130,7 @@ def build_report(
                 ]
                 for c in insufficient_rows
             ],
+            host_ids=[c["host"].get("host_id") or "" for c in insufficient_rows],
         )
     summary_bits = [
         "高负荷 %d 台，基本不用 %d 台。基本不用只统计当前在线、样本足够、且未落入高负荷的主机。"
@@ -1154,6 +1178,7 @@ def build_report(
                 ]
                 for h in rows_hosts
             ],
+            host_ids=[h.get("host_id") or "" for h in rows_hosts],
         )
 
     _disk_table("≥%.0f%%" % disk_critical, disk_critical_hosts)
@@ -1288,6 +1313,7 @@ def build_report(
             for h in preview_hosts
         ]
         or [["样本不足"] * 10],
+        host_ids=[h.get("host_id") or "" for h in preview_hosts] or [""],
     )
     if len(hosts) > len(preview_hosts):
         appendix["notes"].append("附录表格仅列出前 100 台，其余见 CSV。")
