@@ -71,6 +71,105 @@ html, body {
   justify-content: flex-end;
 }
 
+.shell-nav {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.shell-link {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.shell-link:hover { color: var(--text); }
+
+.shell-link.active {
+  background: rgba(61, 156, 253, 0.18);
+  color: var(--text);
+}
+
+.attention {
+  margin: 12px 28px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elev);
+}
+
+.attention-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.attention h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.attention-row,
+.attention-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attention-row { margin-top: 10px; }
+
+.attention-names { margin-top: 8px; }
+
+button.attention-chip,
+button.attention-name,
+button.pill,
+button.host-jump {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button.attention-chip,
+button.attention-name {
+  border: 1px solid var(--line);
+  background: rgba(23, 30, 38, 0.9);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+button.attention-chip.active,
+button.pill.active {
+  border-color: var(--accent);
+  background: rgba(61, 156, 253, 0.18);
+  color: var(--text);
+}
+
+button.attention-chip .count {
+  font-weight: 650;
+  margin-left: 4px;
+}
+
+button.attention-name,
+button.host-jump {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  text-align: left;
+}
+
+button.host-jump:hover,
+button.attention-name:hover { text-decoration: underline; }
+
 .tabs {
   display: flex;
   gap: 4px;
@@ -137,6 +236,7 @@ html, body {
   padding: 6px 12px;
   font-size: 12px;
   background: rgba(23, 30, 38, 0.9);
+  color: inherit;
 }
 
 .pill.normal { color: var(--ok); border-color: rgba(47,191,113,.4); }

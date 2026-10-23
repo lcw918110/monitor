@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/unit_env.sh"
 # shellcheck source=lib/python_min.sh
 . "$SCRIPT_DIR/lib/python_min.sh"
+# shellcheck source=lib/backup_prune.sh
+. "$SCRIPT_DIR/lib/backup_prune.sh"
 
 INSTALL_DIR="${MONITOR_UPGRADE_DIR:-/opt/monitor}"
 SHA=""
@@ -433,7 +435,8 @@ prune_backups() {
     return 0
   fi
   local sorted remove_count i=0
-  sorted="$(printf '%s\n' "${dirs[@]}" | sort)"
+  # 紧凑时间戳和 YYYYMMDD-HHMMSS 不能按字典序删，否则带横线的较新备份会先被清掉。
+  sorted="$(backup_paths_oldest_first "$base" "${dirs[@]}")"
   remove_count=$(( ${#dirs[@]} - KEEP_BACKUPS ))
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue

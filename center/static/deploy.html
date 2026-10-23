@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>客户端自动部署</title>
+  <title>运维 · 客户端部署</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -11,12 +11,17 @@
     <div class="brand">
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
-        <h1>客户端自动部署</h1>
-        <p class="sub">配置目标机信息，一键 SSH 部署 Agent</p>
+        <h1>简易多机监控</h1>
+        <p class="sub">运维 · 客户端部署 · v1.10.0</p>
       </div>
     </div>
+    <nav class="shell-nav" aria-label="主导航">
+      <a class="shell-link" href="/#realtime" data-shell="overview">总览</a>
+      <a class="shell-link" href="/#hosts" data-shell="hosts">主机</a>
+      <a class="shell-link" href="/#reports" data-shell="reports">诊断</a>
+      <a class="shell-link active" href="/deploy.html" data-shell="ops" aria-current="page">运维</a>
+    </nav>
     <div class="top-meta">
-      <a class="link" href="/">返回监测台</a>
       <button type="button" id="btnRefresh" class="btn">刷新</button>
     </div>
   </header>

@@ -43,11 +43,18 @@ _sync_has_tar() {
   command -v tar >/dev/null 2>&1
 }
 
+# macOS tar 会把 AppleDouble 写进包。COPYFILE_DISABLE 关掉 copyfile，避免 ._ * 进 vendor。
+_sync_strip_appledouble() {
+  local dst="${1:-}"
+  [[ -n "$dst" && -d "$dst" ]] || return 0
+  find "$dst" \( -name '._*' -o -name '.DS_Store' \) -type f -exec rm -f {} \; 2>/dev/null || true
+}
+
 _sync_tar() {
   local src_abs="$1"
   local dst_abs="$2"
   # GNU / BSD / BusyBox tar 均支持 --exclude
-  tar -C "$src_abs" \
+  COPYFILE_DISABLE=1 tar -C "$src_abs" \
     --exclude=data \
     --exclude=config/center.json \
     --exclude=config/agent.json \
@@ -57,6 +64,8 @@ _sync_tar() {
     --exclude=\*.db \
     --exclude=vendor/python/\*.tar.gz \
     --exclude=vendor/python/\*.sha256 \
+    --exclude='._*' \
+    --exclude=.DS_Store \
     -cf - . | tar -C "$dst_abs" -xf -
 }
 
@@ -127,7 +136,10 @@ sync_tree() {
       --exclude '*.db' \
       --exclude 'vendor/python/*.tar.gz' \
       --exclude 'vendor/python/*.sha256' \
+      --exclude '._*' \
+      --exclude '.DS_Store' \
       "$src_abs/" "$dst_abs/"
+    _sync_strip_appledouble "$dst_abs"
     echo "[sync] method=rsync"
     return 0
   fi
@@ -140,6 +152,7 @@ sync_tree() {
 
   if _sync_has_tar; then
     if _sync_tar "$src_abs" "$dst_abs"; then
+      _sync_strip_appledouble "$dst_abs"
       echo "[sync] method=tar"
       return 0
     fi
@@ -148,6 +161,7 @@ sync_tree() {
 
   if command -v cp >/dev/null 2>&1; then
     _sync_copy_filtered "$src_abs" "$dst_abs"
+    _sync_strip_appledouble "$dst_abs"
     echo "[sync] method=cp"
     return 0
   fi
@@ -249,11 +263,12 @@ sync_agent_tree() {
     for name in agent common scripts; do
       rm -rf "$dst_abs/$name"
     done
-    if tar -C "$src_abs" \
+    if COPYFILE_DISABLE=1 tar -C "$src_abs" \
       --exclude=config/center.json \
       --exclude=config/agent.json \
       --exclude=__pycache__ \
       --exclude=\._\* \
+      --exclude=.DS_Store \
       --exclude=\*.db \
       -cf - "${names[@]}" | tar -C "$dst_abs" -xf -; then
       prune_agent_install_dir "$dst_abs"

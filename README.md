@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.9.5**
+当前版本：**v1.10.0**
 
 运行环境：
 
@@ -307,19 +307,19 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
-| **`docs/10-roadmap.md`** | **下一步待办（服务器实装 / 框架化 / 拓扑图 / 容量验证）** |
+| **`docs/10-roadmap.md`** | **下一步：体验 U1–U3、长期运维 O1–O7，以及实装 / 容量 / 框架化 / 拓扑** |
 
 ## 下一步（摘要）
 
-详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)：
+详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。v1.10.0 先把常见任务做顺，不新增监测能力：
 
-1. **测试部署到服务器使用**
-2. **框架化**：指标变化时尽量只改采集实现
-3. **拓扑 / 扩补图界面**：可视化全量链接信息
-4. **技术验证**：当前实现适合同时监控多少机器
+- **U1 总览与可读状态**（正在做）：顶栏总览 / 主机 / 诊断 / 运维，今日关注，白话状态，报告点回主机
+- **U2 运维闭环**：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
+- **U3 可选**：保存筛选、管理 API Token；报告推送本轮不做
+- **仍保留**：N1 服务器实装、N4 容量、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
 
 ## 自测
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd tests.test_period_util tests.test_reports
+PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd tests.test_period_util tests.test_reports tests.test_ux
 ```

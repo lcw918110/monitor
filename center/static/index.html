@@ -12,11 +12,16 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.9.5</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.10.0</p>
       </div>
     </div>
+    <nav class="shell-nav" aria-label="主导航">
+      <a class="shell-link active" href="#realtime" data-shell="overview">总览</a>
+      <a class="shell-link" href="#hosts" data-shell="hosts">主机</a>
+      <a class="shell-link" href="#reports" data-shell="reports">诊断</a>
+      <a class="shell-link" href="/deploy.html" data-shell="ops">运维</a>
+    </nav>
     <div class="top-meta">
-      <a class="link" href="/deploy.html">客户端部署</a>
       <a class="link" href="/api/v1/export/hosts.csv">导出 CSV</a>
       <a class="link" href="/api/v1/export/hosts.json">导出 JSON</a>
       <span id="refreshHint">自动刷新 15s</span>
@@ -31,6 +36,14 @@
   </nav>
 
   <div id="viewRealtime" class="tab-view" role="tabpanel" aria-labelledby="tabBtnRealtime">
+    <section class="attention" id="attention" aria-label="今日关注">
+      <div class="attention-head">
+        <h2>今日关注</h2>
+        <span class="muted" id="attentionHint">按当前快照。长期空闲仍看使用诊断。</span>
+      </div>
+      <div class="attention-row" id="attentionList"></div>
+      <div class="attention-names" id="attentionNames"></div>
+    </section>
     <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
     <section class="stats" id="stats" aria-label="集群统计"></section>
 
@@ -193,6 +206,7 @@
     <span>聚焦 CPU / NPU 监测与统计 · 异常仅判定展示 · 不引入外部监控软件</span>
   </footer>
 
+  <script src="/ux.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

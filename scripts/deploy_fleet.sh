@@ -72,12 +72,14 @@ fi
 PACK_NAMES=(agent common scripts)
 [[ -d "$ROOT/config" ]] && PACK_NAMES+=(config)
 [[ -f "$ROOT/README.md" ]] && PACK_NAMES+=(README.md)
-tar -C "$ROOT" -czf "$TMP_TGZ" \
+COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$TMP_TGZ" \
   --exclude '.git' \
   --exclude 'data' \
   --exclude '.deploy-*' \
   --exclude '__pycache__' \
   --exclude '*.db' \
+  --exclude '._*' \
+  --exclude '.DS_Store' \
   --exclude 'config/center.json' \
   --exclude 'config/agent.json' \
   "${PACK_NAMES[@]}"

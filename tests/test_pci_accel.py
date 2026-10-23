@@ -196,6 +196,12 @@ class PciAccelTests(unittest.TestCase):
             }
         )
         self.assertEqual((judged.get("accel") or {}).get("status"), "warn")
-        messages = " ".join(item.get("message") or "" for item in judged.get("findings") or [])
-        self.assertIn("abnormal", messages)
+        findings = judged.get("findings") or []
+        messages = " ".join(item.get("message") or "" for item in findings)
+        self.assertIn("硬件异常", messages)
+        self.assertNotIn("Health=", messages)
         self.assertNotIn("0.0%", messages)
+        health_values = [
+            item.get("value") for item in findings if item.get("code") == "accel_health"
+        ]
+        self.assertIn("abnormal", health_values)

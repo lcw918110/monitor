@@ -7,6 +7,7 @@ import socket
 import time
 from typing import Any, Dict, List, Optional
 
+from agent import __version__ as AGENT_VERSION
 from agent.metrics.accelerators import (
     collect_accelerators,
     collect_nvidia_processes,
@@ -74,7 +75,7 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "npus": parts["npus"],
         "gpus": parts["gpus"],
         "gpu_processes": gpu_procs,
-        "agent_version": "1.4.0",
+        "agent_version": AGENT_VERSION,
     }
     token = cfg.get("token") or ""
     if token:

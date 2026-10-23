@@ -358,6 +358,28 @@ class SyncTreeTests(unittest.TestCase):
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dst, ignore_errors=True)
 
+    def test_tar_fallback_strips_appledouble(self) -> None:
+        src = self._make_tree()
+        vendor = os.path.join(src, "vendor", "python")
+        os.makedirs(vendor)
+        with open(os.path.join(vendor, "note.txt"), "w", encoding="utf-8") as fh:
+            fh.write("keep")
+        with open(os.path.join(vendor, "._note"), "w", encoding="utf-8") as fh:
+            fh.write("apple")
+        with open(os.path.join(src, ".DS_Store"), "w", encoding="utf-8") as fh:
+            fh.write("store")
+        dst = tempfile.mkdtemp(prefix="sync-dst-")
+        try:
+            proc = self._run_sync(src, dst, extra_env={"MONITOR_SYNC_DISABLE_RSYNC": "1"})
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("method=tar", proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(dst, "vendor", "python", "note.txt")))
+            self.assertFalse(os.path.exists(os.path.join(dst, "vendor", "python", "._note")))
+            self.assertFalse(os.path.exists(os.path.join(dst, ".DS_Store")))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dst, ignore_errors=True)
+
     def test_tar_fallback_when_rsync_disabled(self) -> None:
         src = self._make_tree()
         dst = tempfile.mkdtemp(prefix="sync-dst-")

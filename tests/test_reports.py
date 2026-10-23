@@ -325,6 +325,17 @@ class GenerateStoreReadTests(unittest.TestCase):
         self.assertEqual(poles["sparse-1"], "insufficient")
         hot = next(r for r in report["payload"]["rankings"] if r["host_id"] == "hot-1")
         self.assertEqual(hot["fullest_mount"], "/data")
+        linked = []
+        for section in report["payload"]["sections"]:
+            for table in section.get("tables") or []:
+                ids = table.get("host_ids")
+                if not ids:
+                    continue
+                self.assertEqual(len(ids), len(table.get("rows") or []))
+                linked.extend(item for item in ids if item)
+        self.assertIn("hot-1", linked)
+        self.assertIn("idle-1", linked)
+        self.assertNotIn("host_ids", report["markdown"])
 
         self.storage.cleanup_old_metrics()
         with self.storage._lock:
