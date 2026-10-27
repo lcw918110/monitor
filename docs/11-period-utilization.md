@@ -91,7 +91,7 @@ GET /api/v1/hosts/{id}/history?from_ts=...&to_ts=...&limit=240
 
 ## UI
 
-监测台顶部页签分 **「实时监控」** 与 **「时段统计」**，不再把时段块堆在实时主机列表同一页。
+监测台页签是 **「实时监控」**、**「时段统计」** 与 **「使用诊断」**。时段统计不堆在实时主机列表同一页。
 
 **实时监控**：异常汇总、集群即时卡片、主机列表与实时详情。
 
@@ -120,7 +120,7 @@ curl -s -o period-stats.csv "http://127.0.0.1:8080/api/v1/export/period-stats.cs
 # 打开 http://127.0.0.1:8080/ → 「时段统计」页签 → 切换预设/自定义 → 看集群表与各主机表 → 点选主机看单机趋势 → 导出 CSV
 ```
 
-无数据时先灌演示点：`python3 scripts/demo_seed.py --url http://127.0.0.1:8080/api/v1/metrics`。
+只有可丢弃的本地库才可以灌演示点：`python3 scripts/demo_seed.py --url http://127.0.0.1:8080/api/v1/metrics`。不要对已经有主机的中心执行。
 
 日/周/月使用诊断报告复用本节的样本加权与繁忙阈值，另外规定空闲线为 5%，见 `docs/13-diagnostic-reports.md`。诊断报告不改变本接口的默认查询上限。
 

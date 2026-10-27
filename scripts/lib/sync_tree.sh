@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 把源目录同步到目标目录：优先 rsync，缺失时静默回退 tar / cp -a。
-# 供 deploy_agent.sh / deploy_center.sh 使用（精简主机常无 rsync）。
+# 供 deploy_agent.sh / deploy_center.sh / upgrade_center.sh source（精简主机常无 rsync）。
+# 这是函数库。直接执行不会同步代码，并以退出码 1 退出。
+# 首次安装中心用 scripts/deploy_center.sh；升级已安装的中心用 scripts/push_upgrade.sh。
 #
 # 用法: sync_tree SRC DST
 # 成功后在 stdout 打一行: [sync] method=rsync|tar|cp|inplace
@@ -408,3 +410,11 @@ prune_agent_install_dir() {
     rm -rf "$name"
   done
 }
+
+# 被 source 时只定义函数。直接执行不要假装同步成功。
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "scripts/lib/sync_tree.sh 是函数库，不能直接运行，也不会同步代码。" >&2
+  echo "首次安装中心: scripts/deploy_center.sh" >&2
+  echo "升级已安装的中心: scripts/push_upgrade.sh（中心上执行这次包里的 scripts/upgrade_center.sh）" >&2
+  exit 1
+fi

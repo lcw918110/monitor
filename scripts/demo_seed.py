@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""演示数据：CPU / NPU 监测与异常判定场景。"""
+"""往可丢弃的本地中心灌演示点。不要对生产中心执行。
+
+主机类型故意用旧值 ``app`` / ``npu``，中心入库时归一成 cpu / gpu。
+``agent_version`` 固定写成演示标记，不是当前发布号。
+"""
 
 from __future__ import annotations
 

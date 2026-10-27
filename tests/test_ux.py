@@ -52,10 +52,28 @@ class HealthLabelTests(unittest.TestCase):
 
 class AgentVersionTests(unittest.TestCase):
     def test_payload_tracks_package_version(self) -> None:
+        from center import __version__ as center_version
+
         payload = build_payload({"host_id": "h", "host_type": "cpu"})
         self.assertEqual(payload["agent_version"], agent_version)
+        self.assertEqual(agent_version, center_version)
         self.assertEqual(agent_version, "1.10.0")
         self.assertNotEqual(payload["agent_version"], "1.4.0")
+        for rel in ("center/static/index.html", "center/static/deploy.html"):
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                page = fh.read()
+            self.assertIn("v" + center_version, page)
+
+    def test_readme_upgrade_path_is_push_upgrade(self) -> None:
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        self.assertNotIn("优先用 `scripts/lib/sync_tree.sh`", readme)
+        self.assertIn("scripts/push_upgrade.sh", readme)
+        self.assertIn("unittest discover -s tests", readme)
+        with open(os.path.join(ROOT, "docs", "13-diagnostic-reports.md"), encoding="utf-8") as fh:
+            reports = fh.read()
+        self.assertNotIn("systemd 重启方式", reports)
+        self.assertIn("push_upgrade.sh", reports)
 
 
 class UxScriptTests(unittest.TestCase):
