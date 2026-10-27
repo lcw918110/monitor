@@ -165,30 +165,49 @@ def sample_disk(path: str = "/") -> Dict[str, float]:
     return _sample_disk(path)
 
 
-def sample_load() -> Dict[str, float]:
+def _load_token(parts: List[str], index: int) -> Optional[float]:
+    """解析负载的一档。缺字段或不是数字时返回 None，不用 0 填。"""
+    if index >= len(parts):
+        return None
+    try:
+        return round(float(parts[index]), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_absent() -> Dict[str, Optional[float]]:
+    return {"load1": None, "load5": None, "load15": None}
+
+
+def sample_load() -> Dict[str, Optional[float]]:
+    """读取 1/5/15 分钟负载。
+
+    操作系统报出的 0 保留为 0.0。``getloadavg`` 与 ``/proc/loadavg`` 都失败，
+    或某一档无法解析时，该档为 None，页面显示横线，不把失败记成 0。
+    """
     try:
         a, b, c = os.getloadavg()
         return {
-            "load1": round(a, 2),
-            "load5": round(b, 2),
-            "load15": round(c, 2),
+            "load1": round(float(a), 2),
+            "load5": round(float(b), 2),
+            "load15": round(float(c), 2),
         }
-    except (OSError, AttributeError):
+    except (OSError, AttributeError, TypeError, ValueError):
         text = _read_text("/proc/loadavg")
         if not text:
-            return {"load1": 0.0, "load5": 0.0, "load15": 0.0}
+            return _load_absent()
         parts = text.split()
-        try:
-            return {
-                "load1": round(float(parts[0]), 2),
-                "load5": round(float(parts[1]), 2) if len(parts) > 1 else 0.0,
-                "load15": round(float(parts[2]), 2) if len(parts) > 2 else 0.0,
-            }
-        except (ValueError, IndexError):
-            return {"load1": 0.0, "load5": 0.0, "load15": 0.0}
+        parsed = {
+            "load1": _load_token(parts, 0),
+            "load5": _load_token(parts, 1),
+            "load15": _load_token(parts, 2),
+        }
+        if parsed["load1"] is None and parsed["load5"] is None and parsed["load15"] is None:
+            return _load_absent()
+        return parsed
 
 
-def sample_load1() -> float:
+def sample_load1() -> Optional[float]:
     return sample_load()["load1"]
 
 

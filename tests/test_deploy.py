@@ -320,6 +320,19 @@ class SyncTreeTests(unittest.TestCase):
             f.write("db")
         return src
 
+    def test_direct_execution_refuses_to_pretend_it_synced(self) -> None:
+        proc = subprocess.run(
+            ["bash", os.path.join(ROOT, "scripts", "lib", "sync_tree.sh")],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("函数库", proc.stdout)
+        self.assertIn("push_upgrade.sh", proc.stdout)
+        self.assertNotIn("[sync] method=", proc.stdout)
+
     def test_rsync_or_fallback_copies_and_skips_agent_json(self) -> None:
         src = self._make_tree()
         dst = tempfile.mkdtemp(prefix="sync-dst-")
