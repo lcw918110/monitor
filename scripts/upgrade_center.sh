@@ -13,6 +13,10 @@
 # --check-only 跑完测试和磁盘预检就退出，不备份、不同步、不重启。
 # 同步之后只做健康检查。回滚只恢复代码和 systemd 单元，不碰 data/，
 # 失败的代码留在同级的 <安装目录名>-failed-<时间> 目录里。
+# 记基线之前，用已经装上的 center.storage 按 config 的 retention_days 清一次过期历史上报。
+# 新进程启动时会立刻再清一次；不清掉这部分，重启后条数变少会被当成数据丢失而回滚。
+# 主机变少、库文件不见、库读不出来、历史上报被清空，仍然失败。
+# 只少了「备份里已经过保留期」的行，不算失败。
 # 跑 Python 之前，在脚本顶层从 systemd 单元读出 LD_LIBRARY_PATH 和 PATH 并 export。
 # 不能放进 PY="$(upgrade_python)" 的子 shell，否则现场的 libpython 加载不到。
 set -euo pipefail
@@ -45,7 +49,9 @@ usage() {
 --check-only 在测试和磁盘预检之后打印结果并退出，不备份、不同步、不重启。
 通过后再用 Python sqlite3 backup 做一致的数据库副本并 quick_check。
 同步时不覆盖 config/center.json、data/ 和已放置的便携 Python 包。
-重启后只做健康检查（health / hosts / reports，以及主机和历史上报条数没有减少）。
+记基线前用现场 Storage 按 retention_days 清一次过期历史上报（--check-only 不清）。
+重启后检查 health / hosts / reports。主机变少、数据库不见或读不出来、
+历史上报被清空，都回滚代码。过期行被保留期清掉不回滚。
 健康检查失败时只回滚代码和 systemd 单元，不从备份恢复 data/。
 EOF
 }
@@ -316,18 +322,211 @@ path = sys.argv[1]
 if not os.path.isfile(path):
     print("0 0")
     raise SystemExit(0)
-conn = sqlite3.connect(path)
-def one(sql):
+try:
+    conn = sqlite3.connect(path, timeout=30)
     try:
-        return int(conn.execute(sql).fetchone()[0])
-    except sqlite3.Error:
-        return 0
-print("%d %d" % (
-    one("SELECT COUNT(*) FROM hosts"),
-    one("SELECT COUNT(*) FROM metrics_history"),
-))
-conn.close()
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.Error:
+            pass
+        def one(sql):
+            return int(conn.execute(sql).fetchone()[0])
+        print("%d %d" % (
+            one("SELECT COUNT(*) FROM hosts"),
+            one("SELECT COUNT(*) FROM metrics_history"),
+        ))
+    finally:
+        conn.close()
+except sqlite3.Error as exc:
+    sys.stderr.write("读取数据库失败: %s\n" % exc)
+    raise SystemExit(1)
 PY
+}
+
+# mode=cleanup：用安装目录里的 Storage 删过期 metrics_history，stdout 打「天数 条数」。
+# mode=floor：现场历史上报不得少于备份里 ts 仍在保留期内的行。stdout 打这个下限。
+# 保留天数与 center/server.py 一致：int(config.get("retention_days") or 7)。
+_upgrade_retention_py() {
+  local mode="$1"
+  PYTHONPATH="${INSTALL_DIR}${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PY" - "$mode" "$INSTALL_DIR" "$DB" "${BACKUP_DIR}/code/data/monitor.db" <<'PY'
+import json, os, sqlite3, sys
+
+mode, install, live_db, backup_db = sys.argv[1:5]
+cfg_path = os.path.join(install, "config", "center.json")
+
+def fail(msg):
+    sys.stderr.write(str(msg).rstrip() + "\n")
+    raise SystemExit(1)
+
+def load_cfg():
+    try:
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError) as exc:
+        fail("无法读取中心配置: %s" % exc)
+    if not isinstance(cfg, dict):
+        fail("中心配置不是对象")
+    return cfg
+
+def retention_days(cfg):
+    raw = cfg.get("retention_days", 7)
+    try:
+        return int(raw or 7)
+    except (TypeError, ValueError):
+        fail("retention_days 无法解析: %r" % (raw,))
+
+def open_db(path):
+    conn = sqlite3.connect(path, timeout=30)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+    except sqlite3.Error:
+        pass
+    return conn
+
+if mode == "cleanup":
+    if not os.path.isfile(live_db):
+        sys.stdout.write("0 0\n")
+        raise SystemExit(0)
+    storage_py = os.path.join(install, "center", "storage.py")
+    if not os.path.isfile(storage_py):
+        fail("安装目录没有 center/storage.py: %s" % install)
+    sys.path.insert(0, install)
+    try:
+        import center.storage as storage_mod
+    except Exception as exc:
+        fail("无法导入安装目录里的 center.storage: %s" % exc)
+    loaded = os.path.realpath(storage_mod.__file__)
+    expect = os.path.realpath(storage_py)
+    if loaded != expect:
+        fail("center.storage 不是安装目录里的那份: %s" % loaded)
+    days = retention_days(load_cfg())
+    storage = storage_mod.Storage(db_path=live_db, retention_days=days)
+    try:
+        deleted = storage.cleanup_old_metrics()
+    except sqlite3.Error as exc:
+        fail("保留期清理失败: %s" % exc)
+    if deleted is None:
+        deleted = 0
+    try:
+        deleted = int(deleted)
+    except (TypeError, ValueError):
+        fail("保留期清理没有返回删除条数")
+    if deleted < 0:
+        fail("保留期清理没有返回删除条数")
+    sys.stdout.write("%d %d\n" % (days, deleted))
+    raise SystemExit(0)
+
+if mode == "floor":
+    import time
+    if not os.path.isfile(backup_db):
+        fail("没有升级前的数据库备份，不能把历史上报减少解释成保留期清理")
+    if not os.path.isfile(live_db):
+        fail("现场数据库不见了: %s" % live_db)
+    days = retention_days(load_cfg())
+    if days <= 0:
+        fail("retention_days=%s 时进程不会删除历史上报" % days)
+    cutoff = int(time.time()) - days * 86400
+    try:
+        backup = open_db(backup_db)
+        try:
+            try:
+                backup.execute("PRAGMA query_only=ON")
+            except sqlite3.Error:
+                pass
+            floor = int(backup.execute(
+                "SELECT COUNT(*) FROM metrics_history WHERE ts >= ?",
+                (cutoff,),
+            ).fetchone()[0])
+        finally:
+            backup.close()
+        live = open_db(live_db)
+        try:
+            live_hist = int(live.execute(
+                "SELECT COUNT(*) FROM metrics_history"
+            ).fetchone()[0])
+        finally:
+            live.close()
+    except sqlite3.Error as exc:
+        fail("核对保留期条数失败: %s" % exc)
+    if live_hist < floor:
+        fail(
+            "保留期内历史上报不足: 现场 %d，备份中仍应保留 %d（retention_days=%d cutoff=%d）"
+            % (live_hist, floor, days, cutoff)
+        )
+    sys.stdout.write("%d\n" % floor)
+    raise SystemExit(0)
+
+fail("未知保留期子命令: %s" % mode)
+PY
+}
+
+# 现场库上的一次保留期清理。失败时调用方还没同步代码，不能当成升级已开始。
+_run_retention_cleanup() {
+  local attempt out rc days deleted
+  for attempt in 1 2 3; do
+    set +e
+    out="$(_upgrade_retention_py cleanup)"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+      read -r days deleted <<<"$out"
+      if [[ "$days" =~ ^-?[0-9]+$ && "$deleted" =~ ^[0-9]+$ ]]; then
+        echo "[ok] 升级前按 retention_days=${days} 清理过期历史上报 ${deleted} 条（现场 Storage）"
+        return 0
+      fi
+      echo "升级前保留期清理没有返回条数: ${out}" >&2
+      return 1
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "[warn] 保留期清理第 ${attempt} 次失败，1 秒后重试" >&2
+      sleep 1
+    fi
+  done
+  return 1
+}
+
+_load_after_counts() {
+  local line
+  if [[ "$DB_WAS_PRESENT" == "1" && ! -f "$DB" ]]; then
+    fail_upgrade "数据库文件不见了: $DB"
+  fi
+  if ! line="$(db_counts "$DB" "$PY")"; then
+    fail_upgrade "数据库无法读取: $DB"
+  fi
+  read -r HOSTS_AFTER HIST_AFTER <<<"$line"
+  if [[ ! "$HOSTS_AFTER" =~ ^[0-9]+$ || ! "$HIST_AFTER" =~ ^[0-9]+$ ]]; then
+    fail_upgrade "数据库条数无法解析: ${line}"
+  fi
+}
+
+# 主机变少、历史上报被清空：直接失败。保留期造成的变少留给调用方再核对。
+_counts_fail_hard() {
+  if [[ "$HOSTS_AFTER" -lt "$HOSTS_BEFORE" ]]; then
+    fail_upgrade "主机条数减少（主机 ${HOSTS_BEFORE}->${HOSTS_AFTER}，历史上报 ${HIST_BEFORE}->${HIST_AFTER}）"
+  fi
+  if [[ "$HIST_BEFORE" -gt 0 && "$HIST_AFTER" -eq 0 ]]; then
+    fail_upgrade "历史上报被清空（主机 ${HOSTS_BEFORE}->${HOSTS_AFTER}，历史上报 ${HIST_BEFORE}->${HIST_AFTER}）"
+  fi
+}
+
+# 现场库仍盖住备份里未过保留期的行时返回 0。
+_history_within_retention() {
+  local out rc floor
+  set +e
+  out="$(_upgrade_retention_py floor)"
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    return 1
+  fi
+  read -r floor <<<"$out"
+  if [[ ! "$floor" =~ ^[0-9]+$ ]]; then
+    echo "保留期核对没有返回条数: ${out}" >&2
+    return 1
+  fi
+  echo "[ok] 历史上报 ${HIST_BEFORE}->${HIST_AFTER} 落在保留期内（备份里未过期 ${floor} 条，现场 ${HIST_AFTER} 条），主机未减少"
+  return 0
 }
 
 upgrade_port() {
@@ -536,8 +735,10 @@ fi
 echo "[ok] 新包测试通过"
 
 DB="$INSTALL_DIR/data/monitor.db"
+DB_WAS_PRESENT=0
 db_bytes=0
 if [[ -f "$DB" ]]; then
+  DB_WAS_PRESENT=1
   db_bytes="$(stat -c%s "$DB" 2>/dev/null || echo 0)"
 fi
 need_bytes=$(( db_bytes * 3 + 20 * 1024 * 1024 ))
@@ -581,7 +782,23 @@ if [[ -f "$UNIT_PATH" ]]; then
   cp -a "$UNIT_PATH" "$BACKUP_DIR/monitor-center.service"
 fi
 
-read -r HOSTS_BEFORE HIST_BEFORE <<<"$(db_counts "$DB" "$PY")"
+# 备份已经落下。这里再清现场库，基线就不含新进程启动时会立刻删掉的过期行。
+# --check-only 在上面已经退出，不会走到这里。
+if [[ "$DB_WAS_PRESENT" == "1" ]]; then
+  if ! _run_retention_cleanup; then
+    echo "升级前保留期清理失败，未同步代码"
+    exit 1
+  fi
+fi
+if ! before_line="$(db_counts "$DB" "$PY")"; then
+  echo "升级前无法读取数据库: $DB"
+  exit 1
+fi
+read -r HOSTS_BEFORE HIST_BEFORE <<<"$before_line"
+if [[ ! "$HOSTS_BEFORE" =~ ^[0-9]+$ || ! "$HIST_BEFORE" =~ ^[0-9]+$ ]]; then
+  echo "升级前数据库条数无法解析: ${before_line}"
+  exit 1
+fi
 echo "[ok] 升级前 主机=${HOSTS_BEFORE} 历史上报=${HIST_BEFORE}"
 
 echo "==> 同步代码到 $INSTALL_DIR"
@@ -662,9 +879,27 @@ if ! upgrade_curl "${BASE}/api/v1/reports" >/dev/null; then
   fail_upgrade "GET /api/v1/reports 失败"
 fi
 
-read -r HOSTS_AFTER HIST_AFTER <<<"$(db_counts "$DB" "$PY")"
-if [[ "$HOSTS_AFTER" -lt "$HOSTS_BEFORE" || "$HIST_AFTER" -lt "$HIST_BEFORE" ]]; then
-  fail_upgrade "主机或历史上报条数减少（主机 ${HOSTS_BEFORE}->${HOSTS_AFTER}，历史上报 ${HIST_BEFORE}->${HIST_AFTER}）"
+# 主机变少、库不见、库读不出来、历史上报被清空：直接回滚。
+# 历史上报变少但主机没少时，等启动清理结束再读一次。仍变少则只接受
+# 「现场条数不少于备份里仍在保留期内的行」——升级窗口里刚过期的点不算丢数据。
+_load_after_counts
+_counts_fail_hard
+if [[ "$HIST_AFTER" -lt "$HIST_BEFORE" ]]; then
+  echo "[info] 历史上报 ${HIST_BEFORE}->${HIST_AFTER}，主机未减少。等待启动清理结束后再读一次"
+  wait_s="${MONITOR_UPGRADE_CLEANUP_WAIT_SECONDS:-1}"
+  if [[ ! "$wait_s" =~ ^[0-9]+$ ]]; then
+    wait_s=1
+  fi
+  if [[ "$wait_s" -gt 0 ]]; then
+    sleep "$wait_s"
+  fi
+  _load_after_counts
+  _counts_fail_hard
+fi
+if [[ "$HIST_AFTER" -lt "$HIST_BEFORE" ]]; then
+  if ! _history_within_retention; then
+    fail_upgrade "历史上报减少且不是保留期清理（主机 ${HOSTS_BEFORE}->${HOSTS_AFTER}，历史上报 ${HIST_BEFORE}->${HIST_AFTER}）"
+  fi
 fi
 
 prune_backups

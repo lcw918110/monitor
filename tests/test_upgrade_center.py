@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,7 @@ class UpgradeCenterTests(unittest.TestCase):
             },
         )
         db = os.path.join(self.install, "data", "monitor.db")
+        self.db = db
         os.makedirs(os.path.dirname(db), exist_ok=True)
         storage = Storage(db, offline_seconds=90, retention_days=7)
         now = int(time.time())
@@ -163,6 +165,8 @@ class UpgradeCenterTests(unittest.TestCase):
                 "MONITOR_UPGRADE_HEALTH_TRIES": "1",
             }
         )
+        # 升级脚本必须从安装目录导入 Storage，不能借测试进程的 cwd。
+        self._install_local_center_code()
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -180,6 +184,85 @@ class UpgradeCenterTests(unittest.TestCase):
                 **files,
             },
         )
+
+    def _install_local_center_code(self) -> None:
+        for pkg in ("center", "common"):
+            src_root = os.path.join(ROOT, pkg)
+            dst_root = os.path.join(self.install, pkg)
+            for dirpath, dirnames, filenames in os.walk(src_root):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                rel = os.path.relpath(dirpath, src_root)
+                target = dst_root if rel == "." else os.path.join(dst_root, rel)
+                os.makedirs(target, exist_ok=True)
+                for name in filenames:
+                    if name.endswith((".pyc", ".pyo")):
+                        continue
+                    src = os.path.join(dirpath, name)
+                    dst = os.path.join(target, name)
+                    if os.path.lexists(dst):
+                        continue
+                    shutil.copy2(src, dst)
+
+    def _write_config(self, extra=None) -> None:
+        cfg = {"port": 9, "marker": "KEEP-ME", "token": "secret"}
+        if extra:
+            cfg.update(extra)
+        with open(os.path.join(self.install, "config", "center.json"), "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh)
+
+    def _insert_metric(self, ts, host_id="host-a") -> None:
+        conn = sqlite3.connect(self.db)
+        try:
+            conn.execute(
+                "INSERT INTO metrics_history (host_id, ts, payload) VALUES (?, ?, ?)",
+                (host_id, int(ts), "{}"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _hist_rows(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return list(conn.execute("SELECT ts FROM metrics_history ORDER BY ts"))
+        finally:
+            conn.close()
+
+    def _install_systemctl(self, on_restart: str) -> None:
+        script = "\n".join(
+            [
+                "#!/bin/bash",
+                "printf '%%s\\n' \"$*\" >> %s" % shlex.quote(self.syslog),
+                'case "$*" in',
+                "  *restart*monitor-center*)",
+                "    set -e",
+                on_restart,
+                "    ;;",
+                "esac",
+                "exit 0",
+                "",
+            ]
+        )
+        _write_exe(self.systemctl, script)
+
+    def _restart_sql(self, python_body: str, shell_before: str = "") -> None:
+        body = "\n".join(
+            [
+                shell_before,
+                "%s - %s <<'PY'" % (shlex.quote(sys.executable), shlex.quote(self.db)),
+                python_body,
+                "PY",
+            ]
+        )
+        self._install_systemctl(body)
+
+    def _assert_rolled_back(self, proc, needle: str) -> None:
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn(needle, proc.stdout)
+        self.assertIn("回滚代码", proc.stdout)
+        self.assertNotIn("升级完成", proc.stdout)
+        with open(os.path.join(self.install, "build-id.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "old-marker")
 
     def _run(self, extra, env=None, script=None):
         cmd = [
@@ -618,6 +701,197 @@ class UpgradeCenterTests(unittest.TestCase):
         self.assertNotIn('rm -rf "$INSTALL_DIR"', src)
         self.assertNotIn('rm -rf "$failed_dir"', src)
         self.assertNotIn('rm -rf "$INSTALL_DIR/data"', src)
+
+    def test_check_only_does_not_delete_expired_history(self) -> None:
+        now = int(time.time())
+        self._write_config({"retention_days": 7})
+        self._insert_metric(now - 30 * 86400)
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(["--check-only"])
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertNotIn("清理过期历史上报", proc.stdout)
+        self.assertNotIn("同步代码", proc.stdout)
+        stamps = [row[0] for row in self._hist_rows()]
+        self.assertIn(now - 30 * 86400, stamps)
+
+    def test_startup_retention_cleanup_is_not_data_loss(self) -> None:
+        """重启时删掉的过期行已经提前从基线里去掉，不能因此回滚。"""
+        now = int(time.time())
+        self._write_config({"retention_days": 1})
+        expired = now - 3 * 86400
+        self._insert_metric(expired)
+        conn = sqlite3.connect(self.db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO diagnostic_reports (
+                    period_type, title, requested_from_ts, requested_to_ts,
+                    created_at, markdown, payload
+                ) VALUES ('day', 'keep', 1, 2, 1, 'body', '{}')
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        deleted_log = os.path.join(self.tmp, "restart-deleted.txt")
+        self._restart_sql(
+            "\n".join(
+                [
+                    "import json, sqlite3, sys, time",
+                    "db = sys.argv[1]",
+                    "cfg = json.load(open(%s, encoding='utf-8'))" % json.dumps(
+                        os.path.join(self.install, "config", "center.json")
+                    ),
+                    "days = int(cfg.get('retention_days') or 7)",
+                    "cutoff = int(time.time()) - days * 86400",
+                    "conn = sqlite3.connect(db, timeout=30)",
+                    "cur = conn.execute('DELETE FROM metrics_history WHERE ts < ?', (cutoff,))",
+                    "conn.commit()",
+                    "open(%s, 'w', encoding='utf-8').write(str(cur.rowcount))" % json.dumps(deleted_log),
+                    "conn.close()",
+                ]
+            )
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("升级完成", proc.stdout)
+        self.assertIn("retention_days=1", proc.stdout)
+        self.assertIn("清理过期历史上报 1 条", proc.stdout)
+        self.assertIn("主机: 1 -> 1", proc.stdout)
+        self.assertNotIn("回滚", proc.stdout)
+        with open(deleted_log, encoding="utf-8") as fh:
+            self.assertEqual(fh.read().strip(), "0")
+        stamps = [row[0] for row in self._hist_rows()]
+        self.assertNotIn(expired, stamps)
+        self.assertGreaterEqual(len(stamps), 1)
+        conn = sqlite3.connect(self.db)
+        try:
+            reports = conn.execute("SELECT COUNT(*) FROM diagnostic_reports").fetchone()[0]
+            hosts = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(reports, 1)
+        self.assertEqual(hosts, 1)
+
+    def test_rows_expiring_during_upgrade_are_not_data_loss(self) -> None:
+        """升级窗口里刚越过保留期的点，重启清理后不能当成丢数据。"""
+        now = int(time.time())
+        days = 7
+        margin = 8
+        self._write_config({"retention_days": days})
+        ancient = now - 30 * 86400
+        edge = now - days * 86400 + margin
+        self._insert_metric(ancient)
+        self._insert_metric(edge)
+        self._restart_sql(
+            "\n".join(
+                [
+                    "import json, sqlite3, sys, time",
+                    "db = sys.argv[1]",
+                    "cfg = json.load(open(%s, encoding='utf-8'))" % json.dumps(
+                        os.path.join(self.install, "config", "center.json")
+                    ),
+                    "days = int(cfg.get('retention_days') or 7)",
+                    "cutoff = int(time.time()) - days * 86400",
+                    "conn = sqlite3.connect(db, timeout=30)",
+                    "conn.execute('DELETE FROM metrics_history WHERE ts < ?', (cutoff,))",
+                    "conn.commit()",
+                    "conn.close()",
+                ]
+            ),
+            shell_before="sleep %d" % (margin + 1),
+        )
+        env = dict(self.base_env)
+        env["MONITOR_UPGRADE_CLEANUP_WAIT_SECONDS"] = "0"
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("升级完成", proc.stdout)
+        self.assertIn("落在保留期内", proc.stdout)
+        self.assertNotIn("回滚", proc.stdout)
+        stamps = [row[0] for row in self._hist_rows()]
+        self.assertNotIn(ancient, stamps)
+        self.assertNotIn(edge, stamps)
+        self.assertGreaterEqual(len(stamps), 1)
+
+    def test_in_retention_history_loss_rolls_back(self) -> None:
+        now = int(time.time())
+        self._write_config({"retention_days": 40})
+        self._insert_metric(now - 86400)
+        self._restart_sql(
+            "\n".join(
+                [
+                    "import sqlite3, sys",
+                    "conn = sqlite3.connect(sys.argv[1], timeout=30)",
+                    "conn.execute(",
+                    "    'DELETE FROM metrics_history WHERE id = (SELECT MIN(id) FROM metrics_history)'",
+                    ")",
+                    "conn.commit()",
+                    "conn.close()",
+                ]
+            )
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self._assert_rolled_back(proc, "历史上报减少且不是保留期清理")
+        self.assertIn("保留期内历史上报不足", proc.stdout)
+
+    def test_empty_history_rolls_back(self) -> None:
+        self._write_config({"retention_days": 40})
+        self._restart_sql(
+            "\n".join(
+                [
+                    "import sqlite3, sys",
+                    "conn = sqlite3.connect(sys.argv[1], timeout=30)",
+                    "conn.execute('DELETE FROM metrics_history')",
+                    "conn.commit()",
+                    "conn.close()",
+                ]
+            )
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self._assert_rolled_back(proc, "历史上报被清空")
+
+    def test_host_loss_rolls_back(self) -> None:
+        self._write_config({"retention_days": 40})
+        self._restart_sql(
+            "\n".join(
+                [
+                    "import sqlite3, sys",
+                    "conn = sqlite3.connect(sys.argv[1], timeout=30)",
+                    "conn.execute('DELETE FROM hosts')",
+                    "conn.commit()",
+                    "conn.close()",
+                ]
+            )
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self._assert_rolled_back(proc, "主机条数减少")
+
+    def test_missing_db_rolls_back(self) -> None:
+        db = shlex.quote(self.db)
+        self._install_systemctl("\n".join(["rm -f %s %s-wal %s-shm" % (db, db, db)]))
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self._assert_rolled_back(proc, "数据库文件不见了")
+        self.assertFalse(os.path.isfile(self.db))
+
+    def test_unreadable_db_rolls_back(self) -> None:
+        db = shlex.quote(self.db)
+        self._install_systemctl(
+            "\n".join(
+                [
+                    "rm -f %s-wal %s-shm" % (db, db),
+                    "printf 'not-a-sqlite-database\\n' > %s" % db,
+                ]
+            )
+        )
+        self._package({"build-id.txt": "brand-new-marker\n", "tests/test_ok.py": _ok_test()})
+        proc = self._run(None)
+        self._assert_rolled_back(proc, "数据库无法读取")
 
 
 def _write_exe(path: str, body: str) -> None:
