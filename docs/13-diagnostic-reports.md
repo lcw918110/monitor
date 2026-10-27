@@ -50,7 +50,7 @@
 }
 ```
 
-调度成功写入后调用 `center/report_schedule.py` 的 `deliver_report`。这是下一阶段企业微信 / 钉钉 / 飞书的挂钩，**当前不发送**。
+调度成功写入后调用 `center/report_schedule.py` 的 `deliver_report`。页面上手动「生成并保存」成功后也会调用。已在「设置」页启用并保存 Webhook 时，把报告正文发到企业微信、钉钉或飞书；未启用或没有 Webhook 时不发请求，报告照常入库。正文过长会截断。推送失败只记日志，不把这次生成改成失败。详见下文「报告推送」。
 
 ## 去重与覆盖
 
@@ -108,7 +108,7 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 
 ## API
 
-与其它监测台接口一样：浏览器直接调用，**不另加 Token**。Agent 上报 Token 仍只校验 `POST /api/v1/metrics`。请求体里的 `source` 会被忽略，HTTP 生成一律是 `manual`。
+监测台读接口仍直接打开。Agent 上报 Token 仍只校验 `POST /api/v1/metrics`，不会变成整站登录。若在设置页启用了**管理 Token**，`POST /api/v1/reports/generate` 和其他写接口要带请求头 `X-Management-Token`；未设置管理 Token 时与以前一样不校验。请求体里的 `source` 会被忽略，HTTP 生成一律是 `manual`。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -136,6 +136,40 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 `/#reports`：选择日报 / 周报 / 月报，再选一个窗口日期（默认上一完整周期里的一天），看将生成的时间窗，生成并保存。左侧列表标出定时/手动、成功/失败和失败原因。打开一份后可以「重新生成」（覆盖同一窗口）。下载 Markdown 或排行 CSV。15 秒自动刷新不会清掉正在看的报告，也不会后台重算。
 
 实时监控、时段统计的列（规格与实时利用率分开、离线不显示末次快照数字）不受这一页影响。时段统计的平均同样排除越界利用率，响应里多了 `excluded_samples`。
+
+## 管理 Token 与报告推送
+
+设置页：`/settings.html`。配置写在中心库 `admin_settings`，不进 `config/center.json`，升级保留 `data/` 时会留下来。
+
+### 管理 Token
+
+- 未设置：部署、改主机、生成报告、保存设置等写接口与以前一样不校验。监测台从中心 IP 打开就能完成第一次保存。请在端口对别人可见之前先设上；这段时间里别人也能抢先设置。
+- 已设置：上述写接口必须带请求头 `X-Management-Token`。错误或缺失返回 401，`code` 为 `management_token_required`。读接口（主机列表、报告、导出、设置状态）仍开放。`GET /api/v1/settings` 只说明是否已设置，不返回明文，也不返回哈希。
+- 保存的是 SHA-256。页面保存后清空输入框。当前标签页用顶栏黄条记住明文，关掉标签页要再填。
+- 清空也要带当前 Token。忘记时在中心机执行：`sqlite3 data/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"`，然后立刻重新设置。
+- 首次启动前可以设环境变量 `MONITOR_MANAGEMENT_TOKEN`。只在库里还没有管理 Token 时写入哈希；已有则忽略，也不写回 `center.json`。短于 8 位则中心拒绝启动。
+- Agent 的 `token` 仍只校验 `POST /api/v1/metrics`。管理 Token 不能拿来上报，上报 Token 也不能拿来改设置。
+
+### 报告推送
+
+`POST /api/v1/settings` 可同时或单独保存：
+
+| 字段 | 说明 |
+| --- | --- |
+| `push_enabled` | `true` / `false` |
+| `push_channel` | `wecom` 企业微信、`dingtalk` 钉钉、`feishu` 飞书 |
+| `push_webhook_url` | 留空不要提交。提交则覆盖。只接受 http/https |
+| `clear_push_webhook` | `true` 时删掉地址，并在未另行指定时关闭推送 |
+
+读取接口只返回渠道、是否启用、以及打码后的地址（主机名 + 密钥末四位）。
+
+启用且地址存在时，`deliver_report` 发送：
+
+- 企业微信：`msgtype=markdown`
+- 钉钉：`msgtype=markdown`。当前不算加签，请在机器人安全设置里用自定义关键词，关键词包含「诊断」
+- 飞书：`msg_type=text`
+
+定时任务和手动生成成功后都会发。未配置则直接返回，不访问网络。对方返回非 0 错误码时，报告仍然保留，接口里的 `push.ok` 为 false。
 
 ## 升级中心
 

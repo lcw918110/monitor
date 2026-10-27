@@ -23,12 +23,35 @@ DEFAULT_REPORT_SCHEDULE: Dict[str, Any] = {
 }
 
 
-def deliver_report(report: Dict[str, Any]) -> None:
-    """下一阶段推送挂钩（企业微信 / 钉钉 / 飞书）。
+def deliver_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    """把已生成的诊断报告推到设置里的企业微信 / 钉钉 / 飞书。
 
-    调度器只在成功写入新报告后调用。这里不发任何外部请求。
+    调度器只在成功写入新报告后调用。未配置时不发请求。
+    推送失败不影响报告入库，也不把 Webhook 写进日志。
     """
-    return None
+    from center.report_push import CHANNEL_LABELS, push_report
+
+    try:
+        result = push_report(report or {})
+    except Exception as exc:  # noqa: BLE001
+        print("[report-push] 推送失败: %s" % type(exc).__name__, flush=True)
+        return {"ok": False, "skipped": False, "error": "推送失败"}
+    if result.get("skipped"):
+        return result
+    label = result.get("channel_label") or CHANNEL_LABELS.get(result.get("channel") or "", "")
+    if result.get("ok"):
+        print(
+            "[report-push] 已推送诊断报告 id=%s 渠道=%s"
+            % (report.get("id"), label or result.get("channel") or ""),
+            flush=True,
+        )
+    else:
+        print(
+            "[report-push] 推送失败 id=%s：%s"
+            % (report.get("id"), result.get("error") or "推送失败"),
+            flush=True,
+        )
+    return result
 
 
 def _as_bool(value: Any, default: bool) -> bool:

@@ -85,7 +85,8 @@ chmod +x scripts/*.sh
 ```
 
 成功后打开：`http://<中心IP>:8080/`  
-客户端部署页（**推荐装 Agent 的方式**）：`http://<中心IP>:8080/deploy.html`
+客户端部署页（**推荐装 Agent 的方式**）：`http://<中心IP>:8080/deploy.html`  
+管理设置页（管理 Token、诊断报告推送）：`http://<中心IP>:8080/settings.html`
 
 已有中心升级时**不要删库**。`metrics_history` 可能有数 GB。诊断调度、主机列和同机改址都是加法：`diagnostic_reports` 补列，`hosts` 增加可空列 `hidden`、`hidden_at`、`asset_meta`，`deploy_targets` 增加可空列 `retired`、`retired_at`。手工展示地址和历史 IP 写在已有 `asset_meta` JSON 里。不改 `hosts.host_id`，不重写历史上报。
 
@@ -291,9 +292,33 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
 | GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
-| * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页） |
+| GET/POST | `/api/v1/settings` | 管理 Token 与报告推送。GET 不回显明文；POST 在已启用管理 Token 时要带请求头 |
+| * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页）。写操作在启用管理 Token 后要带请求头 |
 
-诊断报告与其它监测台接口相同，页面直接访问，不另加 Token。`token` 只在 `POST /api/v1/metrics` 校验 Agent 上报。中心进程按 `report_schedule` 自动生成上一完整周期（默认日报 00:10、周报周一 00:20、月报每月 1 日 00:30，上海时间），错过不补。口径、去重、`generated_at` 与越界样本见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
+`token`（`config/center.json` 或部署参数）只在 `POST /api/v1/metrics` 校验 Agent 上报，不是网页登录。管理 Token 是另一把可选口令，见下面「管理 Token 与报告推送」。
+
+诊断报告的读接口直接打开。中心进程按 `report_schedule` 自动生成上一完整周期（默认日报 00:10、周报周一 00:20、月报每月 1 日 00:30，上海时间），错过不补。口径、去重、`generated_at` 与越界样本见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
+
+## 管理 Token 与报告推送
+
+打开 `/settings.html`。
+
+**管理 Token（可选）**
+
+- 还没设置时，部署、隐藏/编辑主机、生成报告、改设置这些写操作和现在一样不校验。请在中心端口对外之前先在设置页保存，或在**第一次启动前**设置环境变量 `MONITOR_MANAGEMENT_TOKEN`（至少 8 位、不含空格）。环境变量只在库里还没有管理 Token 时写入哈希，不会覆盖已有值，也不会写进 `center.json`。
+- 保存后只存 SHA-256。页面和 `GET /api/v1/settings` 都不再给出明文。
+- 启用后，写接口要带请求头 `X-Management-Token: <明文>`。监测台顶栏黄条只记在当前标签页。读主机、读报告、导出不需要。
+- 清空也要带当前 Token。忘记时在中心机执行：`sqlite3 <数据目录>/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"`，然后立刻重新设置。
+- 这把 Token **不能**代替 Agent 上报 Token，反过来也不行。
+
+**报告推送（可选）**
+
+- 渠道：企业微信、钉钉、飞书，填机器人 Webhook。未启用或没填地址时，`deliver_report` 什么都不发。
+- 定时生成和页面「生成并保存」成功后都会推送。失败不影响报告入库。
+- 钉钉请用自定义关键词「诊断」。当前不算加签。
+- 接口只显示打码后的地址。完整 Webhook 留在中心数据库，便于下次发送。
+
+细节见 `docs/13-diagnostic-reports.md`。
 
 异常阈值见中心配置中的 `anomaly` 段（示例见 `config/center.example.json`）。
 
@@ -323,7 +348,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 - **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
 - **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
-- **U3 可选**：保存筛选、管理 API Token；报告推送本轮不做
+- **U3 可选**：保存筛选仍待做。管理 Token 和诊断报告推送已在 `/settings.html`
 - **仍保留**：N1 服务器实装、N4 容量、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
 
 ## 自测

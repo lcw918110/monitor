@@ -20,6 +20,7 @@
       <a class="shell-link" href="#hosts" data-shell="hosts">主机</a>
       <a class="shell-link" href="#reports" data-shell="reports">诊断</a>
       <a class="shell-link" href="/deploy.html" data-shell="ops">运维</a>
+      <a class="shell-link" href="/settings.html" data-shell="settings">设置</a>
     </nav>
     <div class="top-meta">
       <a class="link" href="/api/v1/export/hosts.csv">导出 CSV</a>
@@ -179,7 +180,7 @@
         <span class="muted" id="reportWindowHint"></span>
       </div>
     </section>
-    <p class="report-schedule-note muted" id="reportScheduleNote">中心按配置自动生成上一完整周期（默认每日 00:10、每周一 00:20、每月 1 日 00:30，上海时间）。错过不补。同一窗口只保留一份，重新生成会覆盖。</p>
+    <p class="report-schedule-note muted" id="reportScheduleNote">中心按配置自动生成上一完整周期（默认每日 00:10、每周一 00:20、每月 1 日 00:30，上海时间）。错过不补。同一窗口只保留一份，重新生成会覆盖。推送到企业微信、钉钉或飞书在「设置」里配置，未配置则不外发。</p>
     <div class="report-layout">
       <section class="panel">
         <div class="panel-head">
@@ -207,6 +208,7 @@
   </footer>
 
   <script src="/ux.js"></script>
+  <script src="/admin.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
