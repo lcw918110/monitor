@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
+from urllib.request import urlopen
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -52,10 +56,56 @@ class HealthLabelTests(unittest.TestCase):
 
 class AgentVersionTests(unittest.TestCase):
     def test_payload_tracks_package_version(self) -> None:
+        from center import __version__ as center_version
+
         payload = build_payload({"host_id": "h", "host_type": "cpu"})
         self.assertEqual(payload["agent_version"], agent_version)
+        self.assertEqual(agent_version, center_version)
         self.assertEqual(agent_version, "1.10.0")
         self.assertNotEqual(payload["agent_version"], "1.4.0")
+        pages = {
+            "center/static/index.html": "中心控制台 · CPU / 加速卡监测 · v" + center_version,
+            "center/static/deploy.html": "运维 · 客户端部署 · v" + center_version,
+        }
+        for rel, snippet in pages.items():
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                page = fh.read()
+            self.assertIn(snippet, page)
+        with open(os.path.join(ROOT, "center/static/app.js"), encoding="utf-8") as fh:
+            app_js = fh.read()
+        with open(os.path.join(ROOT, "center/static/deploy.js"), encoding="utf-8") as fh:
+            deploy_js = fh.read()
+        with open(os.path.join(ROOT, "center/static/deploy.html"), encoding="utf-8") as fh:
+            deploy_html = fh.read()
+        self.assertIn("applyHealthVersion", app_js)
+        self.assertIn("applyHealthVersion", deploy_js)
+        self.assertIn('src="/ux.js"', deploy_html)
+        self.assertLess(deploy_html.find('src="/ux.js"'), deploy_html.find('src="/deploy.js"'))
+
+    def test_health_version_matches_package(self) -> None:
+        from center import __version__ as center_version
+        from center.server import make_handler
+        from center.storage import Storage
+
+        tmp = tempfile.TemporaryDirectory()
+        storage = Storage(os.path.join(tmp.name, "t.db"))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(storage, ""))
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = "http://127.0.0.1:%s" % port
+            with urlopen(base + "/api/v1/health", timeout=5) as resp:
+                health = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(health["ok"])
+            self.assertEqual(health["version"], center_version)
+            with urlopen(base + "/", timeout=5) as resp:
+                page = resp.read().decode("utf-8")
+            self.assertIn("v" + center_version, page)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            tmp.cleanup()
 
 
 class UxScriptTests(unittest.TestCase):
@@ -98,6 +148,93 @@ assert.strictEqual(ux.parseLocationHash("#reports").tab, "reports");
 assert.strictEqual(ux.parseLocationHash("#hosts").focus, "hosts");
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").hostId, "gpu/1");
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").tab, "realtime");
+assert.strictEqual(ux.loadPerCoreHigh(null, 8, 2), false);
+assert.strictEqual(ux.loadPerCoreHigh(0, 8, 2), false);
+assert.strictEqual(ux.loadPerCoreHigh(16, 8, 2), true);
+assert.strictEqual(ux.loadPerCoreHigh(20, 8, 4), false);
+const load5 = ux.attentionTags({
+  online: true,
+  cpu_percent: 10,
+  load1: 1,
+  load5: 20,
+  cpu_count: 8,
+  anomaly: { findings: [] },
+}, { cpu_load_per_core_warn: 2 });
+assert.deepStrictEqual(load5, ["load"]);
+const quiet = ux.attentionTags({
+  online: true,
+  cpu_percent: 10,
+  load1: null,
+  load5: null,
+  cpu_count: 8,
+  anomaly: { findings: [] },
+}, {});
+assert.deepStrictEqual(quiet, []);
+const zeros = ux.attentionTags({
+  online: true,
+  cpu_percent: 10,
+  load1: 0,
+  load5: 0,
+  cpu_count: 4,
+  anomaly: { findings: [] },
+}, {});
+assert.deepStrictEqual(zeros, []);
+function fakeDoc(text) {
+  var sub = { textContent: text };
+  return {
+    sub: sub,
+    querySelector: function (sel) {
+      return sel === "header .sub" ? sub : null;
+    },
+  };
+}
+function jsonRes(body, ok) {
+  return {
+    ok: ok !== false,
+    json: function () { return Promise.resolve(body); },
+  };
+}
+Promise.all([
+  ux.applyHealthVersion({
+    document: fakeDoc("中心控制台 · v1.10.0"),
+    fetch: function () { return Promise.resolve(jsonRes({ version: "9.9.9" })); },
+  }).then(function (ok) {
+    assert.strictEqual(ok, true);
+  }),
+  (function () {
+    var doc = fakeDoc("运维 · 客户端部署 · v1.10.0");
+    return ux.applyHealthVersion({
+      document: doc,
+      fetch: function () { return Promise.reject(new Error("offline")); },
+    }).then(function (ok) {
+      assert.strictEqual(ok, false);
+      assert.strictEqual(doc.sub.textContent, "运维 · 客户端部署 · v1.10.0");
+    });
+  })(),
+  (function () {
+    var doc = fakeDoc("中心控制台 · v1.10.0");
+    return ux.applyHealthVersion({
+      document: doc,
+      fetch: function () { return Promise.resolve(jsonRes({ version: "" })); },
+    }).then(function (ok) {
+      assert.strictEqual(ok, false);
+      assert.strictEqual(doc.sub.textContent, "中心控制台 · v1.10.0");
+    });
+  })(),
+  (function () {
+    var doc = fakeDoc("中心控制台 · v1.10.0");
+    return ux.applyHealthVersion({
+      document: doc,
+      fetch: function () { return Promise.resolve(jsonRes({ version: "9.9.9" })); },
+    }).then(function (ok) {
+      assert.strictEqual(ok, true);
+      assert.strictEqual(doc.sub.textContent, "中心控制台 · v9.9.9");
+    });
+  })(),
+]).catch(function (err) {
+  console.error(err);
+  process.exit(1);
+});
 """
         proc = subprocess.run(
             [node, "-e", script],

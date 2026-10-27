@@ -30,14 +30,14 @@
 | 资源 | 偏高（warn） | 异常（critical） |
 | --- | --- | --- |
 | CPU 利用率 | ≥80% | ≥95% |
-| CPU 负载 | load1/核数 ≥ 2.0 | — |
+| CPU 负载 | load1/核数或 load5/核数 ≥ 2.0（同一 `cpu_load_per_core_warn`） | — |
 | 加速卡 Health | Warning 等非 OK | Alarm / Critical |
 | 加速卡利用率 | ≥95% | — |
 | 加速卡温度 | ≥85°C | ≥95°C |
 | 加速卡内存 | ≥90% | ≥98% |
 | 主机离线 | — | 判定为 unknown（不臆造资源状态） |
 
-阈值可在 `config/center.example.json` 的 `anomaly` 段调整。
+阈值可在 `config/center.example.json` 的 `anomaly` 段调整。load15 只采集和展示，不参与变黄。`getloadavg` 与 `/proc/loadavg` 都失败，或某一档无法解析时，该档为 null，页面显示 `-`；操作系统报出的 0 仍是 0，不当成读取失败。
 
 ## 主机详情：时间段统计
 

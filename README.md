@@ -19,7 +19,7 @@
 - **项目性质**：轻量、可本地一把梭部署的**基础资源监控**，适合实验室 / 小机房快速看一眼；不是企业级可观测平台
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本。寒武纪 `cnmon info` 只按整行 `Card N` 分卡：利用率取 `MLU Average`，温度优先 Chip、其次 Board、否则取 Cluster 最大值，显存只认 Physical Memory Usage，功耗取 Power 的 Usage，健康取 Health State 下面的 Device（`Good` 视为正常；没有这一段就留空）。各厂商先读结构化输出（`nvidia-smi` CSV、`rocm-smi` / `amd-smi` JSON；`cnmon info -j` 只在临时目录里跑，避免在工作目录留下 `cnmon_info.json`），再退回文本。工具失败的 stderr / 退出码写进卡的 note。`nvidia-smi` 版本看 `-h` 抬头，不用会在 535/470 上失败的 `--version`。同一块卡按 PCI 总线号合并
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
-- **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
+- **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）。CPU 负载看 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。读不到负载时上报 null，页面显示 `-`，不写成 0
 - **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
@@ -320,6 +320,8 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 自测
 
+推送和 pull request 上的 GitHub Actions 跑同一条命令，不安装监控栈，也不做真实 SSH。
+
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd tests.test_period_util tests.test_reports tests.test_ux
+PYTHONPATH=. python3 -m unittest discover -s tests
 ```

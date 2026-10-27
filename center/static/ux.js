@@ -48,6 +48,16 @@
     return "异常";
   }
 
+  /** 与 center/anomaly.py 相同：null 不比较；阈值为空或 0 时用 2.0。 */
+  function loadPerCoreHigh(load, cores, limit) {
+    var l = num(load);
+    var c = num(cores);
+    var lim = num(limit);
+    if (lim == null || lim === 0) lim = 2;
+    if (l == null || c == null || c <= 0) return false;
+    return l / c >= lim;
+  }
+
   function findingCodes(host) {
     var codes = {};
     var findings = (host && host.anomaly && host.anomaly.findings) || [];
@@ -69,15 +79,15 @@
     var codes = findingCodes(host);
     var diskCrit = Number(th.disk_critical_percent || 95);
     var cpuCrit = Number(th.cpu_critical_percent || 95);
-    var loadLimit = Number(th.cpu_load_per_core_warn || 2);
     var disk = num(host.disk_percent);
     if (codes.disk_critical || (disk != null && disk >= diskCrit)) tags.push("disk");
     if (codes.accel_health) tags.push("accel");
     var cpu = num(host.cpu_percent);
-    var load1 = num(host.load1);
     var cores = num(host.cpu_count) || 0;
     var loadHigh =
-      !!codes.cpu_load_high || (load1 != null && cores > 0 && load1 / cores >= loadLimit);
+      !!codes.cpu_load_high ||
+      loadPerCoreHigh(host.load1, cores, th.cpu_load_per_core_warn) ||
+      loadPerCoreHigh(host.load5, cores, th.cpu_load_per_core_warn);
     var cpuHigh = !!codes.cpu_util_critical || (cpu != null && cpu >= cpuCrit);
     if (loadHigh || cpuHigh) tags.push("load");
     return tags;
@@ -107,9 +117,50 @@
     return { tab: "realtime", hostId: "", focus: "" };
   }
 
+  /**
+   * 用 /api/v1/health 的 version 替换副标题里的 vX.Y.Z。
+   * 请求失败、版本为空或格式不对时保留页面上的原文。
+   */
+  function applyHealthVersion(options) {
+    var opts = options || {};
+    var root = opts.document;
+    if (!root && typeof document !== "undefined") root = document;
+    var fetchFn = opts.fetch;
+    if (!fetchFn && typeof fetch === "function") fetchFn = fetch;
+    if (!root || typeof root.querySelector !== "function" || typeof fetchFn !== "function") {
+      return Promise.resolve(false);
+    }
+    var sub = root.querySelector("header .sub");
+    if (!sub) return Promise.resolve(false);
+    var original = String(sub.textContent || "");
+    return Promise.resolve()
+      .then(function () {
+        return fetchFn("/api/v1/health");
+      })
+      .then(function (res) {
+        if (!res || !res.ok || typeof res.json !== "function") return null;
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data || typeof data !== "object") return false;
+        var version = data.version;
+        if (version === null || version === undefined || version === "") return false;
+        version = String(version);
+        if (!/^\d+\.\d+\.\d+$/.test(version)) return false;
+        sub.textContent = original.replace(/v\d+\.\d+\.\d+/, "v" + version);
+        return true;
+      })
+      .catch(function () {
+        sub.textContent = original;
+        return false;
+      });
+  }
+
   return {
     accelHealthLabel: accelHealthLabel,
     attentionTags: attentionTags,
     parseLocationHash: parseLocationHash,
+    loadPerCoreHigh: loadPerCoreHigh,
+    applyHealthVersion: applyHealthVersion,
   };
 });

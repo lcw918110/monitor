@@ -671,6 +671,7 @@ class Storage:
             "disk_total_gb": system.get("disk_total_gb"),
             "disk_count": disk_count,
             "load1": system.get("load1"),
+            "load5": system.get("load5"),
             "net_rx_mbps": system.get("net_rx_mbps"),
             "net_tx_mbps": system.get("net_tx_mbps"),
             "net_rated_mbps": system.get("net_rated_mbps"),

@@ -151,7 +151,6 @@ def judge_host_payload(
         }
 
     cpu = _num(system.get("cpu_percent"))
-    load1 = _num(system.get("load1"))
     cores = _num(system.get("cpu_count")) or 1
 
     if _percent_out_of_range(cpu):
@@ -191,17 +190,22 @@ def judge_host_payload(
                 }
             )
 
-    if load1 is not None and cores > 0:
-        ratio = load1 / cores
-        limit = _num(th["cpu_load_per_core_warn"]) or 2.0
-        if ratio >= limit:
+    # load1 与 load5 共用 cpu_load_per_core_warn（默认 2.0）。null 跳过；真实 0 仍参与比较。
+    load_limit = _num(th.get("cpu_load_per_core_warn")) or 2.0
+    for load_key in ("load1", "load5"):
+        load_value = _num(system.get(load_key))
+        if load_value is None or cores <= 0:
+            continue
+        ratio = load_value / cores
+        if ratio >= load_limit:
             cpu_score = max(cpu_score, 1)
             findings.append(
                 {
                     "resource": "cpu",
                     "level": "warn",
                     "code": "cpu_load_high",
-                    "message": "CPU 负载偏高：load1=%.2f / %d核 = %.2f" % (load1, int(cores), ratio),
+                    "message": "CPU 负载偏高：%s=%.2f / %d核 = %.2f"
+                    % (load_key, load_value, int(cores), ratio),
                     "value": round(ratio, 2),
                 }
             )
