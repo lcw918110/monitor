@@ -71,6 +71,7 @@ class AgentVersionTests(unittest.TestCase):
             with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
                 page = fh.read()
             self.assertIn(snippet, page)
+            self.assertIn("v" + center_version, page)
         with open(os.path.join(ROOT, "center/static/app.js"), encoding="utf-8") as fh:
             app_js = fh.read()
         with open(os.path.join(ROOT, "center/static/deploy.js"), encoding="utf-8") as fh:
@@ -106,6 +107,17 @@ class AgentVersionTests(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
             tmp.cleanup()
+
+    def test_readme_upgrade_path_is_push_upgrade(self) -> None:
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        self.assertNotIn("优先用 `scripts/lib/sync_tree.sh`", readme)
+        self.assertIn("scripts/push_upgrade.sh", readme)
+        self.assertIn("unittest discover -s tests", readme)
+        with open(os.path.join(ROOT, "docs", "13-diagnostic-reports.md"), encoding="utf-8") as fh:
+            reports = fh.read()
+        self.assertNotIn("systemd 重启方式", reports)
+        self.assertIn("push_upgrade.sh", reports)
 
 
 class UxScriptTests(unittest.TestCase):

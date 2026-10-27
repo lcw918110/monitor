@@ -139,6 +139,8 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 
 ## 升级中心
 
-在中心机上重新执行 `scripts/deploy_center.sh`（或现有的 systemd 重启方式）。脚本会同步代码、**保留**已有 `config/center.json` 和 `data/`（含约 1.9GB 的 SQLite），然后重启 `monitor-center`。不必为了启用调度去改配置；要改时刻或关掉某一档，再编辑 `report_schedule` 后重启。
+已安装的中心在工作站执行 `scripts/push_upgrade.sh`（中心上跑的是这次包里的 `scripts/upgrade_center.sh`）。先 `--check-only`，通过后再正式升级。脚本保留 `config/center.json`、`data/` 和已放置的便携包；健康检查失败只回滚代码和单元，不覆盖数据库。不要把手写 `systemctl restart` 或直接执行 `scripts/lib/sync_tree.sh` 当成升级。步骤见 `docs/14-ops-runbook.md`。
+
+不必为了启用调度去改配置。要改时刻或关掉某一档，编辑中心机上的 `report_schedule` 后重启 `monitor-center` 让进程重读配置；这只重读配置，不换代码。
 
 不要清空数据库。Agent 仍只走 `/deploy.html` 与中心机 `deploy_runner` / `deploy_fleet.sh`，不要在笔记本上用 sshpass/scp 旁路安装。采集端的越界过滤随 Agent 升级生效；不升级 Agent 时，中心侧报告仍然排除已入库的脏样本。
