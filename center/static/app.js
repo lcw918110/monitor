@@ -2795,6 +2795,14 @@ function renderHosts(hosts) {
         activeReportId = report.id;
         await loadReportList();
         await loadReport(report.id);
+        if (data.push && !data.push.skipped && el.reportPreview) {
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = data.push.ok
+            ? "已推送到" + (data.push.channel_label || "已配置渠道") + "。"
+            : "报告已保存。推送未成功：" + (data.push.error || "请检查 Webhook");
+          el.reportPreview.appendChild(note);
+        }
       }
       if (!res.ok && !report.id) {
         throw new Error((data && data.error) || "生成失败");

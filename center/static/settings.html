@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>设置 · 管理 Token 与报告推送</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>简易多机监控</h1>
+        <p class="sub">设置 · 管理 Token / 报告推送 · v1.10.0</p>
+      </div>
+    </div>
+    <nav class="shell-nav" aria-label="主导航">
+      <a class="shell-link" href="/#realtime" data-shell="overview">总览</a>
+      <a class="shell-link" href="/#hosts" data-shell="hosts">主机</a>
+      <a class="shell-link" href="/#reports" data-shell="reports">诊断</a>
+      <a class="shell-link" href="/deploy.html" data-shell="ops">运维</a>
+      <a class="shell-link active" href="/settings.html" data-shell="settings" aria-current="page">设置</a>
+    </nav>
+    <div class="top-meta">
+      <button type="button" id="btnReload" class="btn">刷新</button>
+    </div>
+  </header>
+
+  <main class="settings-layout">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>管理 Token</h2>
+        <span class="muted" id="tokenStatus">加载中…</span>
+      </div>
+      <div class="settings-copy">
+        <p>这是中心写操作的一把共享口令，不是登录账号，也<strong>不是</strong> Agent 上报用的 <code>token</code>。上报仍只校验 <code>POST /api/v1/metrics</code>。</p>
+        <p id="tokenBootstrap">未设置时，部署、改主机、生成报告、保存设置都和现在一样不校验。请在中心能被别人访问之前先在这里设上。设上之后，这些写操作都要带当前 Token；清空也要带。读监测数据不需要。更换或清空时，先在页面上方黄条填入当前 Token，再点「本页使用」。</p>
+        <p>保存后只留哈希，页面不再显示明文。忘记时，在中心机执行 <code>sqlite3 data/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"</code>，然后立刻重新设置。也可以在首次启动前用环境变量 <code>MONITOR_MANAGEMENT_TOKEN</code> 写入（已有 Token 时不会覆盖）。</p>
+      </div>
+      <div class="form-grid">
+        <label>新的管理 Token
+          <input id="mgmtToken" type="password" autocomplete="new-password" placeholder="至少 8 位，不能含空格。留空表示不修改" />
+        </label>
+        <label>再输入一次
+          <input id="mgmtTokenAgain" type="password" autocomplete="new-password" placeholder="与上面一致" />
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="btnSaveToken" class="btn primary">保存管理 Token</button>
+        <button type="button" id="btnClearToken" class="btn btn-danger">清空管理 Token</button>
+        <span class="muted" id="tokenHint"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>诊断报告推送</h2>
+        <span class="muted" id="pushStatus">加载中…</span>
+      </div>
+      <div class="settings-copy">
+        <p>定时生成和页面上的「生成并保存」成功后，会把报告正文发到下面的机器人。未启用或没有 Webhook 时不发请求，报告仍照常入库。</p>
+        <p>正文过长会截断，并提示到监测台「使用诊断」看全文。钉钉若开了加签，当前版本不会计算签名，请改用自定义关键词，关键词包含「诊断」。</p>
+      </div>
+      <div class="form-grid">
+        <label class="check-line">
+          <input id="pushEnabled" type="checkbox" />
+          启用推送
+        </label>
+        <label>渠道
+          <select id="pushChannel">
+            <option value="wecom">企业微信</option>
+            <option value="dingtalk">钉钉</option>
+            <option value="feishu">飞书</option>
+          </select>
+        </label>
+        <label class="span-2">Webhook
+          <input id="pushWebhook" type="password" autocomplete="off" placeholder="https://… 留空表示不修改已保存的地址" />
+        </label>
+      </div>
+      <p class="settings-copy" id="channelHint"></p>
+      <div class="form-actions">
+        <button type="button" id="btnSavePush" class="btn primary">保存推送</button>
+        <button type="button" id="btnClearPush" class="btn">清空 Webhook</button>
+        <span class="muted" id="pushHint"></span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>管理 Token 与 Agent 上报 Token 分开。推送未配置时，诊断报告只留在本机。</span>
+  </footer>
+  <script src="/admin.js"></script>
+  <script src="/settings.js"></script>
+</body>
+</html>
