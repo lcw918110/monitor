@@ -545,5 +545,8 @@
     });
   });
 
+  if (window.MonitorUX && typeof window.MonitorUX.applyHealthVersion === "function") {
+    window.MonitorUX.applyHealthVersion();
+  }
   refreshAll();
 })();
