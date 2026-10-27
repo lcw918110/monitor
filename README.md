@@ -19,7 +19,7 @@
 - **项目性质**：轻量、可本地一把梭部署的**基础资源监控**，适合实验室 / 小机房快速看一眼；不是企业级可观测平台
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本。寒武纪 `cnmon info` 只按整行 `Card N` 分卡：利用率取 `MLU Average`，温度优先 Chip、其次 Board、否则取 Cluster 最大值，显存只认 Physical Memory Usage，功耗取 Power 的 Usage，健康取 Health State 下面的 Device（`Good` 视为正常；没有这一段就留空）。各厂商先读结构化输出（`nvidia-smi` CSV、`rocm-smi` / `amd-smi` JSON；`cnmon info -j` 只在临时目录里跑，避免在工作目录留下 `cnmon_info.json`），再退回文本。工具失败的 stderr / 退出码写进卡的 note。`nvidia-smi` 版本看 `-h` 抬头，不用会在 535/470 上失败的 `--version`。同一块卡按 PCI 总线号合并
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
-- **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）
+- **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）。CPU 负载看 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。读不到负载时上报 null，页面显示 `-`，不写成 0
 - **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
@@ -89,11 +89,11 @@ chmod +x scripts/*.sh
 
 已有中心升级时**不要删库**。`metrics_history` 可能有数 GB。诊断调度、主机列和同机改址都是加法：`diagnostic_reports` 补列，`hosts` 增加可空列 `hidden`、`hidden_at`、`asset_meta`，`deploy_targets` 增加可空列 `retired`、`retired_at`。手工展示地址和历史 IP 写在已有 `asset_meta` JSON 里。不改 `hosts.host_id`，不重写历史上报。
 
-在中心机优先用 `scripts/lib/sync_tree.sh` 把新代码同步到安装目录（例如 `/opt/monitor`），再 `systemctl restart monitor-center`。这样不会改写已有 systemd 单元里的 `Environment=PATH=...`。`report_schedule` 可以不写进 `center.json`，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补。
+已安装中心的升级只走下文「升级已安装的中心」：工作站执行 `scripts/push_upgrade.sh`，中心上跑的是这次包里的 `scripts/upgrade_center.sh`。不要把 `scripts/lib/sync_tree.sh` 当成升级命令（它是函数库，直接执行不会同步代码，并以退出码 1 提示回到产品路径），也不要手写 `rsync` 再 `systemctl restart`。`upgrade_center.sh` 会重写单元文件，但保留原来的 `ExecStart` 和已有 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）。步骤与限制见 `docs/14-ops-runbook.md`。`report_schedule` 可以不写进 `center.json`，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补。
 
-若仍运行 `deploy_center.sh`，它会同步代码、保留已有 `config/center.json` 和 `data/`，并在重写单元时保留除 `PYTHONPATH`（以及本次要重写的 `LD_LIBRARY_PATH`）以外的 `Environment=` 行。
+`deploy_center.sh` 是首次安装入口。它会同步代码、保留已有 `config/center.json` 和 `data/`，并在重写单元时保留除 `PYTHONPATH`（以及本次要重写的 `LD_LIBRARY_PATH`）以外的 `Environment=` 行。它没有同步前测试，也没有「失败只回滚代码、不动 `data/`」的那套回滚。日常换代码不要改走这条脚本。
 
-重启后在监测台「导入资产」先预览再写入。下线机器在详情里隐藏。已经入库的诊断报告不会自动改写；要在排行和闲忙表里看到负责人、用途，需要再生成一次。Agent 安装方式不变。
+安装或升级完成、中心进程起来之后，在监测台「导入资产」先预览再写入。下线机器在详情里隐藏。已经入库的诊断报告不会自动改写；要在排行和闲忙表里看到负责人、用途，需要再生成一次。Agent 安装方式不变。
 
 非 root 时 Center 默认装到 `~/monitor`，并以守护进程后台运行（不依赖当前终端）。
 
@@ -171,6 +171,8 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src
 # --check-only 时上面那条命令末尾再加 --check-only
 ```
 
+这条命令只升级 `/opt/monitor`。非 root 首次安装落到 `~/monitor` 时，不要用它去升级家目录里的那份。细节见 `docs/14-ops-runbook.md`。
+
 脚本先从 systemd 单元读出 `LD_LIBRARY_PATH` 和 `PATH` 再选 Python（`PYTHONPATH` 指向新包，不是现场安装树），然后在**新包**上跑测试。预同步测试的标准输入接到 `/dev/null`；不喂数据的 `ssh` 使用 `ssh -n` 且 `</dev/null`，避免现场 SSH 会话的 stdin 一直不关时测试挂住。测试进程打开 `MONITOR_TEST_SANDBOX=1`，PATH 前面是只记日志的 `systemctl` / `kill` / `ssh`，临时 `HOME`，并且不再扫描 `/opt/monitor`。这样用例不会 `systemctl stop monitor-agent`。测试前后记下 `monitor-agent` 和 `monitor-center` 是否 active；若测试前是 active、之后不是，就重新拉起并在摘要里告警。失败则直接退出，不备份、不同步、不重启。`--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出，不把便携包写入现场目录，也不备份、不同步、不重启。正式升级通过后做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，正式推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
 
 步骤、备份目录里有什么、以及代码回滚和数据库恢复的差别，以 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 为准。
@@ -220,6 +222,7 @@ cp config/hosts.example.txt config/hosts.txt
 | `center_url_missing` | 未配置「中心对外访问地址」 |
 | `timeout` | 探测或整段部署超时 |
 | `remote_fail` | 远端安装失败（未归入上面几类） |
+| `unknown` | 输出对不上上面任一短码 |
 
 ### 3. 卸载
 
@@ -308,31 +311,37 @@ tail -n 50 .deploy-agent/run/agent.log
 
 | 文档 | 说明 |
 | --- | --- |
-| `docs/01-requirements.md` | 需求规格 |
+| `docs/01-requirements.md` | 需求规格（文首是现行摘要；编号正文是起草基线） |
 | `docs/02-architecture.md` | 架构设计 |
 | `docs/03-design-and-test.md` | 设计与测试 |
-| `docs/05-competitive-analysis.md` | 对标分析 |
+| `docs/04-engineering-process.md` | 工程过程与已落地范围 |
+| `docs/05-competitive-analysis.md` | 对标分析（2026-07 的 v1 / v1.1 快照，不是现行功能表） |
 | `docs/06-optimization-backlog.md` | 历史优化 backlog |
 | `docs/08-cpu-npu-focus.md` | 加速卡与部署说明 |
 | `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
-| `docs/14-ops-runbook.md` | 升级、备份、恢复、回滚（弱高可用；双中心不做） |
-| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA） |
+| **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机，以及备份 / 恢复 / 回滚（弱高可用；双中心不做）** |
+| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA）
 | **`docs/10-roadmap.md`** | **下一步：体验 U1–U3、长期运维 O1–O7，以及实装 / 容量 / 框架化 / 拓扑** |
+| `docs/audit-tech-debt-2026-10-27.md` | 技术债审计。待人拍板的项在文内 NEEDS_HUMAN，不在这里实现 |
+
+`docs/07-morning-report.md` 与 `docs/09-two-round-opt.md` 是 2026-07 的历史记录，不要当成现行操作步骤。
 
 ## 下一步（摘要）
 
 详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。v1.10.0 先把常见任务做顺，不新增监测能力：
 
-- **U1 总览与可读状态**（正在做）：顶栏总览 / 主机 / 诊断 / 运维，今日关注，白话状态，报告点回主机
-- **U2 运维闭环**：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
+- **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
+- **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
 - **U3 可选**：保存筛选、管理 API Token；报告推送本轮不做
 - **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
 - **高可用**：备份 / 恢复按 `docs/14-ops-runbook.md`。双中心 / 双活继续不做
 
 ## 自测
 
+与中心升级前同一条命令，跑 `tests/test_*.py` 全部模块（含改址、隐藏、升级、寒武纪、PCI、便携包）。推送和 pull request 上的 GitHub Actions 跑同一条命令，不安装监控栈，也不做真实 SSH。
+
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_basic tests.test_v11 tests.test_v12 tests.test_excel_net tests.test_py36_compat tests.test_disk tests.test_deploy tests.test_host_list tests.test_gpu tests.test_npu tests.test_amd tests.test_period_util tests.test_reports tests.test_ux tests.test_capacity_probe tests.test_center_backup
+PYTHONPATH=. python3 -m unittest discover -s tests
 ```

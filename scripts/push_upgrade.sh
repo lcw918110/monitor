@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 在 Mac / 工作站上把某个 git 版本推到中心并升级。
 # 中心执行的是这次包里的 scripts/upgrade_center.sh，不是 /opt/monitor 里的旧脚本。
+# 安装目录固定为 /opt/monitor。非 root 的 ~/monitor 不走这条命令。
 #
 # 用法:
 #   scripts/push_upgrade.sh [--check-only] [--ssh-cmd CMD] <user@center-host> [git-ref]

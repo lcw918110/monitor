@@ -132,7 +132,7 @@ v1.10.0 先把四个入口放到同一顶栏。部署仍是 `/deploy.html`，时
 
 **范围**
 
-- 「今日关注」：离线、磁盘临界（沿用 `disk_critical_percent`，默认 ≥95%）、卡异常、高负载的数量，点一下筛到主机表。高负载只用现有异常判定（CPU 达到异常线，或 load1/核数达到现有负载阈值），不另做报告引擎
+- 「今日关注」：离线、磁盘临界（沿用 `disk_critical_percent`，默认 ≥95%）、卡异常、高负载的数量，点一下筛到主机表。高负载只用现有异常判定（CPU 达到异常线，或 load1/核数、load5/核数达到现有负载阈值 `cpu_load_per_core_warn`，默认 2.0），不另做报告引擎
 - 长期空闲仍看使用诊断里的「基本不用」。它要历史样本，不在这一刀里新算
 - 白话状态，与采集 note 对齐：驱动缺失、工具不在 PATH、硬件异常 / 设备无响应。原始 `health` 留在数据里
 - 深链：报告里的主机行、异常 / 离线行 → 主机详情（`#host=`）
@@ -197,7 +197,7 @@ v1.10.0 先把四个入口放到同一顶栏。部署仍是 `/deploy.html`，时
 
 **不变量**（已经是产品路径，界面和脚本都不许另开旁路）：
 
-- 升级只走 `scripts/push_upgrade.sh` → `scripts/upgrade_center.sh`。先 `--check-only`，通过后再正式升级
+- 升级只走 `scripts/push_upgrade.sh` → `scripts/upgrade_center.sh`。先 `--check-only`，通过后再正式升级。`scripts/lib/sync_tree.sh` 是函数库，直接执行不会升级
 - 永远保留 `config/center.json`、`data/`、`vendor/` 里已放置的便携包，以及 systemd 单元里已有的 `Environment=`
 - 回滚只恢复代码和单元，不覆盖 `data/`
 

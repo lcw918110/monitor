@@ -54,6 +54,7 @@
     accel_temp_critical_c: 95,
     accel_mem_warn_percent: 90,
     accel_mem_critical_percent: 98,
+    cpu_load_per_core_warn: 2,
   };
 
   const el = {
@@ -601,14 +602,54 @@
     return "normal";
   }
 
-  function metricSpan(text, level) {
+  function metricSpan(text, level, title) {
+    const tip = title ? ' title="' + escapeHtml(title) + '"' : "";
     return (
       '<span class="metric ' +
       escapeHtml(level || "normal") +
-      '">' +
+      '"' +
+      tip +
+      ">" +
       text +
       "</span>"
     );
+  }
+
+  function loadPerCoreHigh(load, cores) {
+    if (typeof UX.loadPerCoreHigh === "function") {
+      return UX.loadPerCoreHigh(load, cores, thresholds.cpu_load_per_core_warn);
+    }
+    return false;
+  }
+
+  function hostLoadCell(h) {
+    const l1 = loadPerCoreHigh(h.load1, h.cpu_count);
+    const l5 = loadPerCoreHigh(h.load5, h.cpu_count);
+    let title = "";
+    if (l1 && l5) title = "load1 与 load5 相对核数达到阈值";
+    else if (l1) title = "load1/核数达到阈值";
+    else if (l5) title = "load5/核数达到阈值";
+    return metricSpan(fmtNum(h.load1, 2), l1 || l5 ? "warn" : "normal", title);
+  }
+
+  function loadWindowSpan(value, cores) {
+    const high = loadPerCoreHigh(value, cores);
+    return metricSpan(
+      fmtNum(value, 2),
+      high ? "warn" : "normal",
+      high ? "相对核数达到负载阈值" : ""
+    );
+  }
+
+  function loadCoreRatio(load, cores) {
+    if (load === null || load === undefined || load === "" || Number.isNaN(Number(load))) {
+      return metricSpan("-", "normal");
+    }
+    const c = Number(cores);
+    if (!c) return metricSpan("-", "normal");
+    const ratio = Number(load) / c;
+    const high = loadPerCoreHigh(load, cores);
+    return metricSpan(ratio.toFixed(2), high ? "warn" : "normal");
   }
 
   function metricPct(v, warn, crit) {
@@ -1442,7 +1483,9 @@
       (thresholds.cpu_warn_percent || 80) +
       "% 黄 / ≥" +
       (thresholds.cpu_critical_percent || 95) +
-      "% 红；内存磁盘同理；加速卡温度≥" +
+      "% 红；内存磁盘同理；负载 load1 或 load5 / 核 ≥" +
+      (thresholds.cpu_load_per_core_warn || 2) +
+      " 黄；加速卡温度≥" +
       (thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c || 85) +
       "°C 黄</span>";
   }
@@ -1620,7 +1663,7 @@ function renderHosts(hosts) {
           (h.online ? accelUtilCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
-          (h.online ? fmtNum(h.load1, 2) : offlineMetricCell()) +
+          (h.online ? hostLoadCell(h) : offlineMetricCell()) +
           "</td>" +
           "<td>" +
           fmtTime(h.last_seen) +
@@ -1764,20 +1807,21 @@ function renderHosts(hosts) {
     html +=
       '<div class="k">负载</div><div class="v">' +
       "1m=" +
-      (sys.load1 ?? "-") +
+      loadWindowSpan(sys.load1, sys.cpu_count) +
       " · 5m=" +
-      (sys.load5 ?? "-") +
+      loadWindowSpan(sys.load5, sys.cpu_count) +
       " · 15m=" +
-      (sys.load15 ?? "-") +
+      fmtNum(sys.load15, 2) +
       "</div>";
     if (sys.cpu_count) {
-      const l1 = Number(sys.load1);
-      if (!Number.isNaN(l1)) {
-        html +=
-          '<div class="k">负载占核数</div><div class="v">' +
-          fmtPct((l1 / Number(sys.cpu_count)) * 100) +
-          "</div>";
-      }
+      html +=
+        '<div class="k">负载/核数</div><div class="v">1m ' +
+        loadCoreRatio(sys.load1, sys.cpu_count) +
+        " · 5m " +
+        loadCoreRatio(sys.load5, sys.cpu_count) +
+        "（黄：≥ " +
+        (thresholds.cpu_load_per_core_warn || 2) +
+        "，与异常判定同一阈值）</div>";
     }
     html +=
       '<div class="k">内存利用率</div><div class="v">' +
@@ -2974,6 +3018,7 @@ function renderHosts(hosts) {
     const table = document.getElementById("hostTable");
     if (table && table.scrollIntoView) table.scrollIntoView({ block: "start" });
   }
+  if (typeof UX.applyHealthVersion === "function") UX.applyHealthVersion();
   refresh();
   setInterval(refresh, REFRESH_MS);
 })();

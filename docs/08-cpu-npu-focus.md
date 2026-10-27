@@ -1,10 +1,12 @@
-# CPU / 加速卡聚焦与自动化部署说明（v1.4）
+# CPU / 加速卡聚焦与自动化部署说明
+
+现行说明，对应基线 v1.10.0。升级步骤以 `docs/14-ops-runbook.md` 为准。
 
 ## 需求响应
 
 1. **不做告警通道 / 修复动作**：移除控制台告警条依赖；改为资源 **异常判定**（normal / warn / critical / unknown）。
 2. **聚焦 CPU + 加速卡**：采集、统计、趋势、判定以 CPU 与加速卡为主（厂商见下）。
-3. **部署自动化**：唯一路径为中心「客户端部署」页或中心机 `deploy_fleet.sh` / `deploy_agent.sh`；Center 用 `deploy_center.sh`。本地试用 `local_up.sh`。不要笔记本旁路 scp/sshpass。
+3. **部署自动化**：Agent 只走中心「客户端部署」页或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。中心首次安装用 `deploy_center.sh`，已安装中心的升级用 `scripts/push_upgrade.sh`。本地试用 `local_up.sh`。不要笔记本旁路 scp/sshpass。
 
 ## 加速卡采集
 
@@ -18,7 +20,7 @@
 | 寒武纪 | `cnmon` 等 |
 | 瑞芯微 RKNN | rknpu 相关节点/工具 |
 
-无对应工具时该项为空列表，不影响 CPU/内存等系统指标上报。
+没有厂商工具时，若 PCI 能认出已知加速卡，仍上报该卡：健康为 `abnormal`，利用率留空，不当成 0% 样本。认不出则该项为空列表。两种情况都不影响 CPU、内存等系统指标。
 
 主机类型：
 
@@ -30,14 +32,14 @@
 | 资源 | 偏高（warn） | 异常（critical） |
 | --- | --- | --- |
 | CPU 利用率 | ≥80% | ≥95% |
-| CPU 负载 | load1/核数 ≥ 2.0 | — |
+| CPU 负载 | load1/核数或 load5/核数 ≥ 2.0（同一 `cpu_load_per_core_warn`） | — |
 | 加速卡 Health | Warning 等非 OK | Alarm / Critical |
 | 加速卡利用率 | ≥95% | — |
 | 加速卡温度 | ≥85°C | ≥95°C |
 | 加速卡内存 | ≥90% | ≥98% |
 | 主机离线 | — | 判定为 unknown（不臆造资源状态） |
 
-阈值可在 `config/center.example.json` 的 `anomaly` 段调整。
+阈值可在 `config/center.example.json` 的 `anomaly` 段调整。load15 只采集和展示，不参与变黄。`getloadavg` 与 `/proc/loadavg` 都失败，或某一档无法解析时，该档为 null，页面显示 `-`；操作系统报出的 0 仍是 0，不当成读取失败。
 
 ## 主机详情：时间段统计
 
@@ -60,7 +62,7 @@
 
 1. 同步代码到安装目录  
 2. 若不存在则生成 `center.json`（含 anomaly 阈值）  
-3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已有中心不要把 `scripts/lib/sync_tree.sh` 当成升级命令。升级、备份和回滚见 `docs/14-ops-runbook.md`。
+3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已安装中心换代码走 `scripts/push_upgrade.sh`（内部 source `sync_tree`，保留 `ExecStart` 和已有 `Environment=`）。不要直接执行 `scripts/lib/sync_tree.sh`。不升级时的备份和回滚见 `docs/14-ops-runbook.md`。
 4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）  
 5. 轮询 `/api/v1/health` 直至成功  
 6. 同步后校验 `$INSTALL_DIR/agent/__init__.py`（中心树必须带 agent 包，供后续打包下发）  
@@ -87,4 +89,4 @@
 
 ## 下一步
 
-见 `docs/10-roadmap.md`（下一优先 U1 总览与可读状态；实装与容量仍是 N1、N4）。容量探针和空白结果表见 `docs/15-capacity-lab.md`。升级、备份、恢复见 `docs/14-ops-runbook.md`。
+见 `docs/10-roadmap.md`。U1 已交付顶栏、今日关注、白话健康和报告深链；长期空闲名单仍待。下一优先是 U2。实装与容量仍是 N1、N4。容量探针和空白结果表见 `docs/15-capacity-lab.md`。升级不要绕过 `docs/14-ops-runbook.md`；备份与恢复也写在同一篇。
