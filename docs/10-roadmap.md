@@ -195,7 +195,7 @@ v1.10.0 先把四个入口放到同一顶栏。部署仍是 `/deploy.html`，时
 
 **不变量**（已经是产品路径，界面和脚本都不许另开旁路）：
 
-- 升级只走 `scripts/push_upgrade.sh` → `scripts/upgrade_center.sh`。先 `--check-only`，通过后再正式升级
+- 升级只走 `scripts/push_upgrade.sh` → `scripts/upgrade_center.sh`。先 `--check-only`，通过后再正式升级。`scripts/lib/sync_tree.sh` 是函数库，直接执行不会升级
 - 永远保留 `config/center.json`、`data/`、`vendor/` 里已放置的便携包，以及 systemd 单元里已有的 `Environment=`
 - 回滚只恢复代码和单元，不覆盖 `data/`
 

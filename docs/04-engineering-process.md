@@ -25,6 +25,8 @@
 
 历史折线、时段统计、systemd/守护进程、资源组、多盘、AMD 与 `accel_summary`、离线不展示实时数字、日/周/月诊断报告入库，以及中心进程内的报告调度（错过不补），都已在当前版本。
 
+同样已经落地、不要再设计成待办或旁路的还有：主机隐藏与资产字段、同机更换 IP、便携 CPython、中心升级命令 `scripts/push_upgrade.sh` / `scripts/upgrade_center.sh`。操作步骤见 `docs/14-ops-runbook.md`。`scripts/lib/sync_tree.sh` 只是这些脚本 source 的函数库。
+
 ## 后续仍未做
 
 - 告警通知通道（页面只做阈值着色）。诊断报告留了 `deliver_report` 挂钩，企业微信 / 钉钉 / 飞书尚未发送
