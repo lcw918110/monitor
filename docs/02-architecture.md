@@ -48,7 +48,7 @@
 | 存储层 | `center/storage.py` | SQLite：主机快照、历史、时段聚合、清理 |
 | 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
 | 诊断报告 | `center/reports.py` | 日/周/月窗口、闲忙口径、Markdown；结果表 `diagnostic_reports` |
-| 报告调度 | `center/report_schedule.py` | 进程内定时生成；错过不补；`deliver_report` 为下一阶段推送挂钩（当前不发送） |
+| 报告调度 | `center/report_schedule.py` | 进程内定时生成；错过不补；成功后 `deliver_report`（已配置 Webhook 才发送） |
 | 展示地址 | `center/hostaddr.py` | 列表/详情/时段统计/诊断报告的完整 IP：手工 `address` → 未停用的部署清单 → host_id 内嵌 IP → RFC1918；跳过 `198.18/15` 隧道假 IP。历史 IP 在 `asset_meta.previous_ips` |
 | 手工资产 / 隐藏 | `center/hostmeta.py` | 负责人、用途、资产字段、隐藏与导入。上报不改写手工文字 |
 | 同机改址 | `center/readdress.py` | 更换展示 IP，旧地址进历史；可撤销 |
@@ -56,7 +56,9 @@
 | 异常判定 | `center/anomaly.py` | 阈值着色判定。`npu_*` 键是旧配置别名 |
 | 便携解释器 | `center/python_bundle.py` | 按架构选择中心上的 CPython 包 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
-| Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html` |
+| 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）与报告推送配置，表 `admin_settings` |
+| 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书 Webhook；未配置不发请求 |
+| Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html`、设置页 `/settings.html` |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
 | 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
@@ -75,7 +77,8 @@
 - **metrics_history**：压缩历史点，保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘
 - **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组
-- **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路  
+- **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路
+- **admin_settings**：管理 Token 哈希、报告推送开关 / 渠道 / Webhook。与监测库同一个 SQLite。接口不回显 Token 明文和完整 Webhook  
 
 容量与并发适合规模见路线图 **N4**。摸底方法和空白结果表在 `docs/15-capacity-lab.md`：数字必须实测后填写，本文不写主机台数。双中心 / 双活继续不做；备份与恢复见 `docs/14-ops-runbook.md`。框架化扩展指标见 **N2**。
 

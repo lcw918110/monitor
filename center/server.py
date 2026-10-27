@@ -16,8 +16,16 @@ from center import __version__
 from center import api as api_mod
 from center import deploy_api
 from center import reports as reports_mod
+from center.admin_settings import (
+    AdminSettingsStore,
+    bootstrap_management_token,
+    handle_get_admin_settings,
+    handle_save_admin_settings,
+    write_allowed,
+)
 from center.deploy_runner import DeployRunner
-from center.report_schedule import ReportScheduler, merge_report_schedule
+from center.report_push import set_push_store
+from center.report_schedule import ReportScheduler, deliver_report, merge_report_schedule
 from center.deploy_store import DeployStore
 from center.storage import Storage
 from common.validate import validate_center_config
@@ -114,6 +122,7 @@ def make_handler(
     deploy_store: Optional[DeployStore] = None,
     deploy_runner: Optional[DeployRunner] = None,
     period_util: Optional[Dict[str, Any]] = None,
+    admin_store: Optional[AdminSettingsStore] = None,
 ):
     thresholds = anomaly_thresholds or {}
     busy_defaults = period_util_thresholds(period_util)
@@ -153,6 +162,20 @@ def make_handler(
                 self._send_json(500, {"ok": False, "error": "部署模块未初始化"})
                 return False
             return True
+
+        def _allow_management_write(self) -> bool:
+            presented = (self.headers.get("X-Management-Token") or "").strip()
+            if write_allowed(admin_store, presented):
+                return True
+            self._send_json(
+                401,
+                {
+                    "ok": False,
+                    "error": "管理 Token 无效或未提供",
+                    "code": "management_token_required",
+                },
+            )
+            return False
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -414,6 +437,11 @@ def make_handler(
                 self._send_json(404, {"ok": False, "error": "未找到接口"})
                 return
 
+            if path == "/api/v1/settings":
+                code, payload = handle_get_admin_settings(admin_store)
+                self._send_json(code, payload)
+                return
+
             if path == "/api/v1/health":
                 self._send_json(
                     200,
@@ -427,6 +455,15 @@ def make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             body = self._read_body()
+            # Agent 上报仍只校验 center.json 的 token，不要求管理 Token。
+            if path.startswith("/api/") and path != "/api/v1/metrics":
+                if not self._allow_management_write():
+                    return
+
+            if path == "/api/v1/settings":
+                code, payload = handle_save_admin_settings(admin_store, body)
+                self._send_json(code, payload)
+                return
 
             if path == "/api/v1/reports/generate":
                 code, payload = reports_mod.handle_generate_report(
@@ -436,6 +473,13 @@ def make_handler(
                     busy_thresholds=busy_defaults,
                     anomaly_thresholds=thresholds,
                 )
+                report = (payload or {}).get("report") or {}
+                if (
+                    code == 200
+                    and not payload.get("skipped")
+                    and report.get("status", "ok") == "ok"
+                ):
+                    payload["push"] = deliver_report(report)
                 self._send_json(code, payload)
                 return
 
@@ -597,6 +641,9 @@ def make_handler(
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path.startswith("/api/"):
+                if not self._allow_management_write():
+                    return
             if path.startswith("/api/v1/hosts/"):
                 rest = path[len("/api/v1/hosts/") :].strip("/")
                 parts = rest.split("/") if rest else []
@@ -706,6 +753,37 @@ def run_server(config: Dict[str, Any]) -> None:
     )
     t.start()
 
+    host = config.get("host") or "0.0.0.0"
+    port = int(config.get("port") or 8080)
+    token = config.get("token") or ""
+    admin_store = AdminSettingsStore(db_path)
+    boot = bootstrap_management_token(
+        admin_store, os.environ.get("MONITOR_MANAGEMENT_TOKEN") or ""
+    )
+    if boot.startswith("invalid:"):
+        print("[配置错误] MONITOR_MANAGEMENT_TOKEN %s" % boot.split(":", 1)[1], flush=True)
+        raise SystemExit(2)
+    if boot == "applied":
+        print("[设置] 已从环境变量写入管理 Token（只存哈希，不明文落盘）", flush=True)
+    elif boot == "kept":
+        print("[设置] 管理 Token 已存在，忽略环境变量", flush=True)
+    set_push_store(admin_store)
+    if admin_store.token_configured():
+        print("[设置] 管理 Token 已启用。写操作需要请求头 X-Management-Token。", flush=True)
+    else:
+        print(
+            "[设置] 尚未设置管理 Token，写操作暂时开放。请打开 /settings.html 立刻设置。",
+            flush=True,
+        )
+    push_view = admin_store.public_view()
+    if push_view.get("push_enabled") and push_view.get("push_webhook_set"):
+        print(
+            "[设置] 诊断报告将推送到%s" % push_view.get("push_channel_label"),
+            flush=True,
+        )
+    else:
+        print("[设置] 诊断报告推送未配置，生成后不外发。", flush=True)
+
     scheduler = ReportScheduler(
         storage,
         schedule=config.get("report_schedule"),
@@ -714,9 +792,6 @@ def run_server(config: Dict[str, Any]) -> None:
     )
     scheduler.start()
 
-    host = config.get("host") or "0.0.0.0"
-    port = int(config.get("port") or 8080)
-    token = config.get("token") or ""
     deploy_store = DeployStore(db_path)
     from center.python_bundle import bundles_dir_from_config
 
@@ -743,10 +818,12 @@ def run_server(config: Dict[str, Any]) -> None:
         deploy_store=deploy_store,
         deploy_runner=deploy_runner,
         period_util=config.get("period_util") or {},
+        admin_store=admin_store,
     )
     httpd = ThreadingHTTPServer((host, port), handler)
     print("中心端已启动: http://%s:%s/" % (host, port), flush=True)
     print("客户端部署页: http://%s:%s/deploy.html" % (host, port), flush=True)
+    print("管理设置页: http://%s:%s/settings.html" % (host, port), flush=True)
     print("数据文件: %s" % db_path, flush=True)
     try:
         httpd.serve_forever()
