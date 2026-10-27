@@ -1153,10 +1153,20 @@ class Storage:
             "accel_temp_max": max(accel_temps) if accel_temps else None,
         }
 
+    def _configured_retention_days(self) -> int:
+        """0 表示不按天数删除，也不把查询窗裁回 7 天。缺省才是 7。"""
+        raw = self.retention_days
+        if isinstance(raw, bool) or raw is None or raw == "":
+            return 7
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 7
+
     def _retention_span_seconds(self) -> int:
-        days = int(self.retention_days or 0)
+        days = self._configured_retention_days()
         if days <= 0:
-            return 7 * 86400
+            return 0
         return days * 86400
 
     def resolve_period_window(
@@ -1172,9 +1182,14 @@ class Storage:
         成功返回 (None, window)；失败返回 (error, {})。
         """
         now_ts = int(now if now is not None else time.time())
+        days = self._configured_retention_days()
         retention_sec = self._retention_span_seconds()
-        earliest = now_ts - retention_sec
-        max_minutes = max(1, retention_sec // 60)
+        if days <= 0:
+            earliest = None
+            max_minutes = 100 * 365 * 24 * 60
+        else:
+            earliest = now_ts - retention_sec
+            max_minutes = max(1, retention_sec // 60)
 
         if from_ts is not None or to_ts is not None:
             if from_ts is None or to_ts is None:
@@ -1189,7 +1204,7 @@ class Storage:
             clamped = False
             win_from = req_from
             win_to = req_to
-            if win_from < earliest:
+            if earliest is not None and win_from < earliest:
                 win_from = earliest
                 clamped = True
             if win_to > now_ts:
@@ -1206,7 +1221,7 @@ class Storage:
                 "requested_from_ts": req_from,
                 "requested_to_ts": req_to,
                 "requested_minutes": None,
-                "retention_days": int(self.retention_days or 7),
+                "retention_days": days,
                 "clamped": clamped,
                 "now": now_ts,
             }
@@ -1228,7 +1243,7 @@ class Storage:
             "requested_from_ts": None,
             "requested_to_ts": None,
             "requested_minutes": req_minutes,
-            "retention_days": int(self.retention_days or 7),
+            "retention_days": days,
             "clamped": clamped,
             "now": now_ts,
         }

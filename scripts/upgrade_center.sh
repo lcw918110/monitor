@@ -345,7 +345,7 @@ PY
 
 # mode=cleanup：用安装目录里的 Storage 删过期 metrics_history，stdout 打「天数 条数」。
 # mode=floor：现场历史上报不得少于备份里 ts 仍在保留期内的行。stdout 打这个下限。
-# 保留天数与 center/server.py 一致：int(config.get("retention_days") or 7)。
+# 保留天数与中心进程一致：缺省 7；显式 0 表示不按天数删除。
 _upgrade_retention_py() {
   local mode="$1"
   PYTHONPATH="${INSTALL_DIR}${PYTHONPATH:+:$PYTHONPATH}" \
@@ -371,10 +371,17 @@ def load_cfg():
 
 def retention_days(cfg):
     raw = cfg.get("retention_days", 7)
+    if raw is None or raw == "":
+        return 7
+    if isinstance(raw, bool):
+        fail("retention_days 无法解析: %r" % (raw,))
     try:
-        return int(raw or 7)
+        days = int(raw)
     except (TypeError, ValueError):
         fail("retention_days 无法解析: %r" % (raw,))
+    if days < 0:
+        fail("retention_days 不能为负: %r" % (raw,))
+    return days
 
 def open_db(path):
     conn = sqlite3.connect(path, timeout=30)
@@ -424,9 +431,8 @@ if mode == "floor":
     if not os.path.isfile(live_db):
         fail("现场数据库不见了: %s" % live_db)
     days = retention_days(load_cfg())
-    if days <= 0:
-        fail("retention_days=%s 时进程不会删除历史上报" % days)
-    cutoff = int(time.time()) - days * 86400
+    # 0：进程不会按天数删，备份里的全部历史上报都算仍应保留。
+    cutoff = 0 if days <= 0 else int(time.time()) - days * 86400
     try:
         backup = open_db(backup_db)
         try:

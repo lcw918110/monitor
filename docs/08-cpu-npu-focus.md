@@ -39,7 +39,7 @@
 | 加速卡内存 | ≥90% | ≥98% |
 | 主机离线 | — | 判定为 unknown（不臆造资源状态） |
 
-阈值可在 `config/center.example.json` 的 `anomaly` 段调整。load15 只采集和展示，不参与变黄。`getloadavg` 与 `/proc/loadavg` 都失败，或某一档无法解析时，该档为 null，页面显示 `-`；操作系统报出的 0 仍是 0，不当成读取失败。
+阈值可在 `config/center.example.json` 的 `anomaly` 段调整，或在设置页 `/settings.html` 改，保存后当前进程立即用于着色。说明见 `config/center.example.md`。load15 只采集和展示，不参与变黄。`getloadavg` 与 `/proc/loadavg` 都失败，或某一档无法解析时，该档为 null，页面显示 `-`；操作系统报出的 0 仍是 0，不当成读取失败。
 
 ## 主机详情：时间段统计
 

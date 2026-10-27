@@ -69,7 +69,7 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh \
 5. 测试失败则退出：**不备份、不同步、不重启**。
 6. 磁盘预检：可用空间要够「约 3 倍 `data/monitor.db` 再加 20MB」。不够则退出，此时还没改安装目录。
 7. `--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出。
-8. 正式升级：用 SQLite `backup` API 做一致副本并 `quick_check`。接着用**已经装上的** `center.storage.Storage`，按 `config/center.json` 的 `retention_days`（与中心进程相同，缺省 7）对现场库清一次过期 `metrics_history`，再记下主机和历史上报条数，然后同步代码。同步保留 `config/center.json`、`data/`、`vendor/python` 里已有的 tar.gz。`--check-only` 不会做这次清理。
+8. 正式升级：用 SQLite `backup` API 做一致副本并 `quick_check`。接着用**已经装上的** `center.storage.Storage`，按 `config/center.json` 的 `retention_days`（与中心进程相同，缺省 7；写 0 则这次不删历史上报）对现场库清一次过期 `metrics_history`，再记下主机和历史上报条数，然后同步代码。同步保留 `config/center.json`、`data/`、`vendor/python` 里已有的 tar.gz。`--check-only` 不会做这次清理。
 9. 会重写 `monitor-center.service`，但保留原来的 `ExecStart`，并保留单元里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）。不是为了少改单元去手写 rsync。
 10. 重启后检查本机 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports`。主机变少、数据库文件不见或读不出来、历史上报被清空，都失败并回滚代码。历史上报变少但主机没少时，先等启动清理结束再读一次；若仍变少，只要现场条数不少于备份里仍在保留期内的行，就当成预期的保留期清理，不回滚。
 11. 健康检查失败时只回滚代码和单元，**不用**升级前的副本覆盖 `data/`。失败的代码留在 `/opt/monitor-failed-<时间>`。
@@ -77,7 +77,7 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh \
 
 `scripts/backup_center.sh` 写出的目录和上面是**同一批名字**。下一次升级默认只留最新 5 份，其中也包括单独做的备份。要多留，得在中心上把 `upgrade_center.sh` 的 `--keep-backups` 调高；`push_upgrade.sh` 目前不转发这个参数，默认就是 5。
 
-只改 `report_schedule` 的时刻、不换代码时，改的是中心机上的 `config/center.json`，然后重启 `monitor-center` 让进程重读配置。这不是升级。整段 `report_schedule` 可以不写，默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补。
+只改配置、不换代码时，打开中心的 `/settings.html`。保留天数、异常着色、诊断报告空闲/高负荷线（`report`）、时段繁忙线、报告时刻保存后当前进程立即生效。监听地址、端口、数据目录写入 `config/center.json` 后要重启 `monitor-center` 才换，这不是升级。也可以直接改中心机上的 `config/center.json` 再重启，让进程重读文件；设置页没打开时，手改不会自动进正在跑的进程。字段和默认值见 `config/center.example.json` 与 `config/center.example.md`。整段 `report_schedule` 或 `report` 可以不写：调度默认每天 00:10、每周一 00:20、每月 1 日 00:30（上海时间）生成上一完整周期，错过不补；报告空闲线默认平均 <5% 且繁忙 <5%（`idle_busy_lt` 是 0.05），高负荷默认繁忙占比 ≥0.40 或 P95 ≥85%。改 `period_util` 不会改这两条报告线。
 
 ## 备份里有什么
 

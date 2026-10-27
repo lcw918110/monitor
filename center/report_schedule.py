@@ -195,6 +195,7 @@ class ReportScheduler:
         schedule: Optional[Dict[str, Any]] = None,
         busy_thresholds: Optional[Dict[str, float]] = None,
         anomaly_thresholds: Optional[Dict[str, Any]] = None,
+        report_rules: Optional[Dict[str, Any]] = None,
         poll_seconds: int = 20,
         clock: Optional[Callable[[], int]] = None,
     ) -> None:
@@ -202,6 +203,7 @@ class ReportScheduler:
         self.schedule = normalize_report_schedule(schedule)
         self.busy_thresholds = busy_thresholds
         self.anomaly_thresholds = anomaly_thresholds
+        self.report_rules = report_rules
         self.poll_seconds = max(5, int(poll_seconds or 20))
         self._clock = clock
         self._fired = set()
@@ -214,6 +216,20 @@ class ReportScheduler:
         if self._clock is None:
             return int(time.time())
         return int(self._clock())
+
+    def update_inputs(
+        self,
+        schedule: Optional[Dict[str, Any]],
+        busy_thresholds: Optional[Dict[str, float]],
+        anomaly_thresholds: Optional[Dict[str, Any]],
+        report_rules: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """设置页改配置后，下一分钟按新时刻和新阈值生成。"""
+        with self._lock:
+            self.schedule = normalize_report_schedule(schedule)
+            self.busy_thresholds = busy_thresholds
+            self.anomaly_thresholds = anomaly_thresholds
+            self.report_rules = report_rules
 
     def enqueue_due(self, now_ts: Optional[int] = None) -> List[str]:
         """把当前分钟内尚未尝试的槽位放进队列。返回新入队的 key。"""
@@ -246,13 +262,18 @@ class ReportScheduler:
 
     def _generate_job(self, slot: Dict[str, Any]) -> Dict[str, Any]:
         clock_ts = self._now()
+        with self._lock:
+            busy_thresholds = self.busy_thresholds
+            anomaly_thresholds = self.anomaly_thresholds
+            report_rules = self.report_rules
         try:
             code, payload = handle_generate_report(
                 self.storage,
                 body=b"",
                 query="period=%s&as_of=%s" % (slot["period"], int(slot["as_of"])),
-                busy_thresholds=self.busy_thresholds,
-                anomaly_thresholds=self.anomaly_thresholds,
+                busy_thresholds=busy_thresholds,
+                anomaly_thresholds=anomaly_thresholds,
+                report_rules=report_rules,
                 source="scheduled",
                 replace=False,
                 generated_at=clock_ts,

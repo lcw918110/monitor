@@ -35,6 +35,45 @@ def validate_center_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if period_util is not None and not isinstance(period_util, dict):
         errors.append("period_util 必须是对象")
 
+    report = cfg.get("report")
+    if report is not None and not isinstance(report, dict):
+        errors.append("report 必须是对象")
+    elif isinstance(report, dict):
+        ranges = {
+            "idle_avg_lt": (0.0, 100.0),
+            "idle_busy_lt": (0.0, 1.0),
+            "high_busy_gte": (0.0, 1.0),
+            "high_p95_gte": (0.0, 100.0),
+        }
+        for key, (low, high) in ranges.items():
+            if key not in report or report.get(key) in (None, ""):
+                continue
+            raw = report.get(key)
+            if isinstance(raw, bool):
+                errors.append("report.%s 必须是数字" % key)
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                errors.append("report.%s 必须是数字" % key)
+                continue
+            if not (low <= value <= high):
+                errors.append("report.%s 必须在 %s-%s" % (key, low, high))
+        if "min_samples" in report and report.get("min_samples") not in (None, ""):
+            raw_count = report.get("min_samples")
+            if isinstance(raw_count, bool):
+                errors.append("report.min_samples 必须是整数")
+            else:
+                try:
+                    count = int(raw_count)
+                except (TypeError, ValueError):
+                    errors.append("report.min_samples 必须是整数")
+                else:
+                    if isinstance(raw_count, float) and abs(raw_count - count) > 1e-9:
+                        errors.append("report.min_samples 必须是整数")
+                    elif not (1 <= count <= 1000000):
+                        errors.append("report.min_samples 必须在 1-1000000")
+
     schedule = cfg.get("report_schedule")
     if schedule is not None:
         if not isinstance(schedule, dict):

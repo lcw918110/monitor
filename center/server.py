@@ -9,7 +9,7 @@ import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 from center import __version__
@@ -18,14 +18,21 @@ from center import deploy_api
 from center import reports as reports_mod
 from center.admin_settings import (
     AdminSettingsStore,
+    _UPDATE_FIELDS,
     bootstrap_management_token,
     handle_get_admin_settings,
-    handle_save_admin_settings,
     write_allowed,
+)
+from center.center_params import (
+    CenterRuntime,
+    _cfg_int,
+    merge_center_config,
+    period_util_thresholds,
+    read_user_config,
 )
 from center.deploy_runner import DeployRunner
 from center.report_push import set_push_store
-from center.report_schedule import ReportScheduler, deliver_report, merge_report_schedule
+from center.report_schedule import ReportScheduler, deliver_report
 from center.deploy_store import DeployStore
 from center.storage import Storage
 from common.validate import validate_center_config
@@ -35,84 +42,68 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
 def load_config(path: Optional[str]) -> Dict[str, Any]:
-    cfg = {
-        "host": "0.0.0.0",
-        "port": 8080,
-        "data_dir": "data",
-        "token": "",
-        "offline_seconds": 90,
-        "retention_days": 7,
-        "cleanup_interval_seconds": 3600,
-        "anomaly": {
-            "cpu_warn_percent": 80,
-            "cpu_critical_percent": 95,
-            "cpu_load_per_core_warn": 2.0,
-            "mem_warn_percent": 85,
-            "mem_critical_percent": 95,
-            "disk_warn_percent": 85,
-            "disk_critical_percent": 95,
-            "accel_util_warn_percent": 95,
-            "accel_temp_warn_c": 85,
-            "accel_temp_critical_c": 95,
-            "accel_mem_warn_percent": 90,
-            "accel_mem_critical_percent": 98,
-        },
-        "period_util": {
-            "busy_cpu_percent": 80,
-            "busy_accel_percent": 80,
-        },
-        "report_schedule": merge_report_schedule(None),
-    }
-    if path and os.path.isfile(path):
-        with open(path, "r", encoding="utf-8") as f:
-            user = json.load(f)
-        if not isinstance(user, dict):
-            raise ValueError("配置文件根节点必须是 JSON 对象")
-        anomaly = cfg.get("anomaly") or {}
-        period_util = cfg.get("period_util") or {}
-        user_anomaly = user.pop("anomaly", None)
-        user_period_util = user.pop("period_util", None)
-        user_schedule = user.pop("report_schedule", None)
-        # 兼容旧 alerts 字段名，忽略不用
-        user.pop("alerts", None)
-        cfg.update(user)
-        if isinstance(user_anomaly, dict):
-            anomaly.update(user_anomaly)
-        cfg["anomaly"] = anomaly
-        if isinstance(user_period_util, dict):
-            period_util.update(user_period_util)
-        cfg["period_util"] = period_util
-        # 缺省 report_schedule 时用默认时刻；已有 token / retention_days 不被这段覆盖
-        if user_schedule is None:
-            cfg["report_schedule"] = merge_report_schedule(None)
-        else:
-            cfg["report_schedule"] = merge_report_schedule(user_schedule)
-    return cfg
+    if not path or not os.path.isfile(path):
+        return merge_center_config(None)
+    with open(path, "r", encoding="utf-8") as handle:
+        user = json.load(handle)
+    if not isinstance(user, dict):
+        raise ValueError("配置文件根节点必须是 JSON 对象")
+    return merge_center_config(user)
 
 
-def period_util_thresholds(period_util: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
-    from center.storage import DEFAULT_BUSY_THRESHOLDS
+def handle_settings_write(
+    store: Optional[AdminSettingsStore],
+    body: bytes,
+    runtime: Optional[CenterRuntime] = None,
+) -> Tuple[int, Dict[str, Any]]:
+    """管理 Token / 推送与中心参数可以分次保存，也可以放在同一次请求里。"""
+    if store is None:
+        return 503, {"ok": False, "error": "管理设置未初始化"}
+    try:
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 400, {"ok": False, "error": "请求体必须是合法 JSON"}
+    if not isinstance(data, dict):
+        return 400, {"ok": False, "error": "JSON 根节点必须是对象"}
+    has_center = "center" in data
+    center = data.get("center")
+    admin_body = {key: data[key] for key in _UPDATE_FIELDS if key in data}
+    if not admin_body and not has_center:
+        return 400, {"ok": False, "error": "没有要保存的设置"}
+    if has_center:
+        if runtime is None:
+            return 503, {"ok": False, "error": "中心配置未初始化"}
+        if not isinstance(center, dict):
+            return 400, {"ok": False, "error": "center 必须是对象"}
+        error = runtime.validate(center)
+        if error:
+            return 400, {"ok": False, "error": error}
+    admin_payload: Optional[Dict[str, Any]] = None
+    if admin_body:
+        code, admin_payload = store.update(admin_body)
+        if code != 200:
+            return code, admin_payload
+    center_payload: Optional[Dict[str, Any]] = None
+    if has_center and runtime is not None:
+        code, center_payload = runtime.apply(center)
+        if code != 200:
+            return code, center_payload
+    if admin_payload is None:
+        code, admin_payload = handle_get_admin_settings(store)
+        if code != 200:
+            return code, admin_payload
+    result = dict(admin_payload or {})
+    if center_payload is not None:
+        result["center"] = center_payload.get("center")
+        result["restart_required"] = list(center_payload.get("restart_required") or [])
+    return 200, result
 
-    thresholds = dict(DEFAULT_BUSY_THRESHOLDS)
-    cfg = period_util or {}
-    mapping = {
-        "busy_cpu_percent": "cpu_percent",
-        "busy_accel_percent": "accel_util_avg",
-        "busy_mem_percent": "mem_percent",
-        "busy_disk_percent": "disk_percent",
-    }
-    for cfg_key, metric in mapping.items():
-        if cfg.get(cfg_key) is None or cfg.get(cfg_key) == "":
-            continue
-        try:
-            value = float(cfg[cfg_key])
-        except (TypeError, ValueError):
-            continue
-        if value < 0:
-            thresholds.pop(metric, None)
-        else:
-            thresholds[metric] = value
-    return thresholds
+
+class CleanupControl:
+    """清理线程每轮读这个间隔，设置页改完不用重启。"""
+
+    def __init__(self, interval: int) -> None:
+        self.interval = interval
 
 
 def make_handler(
@@ -123,11 +114,32 @@ def make_handler(
     deploy_runner: Optional[DeployRunner] = None,
     period_util: Optional[Dict[str, Any]] = None,
     admin_store: Optional[AdminSettingsStore] = None,
+    runtime: Optional[CenterRuntime] = None,
 ):
     thresholds = anomaly_thresholds or {}
     busy_defaults = period_util_thresholds(period_util)
     dstore = deploy_store
     drunner = deploy_runner
+
+    def current_anomaly() -> Dict[str, Any]:
+        if runtime is not None:
+            return runtime.anomaly()
+        return thresholds
+
+    def current_busy() -> Dict[str, float]:
+        if runtime is not None:
+            return runtime.busy_thresholds()
+        return busy_defaults
+
+    def current_token() -> str:
+        if runtime is not None:
+            return runtime.agent_token()
+        return token or ""
+
+    def current_report_rules() -> Optional[Dict[str, Any]]:
+        if runtime is not None:
+            return runtime.report_section()
+        return None
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "MonitorCenter/" + __version__
@@ -183,7 +195,7 @@ def make_handler(
 
             if path == "/api/v1/hosts":
                 code, payload = api_mod.handle_hosts_list(
-                    storage, thresholds=thresholds, query=parsed.query
+                    storage, thresholds=current_anomaly(), query=parsed.query
                 )
                 self._send_json(code, payload)
                 return
@@ -202,13 +214,13 @@ def make_handler(
                 host_id = parts[0]
                 if len(parts) == 1:
                     code, payload = api_mod.handle_host_detail(
-                        storage, host_id, thresholds=thresholds
+                        storage, host_id, thresholds=current_anomaly()
                     )
                     self._send_json(code, payload)
                     return
                 if len(parts) == 2 and parts[1] == "history":
                     code, payload = api_mod.handle_host_history(
-                        storage, host_id, query=parsed.query, busy_defaults=busy_defaults
+                        storage, host_id, query=parsed.query, busy_defaults=current_busy()
                     )
                     self._send_json(code, payload)
                     return
@@ -217,7 +229,7 @@ def make_handler(
                         storage,
                         host_id,
                         query=parsed.query,
-                        busy_defaults=busy_defaults,
+                        busy_defaults=current_busy(),
                     )
                     self._send_json(code, payload)
                     return
@@ -226,7 +238,7 @@ def make_handler(
 
             if path == "/api/v1/period-stats":
                 code, payload = api_mod.handle_cluster_period_stats(
-                    storage, query=parsed.query, busy_defaults=busy_defaults
+                    storage, query=parsed.query, busy_defaults=current_busy()
                 )
                 self._send_json(code, payload)
                 return
@@ -237,13 +249,13 @@ def make_handler(
                 return
 
             if path == "/api/v1/anomaly":
-                code, payload = api_mod.handle_anomaly(storage, thresholds=thresholds)
+                code, payload = api_mod.handle_anomaly(storage, thresholds=current_anomaly())
                 self._send_json(code, payload)
                 return
 
             if path == "/api/v1/export/period-stats.csv":
                 code, text = api_mod.handle_export_period_csv(
-                    storage, query=parsed.query, busy_defaults=busy_defaults
+                    storage, query=parsed.query, busy_defaults=current_busy()
                 )
                 if code != 200:
                     self._send_json(code, text)
@@ -330,7 +342,7 @@ def make_handler(
                 if not self._require_deploy():
                     return
                 code, text, ctype = deploy_api.handle_install_script(
-                    dstore, token, parsed.query
+                    dstore, current_token(), parsed.query
                 )
                 data = text.encode("utf-8")
                 self.send_response(code)
@@ -439,6 +451,9 @@ def make_handler(
 
             if path == "/api/v1/settings":
                 code, payload = handle_get_admin_settings(admin_store)
+                if code == 200 and runtime is not None:
+                    payload = dict(payload)
+                    payload["center"] = runtime.public_view()
                 self._send_json(code, payload)
                 return
 
@@ -461,7 +476,7 @@ def make_handler(
                     return
 
             if path == "/api/v1/settings":
-                code, payload = handle_save_admin_settings(admin_store, body)
+                code, payload = handle_settings_write(admin_store, body, runtime)
                 self._send_json(code, payload)
                 return
 
@@ -470,8 +485,9 @@ def make_handler(
                     storage,
                     body,
                     query=parsed.query,
-                    busy_thresholds=busy_defaults,
-                    anomaly_thresholds=thresholds,
+                    busy_thresholds=current_busy(),
+                    anomaly_thresholds=current_anomaly(),
+                    report_rules=current_report_rules(),
                 )
                 report = (payload or {}).get("report") or {}
                 if (
@@ -490,7 +506,7 @@ def make_handler(
                 except (TypeError, IndexError):
                     remote_ip = ""
                 code, payload = api_mod.handle_metrics_post(
-                    storage, body, expected_token=token, remote_ip=remote_ip
+                    storage, body, expected_token=current_token(), remote_ip=remote_ip
                 )
                 self._send_json(code, payload)
                 return
@@ -723,7 +739,7 @@ def make_handler(
     return Handler
 
 
-def _cleanup_loop(storage: Storage, interval: int) -> None:
+def _cleanup_loop(storage: Storage, control: CleanupControl) -> None:
     while True:
         try:
             deleted = storage.cleanup_old_metrics()
@@ -731,23 +747,32 @@ def _cleanup_loop(storage: Storage, interval: int) -> None:
                 print("[cleanup] 删除过期历史上报 %s 条" % deleted, flush=True)
         except Exception as exc:  # noqa: BLE001
             print("[cleanup] 失败: %s" % exc, flush=True)
+        try:
+            interval = int(control.interval)
+        except (TypeError, ValueError):
+            interval = 3600
         time.sleep(max(60, interval))
 
 
-def run_server(config: Dict[str, Any]) -> None:
+def run_server(
+    config: Dict[str, Any],
+    config_path: Optional[str] = None,
+    user_doc: Optional[Dict[str, Any]] = None,
+) -> None:
     data_dir = config.get("data_dir") or "data"
     os.makedirs(data_dir, exist_ok=True)
     db_path = os.path.join(data_dir, "monitor.db")
     storage = Storage(
         db_path=db_path,
-        offline_seconds=int(config.get("offline_seconds") or 90),
-        retention_days=int(config.get("retention_days") or 7),
+        offline_seconds=_cfg_int(config.get("offline_seconds"), 90),
+        retention_days=_cfg_int(config.get("retention_days"), 7),
     )
 
-    cleanup_interval = int(config.get("cleanup_interval_seconds") or 3600)
+    cleanup_interval = _cfg_int(config.get("cleanup_interval_seconds"), 3600)
+    cleanup = CleanupControl(cleanup_interval)
     t = threading.Thread(
         target=_cleanup_loop,
-        args=(storage, cleanup_interval),
+        args=(storage, cleanup),
         daemon=True,
         name="cleanup",
     )
@@ -789,6 +814,7 @@ def run_server(config: Dict[str, Any]) -> None:
         schedule=config.get("report_schedule"),
         busy_thresholds=period_util_thresholds(config.get("period_util") or {}),
         anomaly_thresholds=config.get("anomaly") or {},
+        report_rules=config.get("report") or {},
     )
     scheduler.start()
 
@@ -811,6 +837,17 @@ def run_server(config: Dict[str, Any]) -> None:
             "[提示] 未能自动推断局域网 IP，请在部署页填写中心对外地址，例如 http://<本机IP>:%s" % port,
             flush=True,
         )
+    runtime = None
+    if config_path:
+        runtime = CenterRuntime(
+            user_doc if isinstance(user_doc, dict) else {},
+            config_path,
+            storage=storage,
+            scheduler=scheduler,
+            deploy_runner=deploy_runner,
+            cleanup=cleanup,
+            project_root=project_root,
+        )
     handler = make_handler(
         storage,
         token,
@@ -819,6 +856,7 @@ def run_server(config: Dict[str, Any]) -> None:
         deploy_runner=deploy_runner,
         period_util=config.get("period_util") or {},
         admin_store=admin_store,
+        runtime=runtime,
     )
     httpd = ThreadingHTTPServer((host, port), handler)
     print("中心端已启动: http://%s:%s/" % (host, port), flush=True)
@@ -841,22 +879,23 @@ def main(argv: Optional[list] = None) -> None:
         help="配置文件路径（默认 config/center.json）",
     )
     args = parser.parse_args(argv)
-    config_path = args.config if os.path.isfile(args.config) else None
-    if args.config and not config_path:
-        # 尝试 example
+    read_path = args.config if args.config and os.path.isfile(args.config) else None
+    if args.config and not read_path:
         example = "config/center.example.json"
         if os.path.isfile(example):
             print("未找到 %s，使用 %s" % (args.config, example))
-            config_path = example
+            read_path = example
         else:
             print("未找到配置，使用内置默认值")
-    cfg = load_config(config_path)
+    user_doc = read_user_config(read_path) if read_path else {}
+    cfg = load_config(read_path)
     ok, errors = validate_center_config(cfg)
     if not ok:
         for err in errors:
             print("[配置错误] %s" % err)
         raise SystemExit(2)
-    run_server(cfg)
+    # 保存写到启动参数指定的 center.json，不改 example。
+    run_server(cfg, config_path=args.config, user_doc=user_doc)
 
 
 if __name__ == "__main__":

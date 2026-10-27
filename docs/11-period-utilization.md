@@ -12,7 +12,7 @@
 规则：
 
 1. 同时提供绝对范围与 `minutes` 时，**以 `from_ts`/`to_ts` 为准**。
-2. 窗口会被裁剪到历史保留期（默认 `retention_days=7`）与当前时刻：过早的 `from_ts` 提到保留起点，未来的 `to_ts` 收到 `now`。
+2. 窗口会被裁剪到历史保留期（默认 `retention_days=7`）与当前时刻：过早的 `from_ts` 提到保留起点，未来的 `to_ts` 收到 `now`。`retention_days` 为 0 时不按天数裁剪，也不删除历史上报。
 3. 裁剪后若区间为空（整段都在保留期之前），返回 400：`时间范围已超出历史保留期`。
 4. 响应里的 `window` 是裁剪后的查询窗；顶层 `from_ts`/`to_ts`（单机）仍表示**实际有样本**的首末时间，便于对照。
 
@@ -122,7 +122,7 @@ curl -s -o period-stats.csv "http://127.0.0.1:8080/api/v1/export/period-stats.cs
 
 只有可丢弃的本地库才可以灌演示点：`python3 scripts/demo_seed.py --url http://127.0.0.1:8080/api/v1/metrics`。不要对已经有主机的中心执行。
 
-日/周/月使用诊断报告复用本节的样本加权与繁忙阈值，另外规定空闲线为 5%，见 `docs/13-diagnostic-reports.md`。诊断报告不改变本接口的默认查询上限。
+日/周/月使用诊断报告复用本节的样本加权与繁忙阈值。空闲线和高负荷线是另一组配置，默认平均 <5%、繁忙 <5%（`report.idle_busy_lt` 为 0.05）、繁忙占比 ≥0.40 或 P95 ≥85%，见 `docs/13-diagnostic-reports.md`。改本节的 `period_util` 不会改那两条报告线。诊断报告不改变本接口的默认查询上限。
 
 CPU / 内存 / 磁盘 / 加速卡利用率若小于 0 或大于 100（或非有限数），不进入 avg / P95 / 繁忙占比。单机与集群响应带 `excluded_samples`（条数和分指标计数）。这不改变合法样本的口径。
 

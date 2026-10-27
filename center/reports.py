@@ -32,12 +32,93 @@ _EXCLUSION_METRIC_LABELS = (
     ("accel_util_avg", "加速卡"),
 )
 
-# 基本不用已从旧模板的 CPU<15% / 加速卡<10% 收紧到 5%。
+# 基本不用的默认线已从旧模板的 CPU<15% / 加速卡<10% 收紧到 5%。
+# 站点可在 center.json 的 report 段改这些数，未配置时仍用这里的默认。
 IDLE_AVG_LT = 5.0
 IDLE_BUSY_LT = 0.05
 HIGH_BUSY_GTE = 0.40
 HIGH_P95_GTE = 85.0
 REPORT_MIN_SAMPLES = 10
+
+
+def resolve_report_rules(raw: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """缺省键用模块默认。非法值留给配置校验，这里不把坏值当成 0。"""
+    rules: Dict[str, Any] = {
+        "idle_avg_lt": float(IDLE_AVG_LT),
+        "idle_busy_lt": float(IDLE_BUSY_LT),
+        "high_busy_gte": float(HIGH_BUSY_GTE),
+        "high_p95_gte": float(HIGH_P95_GTE),
+        "min_samples": int(REPORT_MIN_SAMPLES),
+    }
+    source = raw or {}
+    for key in ("idle_avg_lt", "idle_busy_lt", "high_busy_gte", "high_p95_gte"):
+        if key not in source or source.get(key) in (None, "") or isinstance(source.get(key), bool):
+            continue
+        try:
+            rules[key] = float(source[key])
+        except (TypeError, ValueError):
+            continue
+    if "min_samples" in source and source.get("min_samples") not in (None, "") and not isinstance(
+        source.get("min_samples"), bool
+    ):
+        try:
+            rules["min_samples"] = int(source["min_samples"])
+        except (TypeError, ValueError):
+            pass
+    return rules
+
+
+def _format_threshold_number(value: Any) -> str:
+    number = float(value)
+    if abs(number - round(number)) < 1e-9:
+        return str(int(round(number)))
+    return ("%.4f" % number).rstrip("0").rstrip(".")
+
+
+def _idle_cut_text(rules: Dict[str, Any]) -> str:
+    avg = _format_threshold_number(rules["idle_avg_lt"])
+    busy = _format_threshold_number(float(rules["idle_busy_lt"]) * 100.0)
+    return "平均 <%s%% 且繁忙 <%s%%" % (avg, busy)
+
+
+def _high_cut_text(rules: Dict[str, Any]) -> str:
+    busy = _format_threshold_number(float(rules["high_busy_gte"]) * 100.0)
+    p95 = _format_threshold_number(rules["high_p95_gte"])
+    return "繁忙占比≥%s%% 或 P95≥%s%%" % (busy, p95)
+
+
+def _below_phrase(rules: Dict[str, Any]) -> str:
+    avg = _format_threshold_number(rules["idle_avg_lt"])
+    busy = _format_threshold_number(float(rules["idle_busy_lt"]) * 100.0)
+    if avg == busy:
+        return "均低于 %s%%" % avg
+    return "平均低于 %s%%、繁忙低于 %s%%" % (avg, busy)
+
+
+def _idle_host_text(rules: Dict[str, Any]) -> str:
+    avg = _format_threshold_number(rules["idle_avg_lt"])
+    busy = _format_threshold_number(float(rules["idle_busy_lt"]) * 100.0)
+    if avg == busy:
+        return "低于 %s%%" % avg
+    return "平均低于 %s%% 且繁忙低于 %s%%" % (avg, busy)
+
+
+def _legacy_idle_note(rules: Dict[str, Any]) -> str:
+    if float(rules["idle_avg_lt"]) == float(IDLE_AVG_LT) and abs(
+        float(rules["idle_busy_lt"]) - float(IDLE_BUSY_LT)
+    ) < 1e-9:
+        return "不再使用旧模板的 15%/10%。"
+    return ""
+
+
+def _anomaly_number(anomaly: Dict[str, Any], key: str, default: float) -> float:
+    raw = anomaly.get(key)
+    if raw in (None, "") or isinstance(raw, bool):
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
 # 月报在 retention_days=40、15s 采样时会超过时段接口默认 6 万行上限。
 REPORT_MAX_ROWS = 250000
 
@@ -316,37 +397,48 @@ def host_has_accel(host: Dict[str, Any]) -> bool:
 
 
 def high_load_reasons(
-    host: Dict[str, Any], min_samples: int = REPORT_MIN_SAMPLES
+    host: Dict[str, Any],
+    min_samples: int = REPORT_MIN_SAMPLES,
+    rules: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
-    """高负荷：CPU 或加速卡繁忙占比 ≥40%，或对应 P95 ≥85%。样本不足不判。"""
+    """高负荷：CPU 或加速卡繁忙占比、或对应 P95 达到 report 配置。样本不足不判。"""
+    spec = resolve_report_rules(rules)
+    high_busy = float(spec["high_busy_gte"])
+    high_p95 = float(spec["high_p95_gte"])
     reasons: List[str] = []
     cpu = _metric(host, "cpu_percent")
     if _enough(cpu, min_samples):
         busy = cpu.get("busy_ratio")
         p95 = cpu.get("p95")
-        if busy is not None and float(busy) >= HIGH_BUSY_GTE:
+        if busy is not None and float(busy) >= high_busy:
             reasons.append("CPU 繁忙占比 %.1f%%" % (float(busy) * 100.0))
-        if p95 is not None and float(p95) >= HIGH_P95_GTE:
+        if p95 is not None and float(p95) >= high_p95:
             reasons.append("CPU P95 %.1f%%" % float(p95))
     if host_has_accel(host):
         accel = _metric(host, "accel_util_avg")
         if _enough(accel, min_samples):
             busy = accel.get("busy_ratio")
             p95 = accel.get("p95")
-            if busy is not None and float(busy) >= HIGH_BUSY_GTE:
+            if busy is not None and float(busy) >= high_busy:
                 reasons.append("加速卡繁忙占比 %.1f%%" % (float(busy) * 100.0))
-            if p95 is not None and float(p95) >= HIGH_P95_GTE:
+            if p95 is not None and float(p95) >= high_p95:
                 reasons.append("加速卡 P95 %.1f%%" % float(p95))
     return reasons
 
 
 def idle_status(
-    host: Dict[str, Any], min_samples: int = REPORT_MIN_SAMPLES
+    host: Dict[str, Any],
+    min_samples: int = REPORT_MIN_SAMPLES,
+    rules: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
-    """基本不用：当前在线、样本够，CPU 平均 <5% 且繁忙 <5%。
+    """基本不用：当前在线、样本够，平均与繁忙都低于 report 配置。
 
-    有加速卡时，加速卡平均也须 <5% 且繁忙 <5%。达不到样本要求则不算空闲。
+    默认是平均 <5% 且繁忙 <5%。有加速卡时，加速卡也要同时低于这两条。
+    达不到样本要求则不算空闲。
     """
+    spec = resolve_report_rules(rules)
+    idle_avg = float(spec["idle_avg_lt"])
+    idle_busy = float(spec["idle_busy_lt"])
     if not host.get("online"):
         return False, "当前离线，不计入基本不用"
     cpu = _metric(host, "cpu_percent")
@@ -356,8 +448,9 @@ def idle_status(
     busy = cpu.get("busy_ratio")
     if avg is None or busy is None:
         return False, "CPU 样本不足"
-    if not (float(avg) < IDLE_AVG_LT and float(busy) < IDLE_BUSY_LT):
+    if not (float(avg) < idle_avg and float(busy) < idle_busy):
         return False, ""
+    phrase = _below_phrase(spec)
     if host_has_accel(host):
         accel = _metric(host, "accel_util_avg")
         if not _enough(accel, min_samples):
@@ -366,10 +459,10 @@ def idle_status(
         abusy = accel.get("busy_ratio")
         if aavg is None or abusy is None:
             return False, "加速卡样本不足"
-        if not (float(aavg) < IDLE_AVG_LT and float(abusy) < IDLE_BUSY_LT):
+        if not (float(aavg) < idle_avg and float(abusy) < idle_busy):
             return False, ""
-        return True, "CPU 与加速卡平均、繁忙占比均低于 5%"
-    return True, "CPU 平均与繁忙占比均低于 5%；无加速卡"
+        return True, "CPU 与加速卡平均、繁忙占比" + phrase
+    return True, "CPU 平均与繁忙占比" + phrase + "；无加速卡"
 
 
 def _cell(value: Any) -> str:
@@ -490,32 +583,34 @@ def _cluster(
     )
 
 
-def _comment_cpu(metric: Dict[str, Any]) -> str:
+def _comment_cpu(metric: Dict[str, Any], rules: Dict[str, Any]) -> str:
     if not _has_samples(metric):
         return "样本不足"
     busy = metric.get("busy_ratio")
     p95 = metric.get("p95")
     avg = metric.get("avg")
-    if (busy is not None and float(busy) >= HIGH_BUSY_GTE) or (
-        p95 is not None and float(p95) >= HIGH_P95_GTE
+    if (busy is not None and float(busy) >= float(rules["high_busy_gte"])) or (
+        p95 is not None and float(p95) >= float(rules["high_p95_gte"])
     ):
         return "高负荷"
     if (
         avg is not None
         and busy is not None
-        and float(avg) < IDLE_AVG_LT
-        and float(busy) < IDLE_BUSY_LT
+        and float(avg) < float(rules["idle_avg_lt"])
+        and float(busy) < float(rules["idle_busy_lt"])
     ):
         return "整体偏低"
     return "介于两极之间"
 
 
-def _comment_mem(metric: Dict[str, Any]) -> str:
+def _comment_mem(metric: Dict[str, Any], mem_warn: float) -> str:
     if not _has_samples(metric):
         return "样本不足；不参与闲忙"
     avg = metric.get("avg")
     p95 = metric.get("p95")
-    if (avg is not None and float(avg) >= 85) or (p95 is not None and float(p95) >= 85):
+    if (avg is not None and float(avg) >= mem_warn) or (
+        p95 is not None and float(p95) >= mem_warn
+    ):
         return "偏高；不参与闲忙"
     return "未到偏高线；不参与闲忙"
 
@@ -531,10 +626,10 @@ def _comment_disk(metric: Dict[str, Any], warn: float, critical: float) -> str:
     return "容量未到偏高线；不参与闲忙"
 
 
-def _comment_accel(metric: Dict[str, Any]) -> str:
+def _comment_accel(metric: Dict[str, Any], rules: Dict[str, Any]) -> str:
     if not _has_samples(metric):
         return "无加速卡或样本不足"
-    return _comment_cpu(metric)
+    return _comment_cpu(metric, rules)
 
 
 def _comment_load(metric: Dict[str, Any]) -> str:
@@ -686,7 +781,8 @@ def build_report(
     now: Optional[int] = None,
     busy_thresholds: Optional[Dict[str, float]] = None,
     anomaly_thresholds: Optional[Dict[str, Any]] = None,
-    min_samples: int = REPORT_MIN_SAMPLES,
+    min_samples: Optional[int] = None,
+    report_rules: Optional[Dict[str, Any]] = None,
     window_date: Optional[str] = None,
     generated_at: Optional[int] = None,
     clock: Optional[int] = None,
@@ -718,14 +814,14 @@ def build_report(
 
         busy = dict(DEFAULT_BUSY_THRESHOLDS)
     anomaly = anomaly_thresholds or {}
-    try:
-        disk_warn = float(anomaly.get("disk_warn_percent") or 85)
-    except (TypeError, ValueError):
-        disk_warn = 85.0
-    try:
-        disk_critical = float(anomaly.get("disk_critical_percent") or 95)
-    except (TypeError, ValueError):
-        disk_critical = 95.0
+    rules = resolve_report_rules(report_rules)
+    if min_samples is not None:
+        rules = dict(rules)
+        rules["min_samples"] = int(min_samples)
+    min_samples = int(rules["min_samples"])
+    disk_warn = _anomaly_number(anomaly, "disk_warn_percent", 85.0)
+    disk_critical = _anomaly_number(anomaly, "disk_critical_percent", 95.0)
+    mem_warn = _anomaly_number(anomaly, "mem_warn_percent", 85.0)
 
     current = _cluster(storage, window, busy)
     compare_err, compare_window = _query_window(
@@ -748,9 +844,9 @@ def build_report(
 
     classified: List[Dict[str, Any]] = []
     for host in hosts:
-        reasons = high_load_reasons(host, min_samples)
+        reasons = high_load_reasons(host, min_samples, rules)
         high = bool(reasons)
-        idle, idle_reason = idle_status(host, min_samples)
+        idle, idle_reason = idle_status(host, min_samples, rules)
         if high:
             idle = False
             idle_reason = ""
@@ -826,8 +922,8 @@ def build_report(
         for h in hosts
         if _enough(_metric(h, "mem_percent"), min_samples)
         and (
-            float(_metric(h, "mem_percent").get("avg") or 0) >= 85
-            or float(_metric(h, "mem_percent").get("p95") or 0) >= 85
+            float(_metric(h, "mem_percent").get("avg") or 0) >= mem_warn
+            or float(_metric(h, "mem_percent").get("p95") or 0) >= mem_warn
         )
     ]
     mem_high.sort(
@@ -877,8 +973,15 @@ def build_report(
             total,
             current.get("accel_summary") or "无加速卡",
         ),
-        "口径：集群 avg / P95 / 繁忙占比为样本加权（sample_weighted）。繁忙阈值 CPU≥%s%%、加速卡≥%s%%（可用 period_util 配置）。闲忙两极只看 CPU 与加速卡，磁盘和内存不进入闲忙。高负荷：繁忙占比≥40%% 或 P95≥85%%。基本不用：当前在线且该指标样本≥%d；CPU 平均 <5%% 且繁忙 <5%%；有加速卡则加速卡平均 <5%% 且繁忙 <5%%。缺数写样本不足，不编造。本报告直接聚合窗口内原始样本，不拼接已保存的日/周报。"
-        % (busy_cpu, busy_accel, min_samples),
+        "口径：集群 avg / P95 / 繁忙占比为样本加权（sample_weighted）。繁忙阈值 CPU≥%s%%、加速卡≥%s%%（可用 period_util 配置）。闲忙两极只看 CPU 与加速卡，磁盘和内存不进入闲忙。高负荷：%s。基本不用：当前在线且该指标样本≥%d；CPU %s；有加速卡则加速卡%s。缺数写样本不足，不编造。本报告直接聚合窗口内原始样本，不拼接已保存的日/周报。空闲和高负荷线来自 report 配置，未改时用内置默认。"
+        % (
+            busy_cpu,
+            busy_accel,
+            _high_cut_text(rules),
+            min_samples,
+            _idle_cut_text(rules),
+            _idle_cut_text(rules),
+        ),
     ]
     if clamped:
         head["paragraphs"].append(
@@ -948,8 +1051,8 @@ def build_report(
         util,
         ["指标", "平均", "P95", "最高", "繁忙占比", "样本数", "简评"],
         [
-            _metric_row("CPU%", cluster_metrics.get("cpu_percent") or {}, _comment_cpu(cluster_metrics.get("cpu_percent") or {}), True),
-            _metric_row("内存%", cluster_metrics.get("mem_percent") or {}, _comment_mem(cluster_metrics.get("mem_percent") or {}), True),
+            _metric_row("CPU%", cluster_metrics.get("cpu_percent") or {}, _comment_cpu(cluster_metrics.get("cpu_percent") or {}, rules), True),
+            _metric_row("内存%", cluster_metrics.get("mem_percent") or {}, _comment_mem(cluster_metrics.get("mem_percent") or {}, mem_warn), True),
             _metric_row(
                 "磁盘%",
                 disk_metric,
@@ -959,7 +1062,7 @@ def build_report(
             _metric_row(
                 "加速卡%",
                 cluster_metrics.get("accel_util_avg") or {},
-                _comment_accel(cluster_metrics.get("accel_util_avg") or {}),
+                _comment_accel(cluster_metrics.get("accel_util_avg") or {}, rules),
                 True,
             ),
             _metric_row("load1", cluster_metrics.get("load1") or {}, _comment_load(cluster_metrics.get("load1") or {}), False),
@@ -1025,7 +1128,10 @@ def build_report(
             host_ids=[h.get("host_id") or "" for h in mem_high[:8]],
         )
     else:
-        ranks["notes"].append("内存偏高：无主机在样本足够时达到平均或 P95 ≥85%。内存不进入闲忙。")
+        ranks["notes"].append(
+            "内存偏高：无主机在样本足够时达到平均或 P95 ≥%s%%。内存不进入闲忙。"
+            % _format_threshold_number(mem_warn)
+        )
     anomaly_rows: List[List[str]] = []
     anomaly_ids: List[str] = []
     for host in offline_hosts:
@@ -1063,8 +1169,8 @@ def build_report(
     poles = _section("5. 闲忙两极")
     poles["paragraphs"] = [
         "只看算力。磁盘、内存不在本节。高负荷优先：已列入高负荷的主机不再重复计入基本不用。",
-        "基本不用条件：在线且样本≥%d；CPU 平均 <5%% 且繁忙 <5%%；有加速卡则加速卡平均 <5%% 且繁忙 <5%%。"
-        % min_samples,
+        "基本不用条件：在线且样本≥%d；CPU %s；有加速卡则加速卡%s。"
+        % (min_samples, _idle_cut_text(rules), _idle_cut_text(rules)),
     ]
     if high_rows:
         _add_table(
@@ -1091,7 +1197,7 @@ def build_report(
             host_ids=[c["host"].get("host_id") or "" for c in high_rows],
         )
     else:
-        poles["notes"].append("高负荷：无主机达到繁忙占比 ≥40% 或 P95 ≥85%（样本足够时）。")
+        poles["notes"].append("高负荷：无主机达到%s（样本足够时）。" % _high_cut_text(rules))
     if idle_rows:
         _add_table(
             poles,
@@ -1117,7 +1223,10 @@ def build_report(
             host_ids=[c["host"].get("host_id") or "" for c in idle_rows],
         )
     else:
-        poles["notes"].append("基本不用：没有同时满足在线、样本足够且 CPU/加速卡都低于 5% 的主机。")
+        poles["notes"].append(
+            "基本不用：没有同时满足在线、样本足够且 CPU/加速卡都%s的主机。"
+            % _idle_host_text(rules)
+        )
     if insufficient_rows:
         _add_table(
             poles,
@@ -1141,7 +1250,10 @@ def build_report(
             "两极同时存在，算力分布不均：空闲侧可评估合并或承接新任务，高负荷侧先区分短时尖峰（P95）和持续繁忙。"
         )
     elif idle_rows:
-        summary_bits.append("存在低于 5% 的在线空闲算力，可评估合并或回收，不要把磁盘空当成算力空。")
+        summary_bits.append(
+            "存在%s的在线空闲算力，可评估合并或回收，不要把磁盘空当成算力空。"
+            % _idle_host_text(rules)
+        )
     elif high_rows:
         summary_bits.append("有高负荷主机。繁忙占比高表示很多样本超过繁忙阈值；仅 P95 高则更像尖峰。")
     else:
@@ -1152,7 +1264,7 @@ def build_report(
 
     disks = _section("6. 磁盘")
     disks["paragraphs"] = [
-        "独立容量节，不进入闲忙。集群磁盘平均 %s，最高 %s，P95 %s。分档线 ≥%.0f%% / ≥%.0f%%（与 anomaly 磁盘阈值一致，默认 85/95）。"
+        "独立容量节，不进入闲忙。集群磁盘平均 %s，最高 %s，P95 %s。分档线 ≥%.0f%% / ≥%.0f%%（与 anomaly 磁盘偏高线、异常线一致）。"
         % (
             _fmt_num(disk_metric, "avg", 1, "%"),
             _fmt_num(disk_metric, "max", 1, "%"),
@@ -1244,8 +1356,13 @@ def build_report(
             if disk_interest
             else "窗口内磁盘最高未到偏高线，或磁盘样本不足。"
         ),
-        "算力：高负荷 %d 台，基本不用 %d 台。空闲标准是平均与繁忙都低于 5%%，不再使用 15%%/10%%。"
-        % (len(high_rows), len(idle_rows)),
+        "算力：高负荷 %d 台，基本不用 %d 台。空闲标准是%s。%s"
+        % (
+            len(high_rows),
+            len(idle_rows),
+            _idle_cut_text(rules),
+            _legacy_idle_note(rules),
+        ),
         "可用性：当前离线 %d 台。离线期间不要把最后一次上报当成仍在运行的利用率。"
         % len(offline_hosts),
         "部署：本报告不读取部署任务日志，不判断是否存在部署残留。Agent 安装只走 /deploy.html 与中心机部署脚本。",
@@ -1378,10 +1495,10 @@ def build_report(
         "busy_thresholds": busy,
         "rules": {
             "rollup": "sample_weighted",
-            "idle_avg_lt": IDLE_AVG_LT,
-            "idle_busy_lt": IDLE_BUSY_LT,
-            "high_busy_gte": HIGH_BUSY_GTE,
-            "high_p95_gte": HIGH_P95_GTE,
+            "idle_avg_lt": rules["idle_avg_lt"],
+            "idle_busy_lt": rules["idle_busy_lt"],
+            "high_busy_gte": rules["high_busy_gte"],
+            "high_p95_gte": rules["high_p95_gte"],
             "min_samples": min_samples,
             "disk_warn": disk_warn,
             "disk_critical": disk_critical,
@@ -1449,7 +1566,7 @@ def handle_report_preview(storage: Storage, query: str = "") -> Tuple[int, Dict[
         "compare_range_text": bounds["compare_range_text"],
         "requested_from_ts": bounds["from_ts"],
         "requested_to_ts": bounds["to_ts"],
-        "retention_days": int(storage.retention_days or 7),
+        "retention_days": storage._configured_retention_days(),
         "clamped": bool(window.get("clamped")) if window else False,
         "window_error": win_err,
         "actual_from_ts": window.get("from_ts") if window else None,
@@ -1501,6 +1618,7 @@ def handle_generate_report(
     query: str = "",
     busy_thresholds: Optional[Dict[str, float]] = None,
     anomaly_thresholds: Optional[Dict[str, Any]] = None,
+    report_rules: Optional[Dict[str, Any]] = None,
     source: str = "manual",
     replace: bool = True,
     generated_at: Optional[int] = None,
@@ -1536,6 +1654,7 @@ def handle_generate_report(
         now=as_of,
         busy_thresholds=busy_thresholds,
         anomaly_thresholds=anomaly_thresholds,
+        report_rules=report_rules,
         window_date=window_date,
         generated_at=generated_at,
         clock=clock,
