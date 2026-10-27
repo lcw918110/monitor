@@ -176,6 +176,8 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src
 
 脚本先从 systemd 单元读出 `LD_LIBRARY_PATH` 和 `PATH` 再选 Python（`PYTHONPATH` 指向新包，不是现场安装树），然后在**新包**上跑测试。预同步测试的标准输入接到 `/dev/null`；不喂数据的 `ssh` 使用 `ssh -n` 且 `</dev/null`，避免现场 SSH 会话的 stdin 一直不关时测试挂住。测试进程打开 `MONITOR_TEST_SANDBOX=1`，PATH 前面是只记日志的 `systemctl` / `kill` / `ssh`，临时 `HOME`，并且不再扫描 `/opt/monitor`。这样用例不会 `systemctl stop monitor-agent`。测试前后记下 `monitor-agent` 和 `monitor-center` 是否 active；若测试前是 active、之后不是，就重新拉起并在摘要里告警。失败则直接退出，不备份、不同步、不重启。`--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出，不把便携包写入现场目录，也不备份、不同步、不重启。正式升级通过后做一致的 SQLite 备份（`backup` API + `quick_check`）、同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports` 以及主机/历史上报条数没有减少。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，正式推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
 
+步骤、备份目录里有什么、以及代码回滚和数据库恢复的差别，以 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 为准。
+
 批量：
 
 ```bash
@@ -187,6 +189,14 @@ cp config/hosts.example.txt config/hosts.txt
 ```
 
 清单格式：`IP[:port] [host_id] [ssh_port]`。行内端口覆盖 `--ssh-port`。SSH 连接超时 / connection closed 会自动重试 2～3 次（短退避），不会无限重试。
+
+### 备份与恢复（弱高可用，不是第二条升级）
+
+不升级时，在中心机执行 `scripts/backup_center.sh`。目录名与升级备份相同（`/opt/monitor-backup-<时间>`），里面有 `config/center.json`、一致的 `data/monitor.db`、`vendor/` 和单元文件。`scripts/restore_center.sh --code-only` 只恢复代码、配置、vendor 和单元，不动 `data/`；`--with-data` 才会覆盖数据库。双中心 / 双活 / 自动切换不做。
+
+### 容量摸底
+
+`scripts/capacity_probe.py` 在临时库上估算主机数、采样间隔和 `retention_days` 对应的行数与体积。冒烟不能当成容量结论，结果表要实测后才填。见 [`docs/15-capacity-lab.md`](docs/15-capacity-lab.md)。本文不写主机上限。
 
 ### 部署失败短码
 
@@ -336,7 +346,8 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/11-period-utilization.md` | 时段利用统计（绝对时间窗 / 集群汇总 / P95） |
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
-| **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机** |
+| **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机，以及备份 / 恢复 / 回滚（弱高可用；双中心不做）** |
+| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA） |
 | **`docs/10-roadmap.md`** | **下一步：体验 U1–U3、长期运维 O1–O7，以及实装 / 容量 / 框架化 / 拓扑** |
 | `docs/audit-tech-debt-2026-10-27.md` | 技术债审计。待人拍板的项在文内 NEEDS_HUMAN，不在这里实现 |
 
@@ -349,7 +360,8 @@ tail -n 50 .deploy-agent/run/agent.log
 - **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
 - **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
 - **U3 可选**：保存筛选仍待做。管理 Token 和诊断报告推送已在 `/settings.html`
-- **仍保留**：N1 服务器实装、N4 容量、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
+- **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
+- **高可用**：备份 / 恢复按 `docs/14-ops-runbook.md`。双中心 / 双活继续不做
 
 ## 自测
 
