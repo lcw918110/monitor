@@ -63,9 +63,9 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh \
 5. 测试失败则退出：**不备份、不同步、不重启**。
 6. 磁盘预检：可用空间要够「约 3 倍 `data/monitor.db` 再加 20MB」。不够则退出，此时还没改安装目录。
 7. `--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出。
-8. 正式升级：用 SQLite `backup` API 做一致副本并 `quick_check`，再同步代码。同步保留 `config/center.json`、`data/`、`vendor/python` 里已有的 tar.gz。
+8. 正式升级：用 SQLite `backup` API 做一致副本并 `quick_check`。接着用**已经装上的** `center.storage.Storage`，按 `config/center.json` 的 `retention_days`（与中心进程相同，缺省 7）对现场库清一次过期 `metrics_history`，再记下主机和历史上报条数，然后同步代码。同步保留 `config/center.json`、`data/`、`vendor/python` 里已有的 tar.gz。`--check-only` 不会做这次清理。
 9. 会重写 `monitor-center.service`，但保留原来的 `ExecStart`，并保留单元里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）。不是为了少改单元去手写 rsync。
-10. 重启后检查本机 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports`，以及主机条数和历史上报条数没有减少。
+10. 重启后检查本机 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports`。主机变少、数据库文件不见或读不出来、历史上报被清空，都失败并回滚代码。历史上报变少但主机没少时，先等启动清理结束再读一次；若仍变少，只要现场条数不少于备份里仍在保留期内的行，就当成预期的保留期清理，不回滚。
 11. 健康检查失败时只回滚代码和单元，**不用**升级前的副本覆盖 `data/`。失败的代码留在 `/opt/monitor-failed-<时间>`。
 12. `--keep-backups` 默认保留 5 份。目录名 `<安装名>-backup-YYYYMMDDHHMMSS`，也认带横线的 `YYYYMMDD-HHMMSS`（可带 `-pid`）。按时间从旧到新删，不按字典序。
 
