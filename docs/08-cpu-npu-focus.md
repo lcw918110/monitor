@@ -60,7 +60,7 @@
 
 1. 同步代码到安装目录  
 2. 若不存在则生成 `center.json`（含 anomaly 阈值）  
-3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已有中心更稳妥的做法是 `scripts/lib/sync_tree.sh` 同步代码后重启，而不是重写单元。
+3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已有中心不要把 `scripts/lib/sync_tree.sh` 当成升级命令。升级、备份和回滚见 `docs/14-ops-runbook.md`。
 4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）  
 5. 轮询 `/api/v1/health` 直至成功  
 6. 同步后校验 `$INSTALL_DIR/agent/__init__.py`（中心树必须带 agent 包，供后续打包下发）  
@@ -83,8 +83,8 @@
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  
 - 保留「测试连通/部署条件」（SSH + 目录可写），已去掉独立「探测勾选」按钮
 - 编辑目标可以改 IP 和 host_id（与其他目标 IP 冲突则拒绝，密码留空保持原密码）。清单「停用 / 恢复」只提交 `retired`。同机改址用监测台「更换 IP」：新 IP 目标的 host_id 改到原主机，旧 IP 目标标为已停用（不删除、不再部署）。详情里在有撤销记录时显示「撤销更换 IP」
-- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`）。先在新包上跑测试，通过后才同步。保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`。健康检查失败只回滚代码和单元，不覆盖 `data/`。`SSHPASS` 或 `--ssh-cmd` 用于非交互登录。便携包用 `scripts/push_python_bundles.sh`
+- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`）。先在新包上跑测试，通过后才同步。保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`。健康检查失败只回滚代码和单元，不覆盖 `data/`。不升级时的备份和「连数据库一起恢复」见 `docs/14-ops-runbook.md`（`backup_center.sh` / `restore_center.sh`）。这不是双中心。`SSHPASS` 或 `--ssh-cmd` 用于非交互登录。便携包用 `scripts/push_python_bundles.sh`
 
 ## 下一步
 
-见 `docs/10-roadmap.md`（下一优先 U1 总览与可读状态；实装与容量仍是 N1、N4）。
+见 `docs/10-roadmap.md`（下一优先 U1 总览与可读状态；实装与容量仍是 N1、N4）。容量探针和空白结果表见 `docs/15-capacity-lab.md`。升级、备份、恢复见 `docs/14-ops-runbook.md`。

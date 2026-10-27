@@ -60,7 +60,7 @@
 | AMD GPU 采集 | `agent/metrics/amd.py` | `rocm-smi` 优先，`amd-smi` 回退 |
 | 上报 | `agent/sender.py` | HTTP POST |
 | 配置样例 | `config/*.example.json` | 中心/Agent 配置 |
-| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。中心升级只走 `push_upgrade.sh` → 新包里的 `upgrade_center.sh`。`scripts/lib/resolve_python.sh` 与 `python_min.sh` 复用本机 Python（Agent 3.6 / 中心 3.8）；`python_bundle.sh` 解压便携解释器；`scripts/lib/sync_tree.sh` 同步回退并保留 `vendor/python/*.tar.gz`；`scripts/lib/unit_env.sh` 重写 systemd 单元时保留自定义 `Environment=`；`scripts/lib/deploy_ssh.sh` 端口/重试 |
+| 脚本 | `scripts/*` | 唯一部署路径：`deploy_center.sh`、网页 SSH、`deploy_fleet.sh` / `deploy_agent.sh`；`install_agent.sh` 仅为别名。中心升级只走 `push_upgrade.sh` → 新包里的 `upgrade_center.sh`。不升级时的备份 / 恢复是 `backup_center.sh` / `restore_center.sh`（见 `docs/14-ops-runbook.md`），不是第二条升级，也不是双中心。容量探针是 `capacity_probe.py`（见 `docs/15-capacity-lab.md`）。`scripts/lib/resolve_python.sh` 与 `python_min.sh` 复用本机 Python（Agent 3.6 / 中心 3.8）；`python_bundle.sh` 解压便携解释器；`scripts/lib/sync_tree.sh` 同步回退并保留 `vendor/python/*.tar.gz`；`scripts/lib/unit_env.sh` 重写 systemd 单元时保留自定义 `Environment=`；`scripts/lib/deploy_ssh.sh` 端口/重试 |
 
 ---
 
@@ -72,7 +72,7 @@
 - **resource_groups** / **host_group_members**：中心侧资源组
 - **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路  
 
-容量与并发适合规模见路线图 **N4**（待压测验证）。框架化扩展指标见 **N2**。
+容量与并发适合规模见路线图 **N4**。摸底方法和空白结果表在 `docs/15-capacity-lab.md`：数字必须实测后填写，本文不写主机台数。双中心 / 双活继续不做；备份与恢复见 `docs/14-ops-runbook.md`。框架化扩展指标见 **N2**。
 
 ---
 
@@ -84,3 +84,5 @@
 - 多挂载磁盘：`docs/12-disk-mounts.md`
 - 使用诊断报告：`docs/13-diagnostic-reports.md`
 - 下一步：`docs/10-roadmap.md`
+- 升级 / 备份 / 恢复：`docs/14-ops-runbook.md`
+- 容量摸底：`docs/15-capacity-lab.md`
