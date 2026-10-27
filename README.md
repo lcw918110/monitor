@@ -57,10 +57,13 @@ chmod +x scripts/*.sh
 
 **只走这一条产品路径。** 不要在笔记本上用 `sshpass` + `scp` 写临时装机脚本（那是旁路，会和中心清单/目录/失败短码脱节）。
 
-| 角色 | 怎么装 | 默认目录 |
+| 角色 | 怎么装 | 目录 |
 | --- | --- | --- |
-| **Center** | 在中心机执行 `scripts/deploy_center.sh` | **`/opt/monitor`**（非 root：`~/monitor`） |
+| **Center（生产）** | 在中心机以 root 执行 `scripts/deploy_center.sh` | **`/opt/monitor`**。全局一套，不分用户 |
+| **Center（本机试用）** | `scripts/local_up.sh` | 仓库内 `.deploy-center`（`MONITOR_CENTER_DIR` 可改）。不走 `push_upgrade.sh` |
 | **Agent** | 中心 UI **客户端部署** `/deploy.html`，或在**中心机上**跑 `deploy_fleet.sh` / `deploy_agent.sh` | **`/opt/monitor-agent`**（非 root：`~/monitor-agent`） |
+
+已拍板（NH-01）：升级和便携包脚本不加 `--dir`，只作用于 `/opt/monitor`。`deploy_center.sh` 在非 root 时仍会落到 `~/monitor`，那不是生产安装，也不由 `push_upgrade.sh` 升级。家目录不走产品升级路径。
 
 `scripts/install_agent.sh` 只是 `deploy_agent.sh` 的兼容别名，不是第二条路径。
 
@@ -96,7 +99,7 @@ chmod +x scripts/*.sh
 
 安装或升级完成、中心进程起来之后，在监测台「导入资产」先预览再写入。下线机器在详情里隐藏。已经入库的诊断报告不会自动改写；要在排行和闲忙表里看到负责人、用途，需要再生成一次。Agent 安装方式不变。
 
-非 root 时 Center 默认装到 `~/monitor`，并以守护进程后台运行（不依赖当前终端）。
+非 root 执行 `deploy_center.sh` 时，脚本仍会把目录改成 `~/monitor` 并用守护进程后台运行。按 NH-01，那只是本机落点：生产中心用 root 装到 `/opt/monitor`，试用用 `local_up.sh`。不要对 `~/monitor` 跑 `push_upgrade.sh`。
 
 ### 网页自动部署（推荐）
 
@@ -172,7 +175,7 @@ bash /tmp/monitor-upgrade-src/scripts/upgrade_center.sh /tmp/monitor-upgrade-src
 # --check-only 时上面那条命令末尾再加 --check-only
 ```
 
-这条命令只升级 `/opt/monitor`。非 root 首次安装落到 `~/monitor` 时，不要用它去升级家目录里的那份。细节见 `docs/14-ops-runbook.md`。
+这条命令只升级 `/opt/monitor`，脚本不加 `--dir`。`~/monitor` 和 `local_up.sh` 的试用目录都不走这条路径。细节见 `docs/14-ops-runbook.md` 的「生产中心目录」。
 
 脚本先从 systemd 单元读出 `LD_LIBRARY_PATH` 和 `PATH` 再选 Python（`PYTHONPATH` 指向新包，不是现场安装树），然后在**新包**上跑测试。预同步测试的标准输入接到 `/dev/null`；不喂数据的 `ssh` 使用 `ssh -n` 且 `</dev/null`，避免现场 SSH 会话的 stdin 一直不关时测试挂住。测试进程打开 `MONITOR_TEST_SANDBOX=1`，PATH 前面是只记日志的 `systemctl` / `kill` / `ssh`，临时 `HOME`，并且不再扫描 `/opt/monitor`。这样用例不会 `systemctl stop monitor-agent`。测试前后记下 `monitor-agent` 和 `monitor-center` 是否 active；若测试前是 active、之后不是，就重新拉起并在摘要里告警。失败则直接退出，不备份、不同步、不重启。`--check-only` 在测试和磁盘预检通过后打印「检查通过（未改动安装目录）」并退出，不把便携包写入现场目录，也不备份、不同步、不重启。正式升级通过后做一致的 SQLite 备份（`backup` API + `quick_check`），用现场 Storage 按 `retention_days` 清一次过期历史上报并记下条数，再同步代码（保留 `config/center.json`、`data/`、便携包）、保留 systemd 里已有的 `Environment=`（含 `PATH`、`LD_LIBRARY_PATH`）和原来的 `ExecStart`、重启，再检查 `/api/v1/health`、`/api/v1/hosts`、`/api/v1/reports`。主机变少、数据库不见或读不出来、历史上报被清空会回滚；按保留期清掉的过期历史上报不会。健康检查失败时只回滚代码和单元，**不**用升级前的副本覆盖 `data/`，失败的代码留在 `/opt/monitor-failed-<时间>`。`--keep-backups` 默认保留 5 份，目录形如 `/opt/monitor-backup-<时间>`。本地 `vendor/python` 里已有 tar.gz 时，正式推送前会先在中心 `mkdir -p /opt/monitor/vendor/python` 再同步。
 
@@ -336,7 +339,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 | 文档 | 说明 |
 | --- | --- |
-| `docs/01-requirements.md` | 需求规格（文首是现行摘要；编号正文是起草基线） |
+| `docs/01-requirements.md` | 需求规格（现行正文，可单独阅读） |
 | `docs/02-architecture.md` | 架构设计 |
 | `docs/03-design-and-test.md` | 设计与测试 |
 | `docs/04-engineering-process.md` | 工程过程与已落地范围 |
@@ -360,7 +363,8 @@ tail -n 50 .deploy-agent/run/agent.log
 - **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
 - **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
 - **U3 可选**：保存筛选仍待做。管理 Token 和诊断报告推送已在 `/settings.html`
-- **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N2 框架化、N3 拓扑；长期运维见路线图 O1–O7
+- **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N3 拓扑；长期运维见路线图 O1–O7
+- **N2 指标框架化**：已单独立项，不与 NH-02/NH-03 同轮实现。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)。本轮不写代码
 - **高可用**：备份 / 恢复按 `docs/14-ops-runbook.md`。双中心 / 双活继续不做
 
 ## 自测

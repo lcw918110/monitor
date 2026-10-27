@@ -4,7 +4,7 @@
 
 ## 需求响应
 
-1. **不做告警通道 / 修复动作**：移除控制台告警条依赖；改为资源 **异常判定**（normal / warn / critical / unknown）。
+1. **不做即时告警通道 / 修复动作**：移除控制台告警条依赖；改为资源 **异常判定**（normal / warn / critical / unknown）。页面着色不是邮件或短信。诊断报告推送到企业微信 / 钉钉 / 飞书是设置页能力，见 `docs/13-diagnostic-reports.md`。
 2. **聚焦 CPU + 加速卡**：采集、统计、趋势、判定以 CPU 与加速卡为主（厂商见下）。
 3. **部署自动化**：Agent 只走中心「客户端部署」页或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。中心首次安装用 `deploy_center.sh`，已安装中心的升级用 `scripts/push_upgrade.sh`。本地试用 `local_up.sh`。不要笔记本旁路 scp/sshpass。
 
@@ -63,7 +63,7 @@
 1. 同步代码到安装目录  
 2. 若不存在则生成 `center.json`（含 anomaly 阈值）  
 3. root + systemd → 安装 `monitor-center.service` 并 enable。若单元已存在，保留自定义 `Environment=`（例如 `Environment=PATH=...`）；`PYTHONPATH` 改成这次的安装目录。本次算出了 `LD_LIBRARY_PATH` 时用新值，否则保留单元里已有的那一行。已安装中心换代码走 `scripts/push_upgrade.sh`（内部 source `sync_tree`，保留 `ExecStart` 和已有 `Environment=`）。不要直接执行 `scripts/lib/sync_tree.sh`。不升级时的备份和回滚见 `docs/14-ops-runbook.md`。
-4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）  
+4. 非 root / `--no-systemd` → 守护进程后台启动（`daemonize_run.py`）。非 root 时默认目录会改成 `~/monitor`。按 NH-01，那不是生产中心：生产目录固定 `/opt/monitor`，试用用 `local_up.sh`，升级脚本不加 `--dir`
 5. 轮询 `/api/v1/health` 直至成功  
 6. 同步后校验 `$INSTALL_DIR/agent/__init__.py`（中心树必须带 agent 包，供后续打包下发）  
 
@@ -85,7 +85,7 @@
 - 添加/导入目标或保存中心对外地址时 **自动探查** 已配置地址  
 - 保留「测试连通/部署条件」（SSH + 目录可写），已去掉独立「探测勾选」按钮
 - 编辑目标可以改 IP 和 host_id（与其他目标 IP 冲突则拒绝，密码留空保持原密码）。清单「停用 / 恢复」只提交 `retired`。同机改址用监测台「更换 IP」：新 IP 目标的 host_id 改到原主机，旧 IP 目标标为已停用（不删除、不再部署）。详情里在有撤销记录时显示「撤销更换 IP」
-- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`）。先在新包上跑测试，通过后才同步。保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`。健康检查失败只回滚代码和单元，不覆盖 `data/`。不升级时的备份和「连数据库一起恢复」见 `docs/14-ops-runbook.md`（`backup_center.sh` / `restore_center.sh`）。这不是双中心。`SSHPASS` 或 `--ssh-cmd` 用于非交互登录。便携包用 `scripts/push_python_bundles.sh`
+- 已安装中心的升级只用 `scripts/push_upgrade.sh`（内部调用新包的 `upgrade_center.sh`），只升级 `/opt/monitor`，不加 `--dir`。先在新包上跑测试，通过后才同步。保留 `config/center.json`、`data/`、便携包和自定义 `Environment=`。健康检查失败只回滚代码和单元，不覆盖 `data/`。不升级时的备份和「连数据库一起恢复」见 `docs/14-ops-runbook.md`（`backup_center.sh` / `restore_center.sh`）。这不是双中心。`SSHPASS` 或 `--ssh-cmd` 用于非交互登录。便携包用 `scripts/push_python_bundles.sh`
 
 ## 下一步
 

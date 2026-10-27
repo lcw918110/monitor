@@ -23,7 +23,7 @@
 | PD-05 | `docs/08` 写明没有厂商工具时 PCI 仍可上报已知卡，利用率不当成 0 |
 | PD-06 / PD-07 | 设计说明里的采集循环、时段文档里的页签与现行三页签对齐 |
 | CS-01 / CS-02 / CS-05 / CS-07 | 会误导操作的版本文首、backlog 里缺 AMD、部署短码缺 `unknown`、U1 仍写成「正在做且是下一优先」 |
-| AD-02（只写现状） | 运维说明写明 `push_upgrade.sh` 与便携包同步的目标目录固定是 `/opt/monitor`。要不要加 `--dir` 仍见下面的 NH-01，本分支不加 |
+| AD-02（只写现状） | 运维说明写明 `push_upgrade.sh` 与便携包同步的目标目录固定是 `/opt/monitor`。NH-01 已拍板：不加 `--dir` |
 
 ## 1. 技术债
 
@@ -87,12 +87,12 @@
 - 现状：`upgrade_center.sh` 会重写单元文件，但保留原 `ExecStart` 和已有 `Environment=`。先在新包上跑测试，失败不备份、不同步、不重启；健康检查失败不覆盖 `data/`。`deploy_center.sh` 没有这套同步前测试和回滚。
 - 处理：文档改成首次安装用 `deploy_center.sh`，已安装中心的升级只用 `push_upgrade.sh`。1.9GB 不写进通用步骤。
 
-### AD-02 升级和便携包的目标目录写死 `/opt/monitor` — P1 文档 / 行为分叉 — 文档已写明；改脚本见 NH-01
+### AD-02 升级和便携包的目标目录写死 `/opt/monitor` — P1 文档 / 行为分叉 — 已拍板，不加 `--dir`
 
 - 区域：`scripts/push_upgrade.sh`（`--dir /opt/monitor`）、`scripts/push_python_bundles.sh`（`REMOTE_DIR=/opt/monitor/vendor/python`）、`scripts/deploy_center.sh`（非 root 默认 `~/monitor`）
 - 证据：首次安装在非 root 时可以落到家目录。升级命令没有 `--dir`，便携包远端目录也不能改。
 - 风险：对 `~/monitor` 跑 `push_upgrade.sh` 会去找 `/opt/monitor`，目录不存在就退出；若 `/opt/monitor` 是另一套安装，则会升级那一套。
-- 处理：运维说明写明这条限制。是否让脚本接受目录，见 NH-01。
+- 处理：NH-01 已拍板，见下文。脚本不加 `--dir`。生产目录固定 `/opt/monitor`。说明写在 `docs/14-ops-runbook.md` 与 README 升级节。
 
 ### AD-03 报告阈值有的在配置里，有的是代码常量 — P2 — NEEDS_HUMAN
 
@@ -102,13 +102,12 @@
 - 选项：维持常量，并在报告抬头继续写明 5% / 40% / 85%；或把高负荷两档放进配置，空闲线仍固定 5%。
 - 建议：三档都保持代码常量。空闲线是产品规则，不是站点参数。本轮不改数字，也不加配置键。
 
-### AD-04 采集仍是「编排层 + 厂商模块」，不是可插拔指标框架 — P2 — NEEDS_HUMAN（已有路线 N2）
+### AD-04 采集仍是「编排层 + 厂商模块」，不是可插拔指标框架 — P2 — 已拍板单独立项（路线 N2）
 
 - 区域：`agent/metrics/accelerators.py` 调用 `gpu.py` / `amd.py` / `npu.py`，再合并 PCI。中心 `storage.py`、`anomaly.py`、`app.js` 认识固定字段。
 - 证据：`docs/10-roadmap.md` N2 仍是 `todo`。没有半成品插件接口。
 - 风险：加一种指标要改采集、存储、API 和页面。这是当前架构，不是坏掉的重构。
-- 选项：继续在 `agent/metrics/` 加模块；或按 N2 做「指标名 → 展示」配置。
-- 建议：新厂商继续走现有编排和夹具。N2 单独做，不跟文档纠偏绑在一起。
+- 处理：NH-04 已拍板。N2 单独立项，跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)，不与 NH-02/NH-03 同轮实现。本轮不写框架化代码。新厂商继续走现有编排和夹具。
 
 ### AD-05 单进程 SQLite，容量没有实测数字 — P2 — NEEDS_HUMAN（已有路线 N4）
 
@@ -148,13 +147,13 @@ Agent 只采集并 POST。日/周/月报告、隐藏、改址、资源组都在�
 
 ### PD-03 历史记录会被当成现行步骤 — P2 — UNAMBIGUOUS — 已修
 
-- 证据：`docs/07-morning-report.md` 仍写「看告警条」、health `1.1.0`，并建议页面空时跑 `demo_seed.py`。`docs/09-two-round-opt.md` 写判定增加了 load5（现行 `center/anomaly.py` 只看 load1/核数）。`docs/11-period-utilization.md` 写无数据时对一个 URL 灌演示点。README 则写试用不要跑 `demo_seed.py`。
+- 证据：`docs/07-morning-report.md` 仍写「看告警条」、health `1.1.0`，并建议页面空时跑 `demo_seed.py`。`docs/09-two-round-opt.md` 写判定增加了 load5。现行异常判定同时看 load1/核数与 load5/核数，load15 只展示。`docs/11-period-utilization.md` 写无数据时对一个 URL 灌演示点。README 则写试用不要跑 `demo_seed.py`。
 - 处理：三篇历史或时段文档加了醒目的范围说明。`scripts/demo_seed.py` 的说明改为只打本地可丢弃的库，并注明它故意发送旧主机类型 `app` / `npu`（中心会归一成 cpu / gpu）。
 
 ### PD-04 SRS 要求冲突时相信过期文首 — P2 — UNAMBIGUOUS — 已修
 
-- 证据：`docs/01-requirements.md` 文首标「实现现状（v1.7）」且「与代码冲突时以本节为准」。正文仍有起草时的「本期不做」和仅英伟达的句子。
-- 处理：文首改为 v1.10.0 的摘要，冲突时以代码和 `docs/14` 为准，并应改文档。不整篇重写 SRS（见 NH-02）。
+- 证据（改写前）：`docs/01-requirements.md` 文首曾标「实现现状（v1.7）」且「与代码冲突时以本节为准」。正文曾留着起草时的「本期不做」和仅英伟达的句子。
+- 处理：文首曾改为 v1.10.0 摘要。NH-02 已拍板：按现行能力重写正文，见 `docs/01-requirements.md`。这次只改文档，不改采集与存储。
 
 ### PD-05 加速卡文档漏了 PCI 回退 — P2 — UNAMBIGUOUS — 已修
 
@@ -184,11 +183,10 @@ Agent 只采集并 POST。日/周/月报告、隐藏、改址、资源组都在�
 
 - 证据：`docs/06` O13 写「英伟达 / 昇腾 / 寒武纪 / RKNN」。代码和 README 包含 AMD（`rocm-smi` / `amd-smi`）。
 
-### CS-03 历史文档写「判定 load5」，代码只判定 load1/核数 — P2 — NEEDS_HUMAN
+### CS-03 历史文档与负载判定 — P2 — 现行以代码为准
 
-- 证据：`docs/09` 第 1 轮表格。`center/anomaly.py` 与 `center/static/ux.js` 的高负载用 `load1 / cpu_count` 对比 `cpu_load_per_core_warn`（默认 2.0）。load5、load15 只采集和展示。
-- 选项：维持只判定 load1；或把 load5 也纳入着色。
-- 建议：维持 load1。U1 的「高负载」已经按这条定义。改判定会改变谁变黄。
+- 证据：`docs/09` 第 1 轮表格写过判定增加了 load5。现行 `center/anomaly.py` 与 `center/static/ux.js` 的高负载用 load1/核数和 load5/核数，对比同一个 `cpu_load_per_core_warn`（默认 2.0）。load15 只采集和展示。读不到的负载为 null。
+- 处理：规格按现行代码写进 `docs/01`。本次不改判定。审计起草时「只判定 load1」的说法不再当作现行规则。
 
 ### CS-04 「总览」是实时页，不是独立页面 — P2 — 记录（路线图 U2 已排队）
 
@@ -209,31 +207,27 @@ Agent 只采集并 POST。日/周/月报告、隐藏、改址、资源组都在�
 - 证据：v1.10.0 已有顶栏、今日关注四类、白话健康、报告里 `#host=`。路线图 U1 状态仍是 `doing`，因为长期空闲名单没做。下一优先在路线图「接着」一节是 U2。
 - 处理：README 与 `docs/08` 文末改成同一说法。路线图里的 `doing` 保留，那是范围状态，不是过期步骤。
 
-## 5. NEEDS_HUMAN（请人拍板，本分支没有实现）
+## 5. 拍板与仍待人决定的项
 
-下面每条都**没有**在本分支改行为。和上面「已修」不重叠。
+NH-01、NH-02、NH-04 已拍板，只落在文档和路线图，不改采集、存储或升级脚本行为。其余 NH 仍未在本次改产品行为。
 
-### NH-01 非 root 中心要不要走 `push_upgrade.sh`
+审计起草之后，代码里已经是：读不到负载时上报 null；异常判定同时看 load1/核数和 load5/核数；设置页已有管理 Token 和报告推送。这些以代码和 `docs/01-requirements.md` 为准。下文若仍出现「只看 load1」或「不要接 Webhook」，只是当时的记录，不覆盖现行规格。
 
-- 现状：命令固定 `--dir /opt/monitor`，便携包固定 `/opt/monitor/vendor/python`。`deploy_center.sh` 在非 root 时默认 `~/monitor`。
-- 选项 A：生产中心一律 root + `/opt/monitor`。家目录只用于本机试用，试用用 `local_up.sh`，不走 `push_upgrade.sh`。
-- 选项 B：给 `push_upgrade.sh` 和 `push_python_bundles.sh` 加 `--dir`，默认仍是 `/opt/monitor`，便携包目录跟着这个目录下的 `vendor/python`。
-- 建议：选 A，除非确实有长期跑在 `~/monitor` 上的中心。选 B 的默认值不能改，否则会把现有现场升错目录。
+### NH-01 已拍板：生产中心固定 `/opt/monitor`
 
-### NH-02 要不要重写 SRS 正文
+监控中心是全局一套，不分用户。生产安装目录固定 `/opt/monitor`。不给 `push_upgrade.sh` / `push_python_bundles.sh` 加 `--dir`。家目录 `~/monitor` 不走产品升级路径。本机试用使用 `local_up.sh`（默认目录是仓库内 `.deploy-center`）。`deploy_center.sh` 在非 root 时仍会落到 `~/monitor`，那不是生产安装，升级脚本也不会跟着改目录。写在 `docs/14-ops-runbook.md`、README 升级说明和 `docs/01-requirements.md`。
 
-- 现状：`docs/01` 文首已改成摘要，并声明冲突时以代码为准。编号需求里仍有起草时的范围（例如告警「本期不做」、GPU 只写英伟达）。
-- 选项 A：保持正文为历史基线，只维护文首和 `docs/14`。
-- 选项 B：按 v1.10.0 重写第 3 节以后，使 SRS 单独可读。
-- 建议：选 A。重写 SRS 不改变行为，但容易在抄写时改入口径。
+### NH-02 已拍板：按现行能力重写 SRS 正文
+
+`docs/01-requirements.md` 全文按现行功能重写，可单独阅读。报告口径与 `center/reports.py`、`docs/13-diagnostic-reports.md` 一致：基本不用为平均 <5% 且繁忙 <5%。不再保留与现行冲突的起草句。这次不改代码。
 
 ### NH-03 空闲 5%、高负荷 40% / P95 85% 要不要进配置
 
 - 见 AD-03。建议都保持代码常量。不要把 5% 做成可配，以免站点改出另一套「基本不用」。
 
-### NH-04 指标框架化（路线图 N2）
+### NH-04 已拍板：指标框架化单独立项
 
-- 见 AD-04。建议单独立项，不要在纠偏文档时顺手做。
+- 见 AD-04 与路线图 N2。已单独立项，不与 NH-02/NH-03 同轮实现。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)。本轮不写框架化代码。
 
 ### NH-05 管理 API 鉴权与报告推送
 
@@ -256,7 +250,7 @@ Agent 只采集并 POST。日/周/月报告、隐藏、改址、资源组都在�
 
 ### NH-09 异常判定要不要纳入 load5
 
-- 见 CS-03。建议不要。高负载继续用 load1/核数。
+- 见 CS-03。现行 `center/anomaly.py` 与今日关注已经同时用 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。load15 仍只展示。本次不改这条规则。
 
 ### NH-10 中心容量与高可用
 
@@ -266,8 +260,9 @@ Agent 只采集并 POST。日/周/月报告、隐藏、改址、资源组都在�
 
 - 不改报告阈值，不新增指标，不把长期空闲名单做进总览（路线图已把它留在使用诊断）。
 - 不把部署页并进监测台，不做升级引导界面（U2）。
-- 不给 `push_upgrade.sh` 加 `--dir`（NH-01）。
+- 不给 `push_upgrade.sh` 加 `--dir`（NH-01 已拍板维持）。
 - 不删 `npu_*` 配置别名，不把 `gpu.py` / `npu.py` 收成一个文件。
-- 不重写 SRS、竞品矩阵或 2026-07 的晨报正文。
+- 不改竞品矩阵或 2026-07 的晨报正文。SRS 正文已按 NH-02 重写，仍不改采集与存储。
+- 不实现 N2 指标框架化代码（NH-04，Issue #35）。不把空闲/高负荷常量放进配置（NH-03）。
 - 不新增 GitHub Actions（NH-08）。
 - 不改 Agent 与中心的数据边界，不用笔记本 scp 作为文档中的安装办法。
