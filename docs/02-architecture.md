@@ -56,7 +56,8 @@
 | 异常判定 | `center/anomaly.py` | 阈值着色判定。`npu_*` 键是旧配置别名 |
 | 便携解释器 | `center/python_bundle.py` | 按架构选择中心上的 CPython 包 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
-| 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）与报告推送配置，表 `admin_settings` |
+| 中心参数 | `center/center_params.py` | `center.json` 的分组、默认值与说明。设置页写入文件；报告、着色、清理立即读新值 |
+| 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）与报告推送配置，表 `admin_settings`。与中心参数同页，不进 `center.json` |
 | 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书 Webhook；未配置不发请求 |
 | Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html`、设置页 `/settings.html` |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
@@ -78,7 +79,7 @@
 - **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组
 - **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路
-- **admin_settings**：管理 Token 哈希、报告推送开关 / 渠道 / Webhook。与监测库同一个 SQLite。接口不回显 Token 明文和完整 Webhook  
+- **admin_settings**：管理 Token 哈希、报告推送开关 / 渠道 / Webhook。与监测库同一个 SQLite。接口不回显 Token 明文和完整 Webhook。中心阈值在 `config/center.json`，不在这张表  
 
 容量与并发适合规模见路线图 **N4**。摸底方法和空白结果表在 `docs/15-capacity-lab.md`：数字必须实测后填写，本文不写主机台数。双中心 / 双活继续不做；备份与恢复见 `docs/14-ops-runbook.md`。框架化扩展指标见 **N2**。
 

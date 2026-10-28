@@ -1179,7 +1179,118 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   display: grid;
   gap: 16px;
   padding: 12px 28px 28px;
-  max-width: 980px;
+  max-width: 1100px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.settings-nav a {
+  color: var(--text);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.settings-group-label {
+  margin: 8px 0 0;
+  font-size: 18px;
+}
+
+.settings-anchor-copy {
+  padding-top: 0;
+}
+
+.param-list {
+  display: grid;
+  gap: 12px;
+  padding: 4px 16px 8px;
+}
+
+.param-field {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.param-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.param-label {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.param-unit {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.param-key {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.param-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.param-desc {
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.param-control input[type="text"],
+.param-control input[type="number"],
+.param-control input[type="password"] {
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  width: 220px;
+  max-width: 100%;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.badge-changed {
+  color: var(--accent, #8ec7ff);
+  border-color: rgba(61, 156, 253, 0.45);
+}
+
+.badge-restart {
+  color: #e6c07b;
+  border-color: rgba(230, 192, 123, 0.45);
 }
 
 .settings-copy {

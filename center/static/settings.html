@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>设置 · 管理 Token 与报告推送</title>
+  <title>设置 · 中心参数 / 管理 Token / 报告推送</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">设置 · 管理 Token / 报告推送 · v1.10.0</p>
+        <p class="sub">设置 · 中心参数 / 管理 Token / 报告推送 · v1.10.0</p>
       </div>
     </div>
     <nav class="shell-nav" aria-label="主导航">
@@ -28,32 +28,29 @@
   </header>
 
   <main class="settings-layout">
-    <section class="panel">
+    <section class="panel" id="sectionIntro">
       <div class="panel-head">
-        <h2>管理 Token</h2>
-        <span class="muted" id="tokenStatus">加载中…</span>
+        <h2>中心参数</h2>
+        <span class="muted" id="centerPath"></span>
       </div>
       <div class="settings-copy">
-        <p>这是中心写操作的一把共享口令，不是登录账号，也<strong>不是</strong> Agent 上报用的 <code>token</code>。上报仍只校验 <code>POST /api/v1/metrics</code>。</p>
-        <p id="tokenBootstrap">未设置时，部署、改主机、生成报告、保存设置都和现在一样不校验。请在中心能被别人访问之前先在这里设上。设上之后，这些写操作都要带当前 Token；清空也要带。读监测数据不需要。更换或清空时，先在页面上方黄条填入当前 Token，再点「本页使用」。</p>
-        <p>保存后只留哈希，页面不再显示明文。忘记时，在中心机执行 <code>sqlite3 data/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"</code>，然后立刻重新设置。也可以在首次启动前用环境变量 <code>MONITOR_MANAGEMENT_TOKEN</code> 写入（已有 Token 时不会覆盖）。</p>
+        <p>这里改的是中心实际在用的配置，写入 <code>config/center.json</code>。保留天数、异常着色、诊断报告的空闲/高负荷线、时段繁忙线和报告时刻，保存后当前进程立即按新值工作。监听地址、端口和数据目录只写入文件，要重启 <code>monitor-center</code> 才换，这不是升级。</p>
+        <p>文件里没写的项显示内置默认，可以单条、整组或全部恢复默认。管理 Token 未设置时，保存和其它写操作不校验；设置之后要带当前 Token。监测台读接口仍然开放。Agent 上报 Token 只校验指标上报。</p>
       </div>
-      <div class="form-grid">
-        <label>新的管理 Token
-          <input id="mgmtToken" type="password" autocomplete="new-password" placeholder="至少 8 位，不能含空格。留空表示不修改" />
-        </label>
-        <label>再输入一次
-          <input id="mgmtTokenAgain" type="password" autocomplete="new-password" placeholder="与上面一致" />
-        </label>
-      </div>
+      <nav id="centerNav" class="settings-nav" aria-label="参数分组"></nav>
       <div class="form-actions">
-        <button type="button" id="btnSaveToken" class="btn primary">保存管理 Token</button>
-        <button type="button" id="btnClearToken" class="btn btn-danger">清空管理 Token</button>
-        <span class="muted" id="tokenHint"></span>
+        <button type="button" id="btnSaveAll" class="btn primary">保存已修改的中心参数</button>
+        <button type="button" id="btnRestoreAll" class="btn">全部恢复默认</button>
+        <span class="muted" id="centerHint"></span>
       </div>
     </section>
 
-    <section class="panel">
+    <div id="centerLead"></div>
+
+    <h2 class="settings-group-label" id="securityAnchor">推送与安全</h2>
+    <p class="settings-copy settings-anchor-copy">推送开关和渠道最常改，放在这一组前面。管理 Token、Webhook 存在数据库，不进 <code>center.json</code>，接口不回显明文。Agent 上报 Token 写在配置文件里，和这两把钥匙分开。</p>
+
+    <section class="panel" id="sectionPush">
       <div class="panel-head">
         <h2>诊断报告推送</h2>
         <span class="muted" id="pushStatus">加载中…</span>
@@ -85,10 +82,38 @@
         <span class="muted" id="pushHint"></span>
       </div>
     </section>
+
+    <section class="panel" id="sectionToken">
+      <div class="panel-head">
+        <h2>管理 Token</h2>
+        <span class="muted" id="tokenStatus">加载中…</span>
+      </div>
+      <div class="settings-copy">
+        <p>这是中心写操作的一把共享口令，不是登录账号，也<strong>不是</strong> Agent 上报用的 <code>token</code>。上报仍只校验 <code>POST /api/v1/metrics</code>。</p>
+        <p id="tokenBootstrap">未设置时，部署、改主机、生成报告、保存设置都和现在一样不校验。请在中心能被别人访问之前先在这里设上。设上之后，这些写操作都要带当前 Token；清空也要带。读监测数据不需要。更换或清空时，先在页面上方黄条填入当前 Token，再点「本页使用」。</p>
+        <p>保存后只留哈希，页面不再显示明文。忘记时，在中心机执行 <code>sqlite3 data/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"</code>，然后立刻重新设置。也可以在首次启动前用环境变量 <code>MONITOR_MANAGEMENT_TOKEN</code> 写入（已有 Token 时不会覆盖）。</p>
+      </div>
+      <div class="form-grid">
+        <label>新的管理 Token
+          <input id="mgmtToken" type="password" autocomplete="new-password" placeholder="至少 8 位，不能含空格。留空表示不修改" />
+        </label>
+        <label>再输入一次
+          <input id="mgmtTokenAgain" type="password" autocomplete="new-password" placeholder="与上面一致" />
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="btnSaveToken" class="btn primary">保存管理 Token</button>
+        <button type="button" id="btnClearToken" class="btn btn-danger">清空管理 Token</button>
+        <span class="muted" id="tokenHint"></span>
+      </div>
+    </section>
+
+    <div id="centerSecurity"></div>
+    <div id="centerTail"></div>
   </main>
 
   <footer class="foot">
-    <span>管理 Token 与 Agent 上报 Token 分开。推送未配置时，诊断报告只留在本机。</span>
+    <span>管理 Token、报告推送和 Agent 上报 Token 分开。中心参数写在 center.json；推送未配置时，诊断报告只留在本机。</span>
   </footer>
   <script src="/admin.js"></script>
   <script src="/settings.js"></script>

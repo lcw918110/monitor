@@ -89,7 +89,7 @@ chmod +x scripts/*.sh
 
 成功后打开：`http://<中心IP>:8080/`  
 客户端部署页（**推荐装 Agent 的方式**）：`http://<中心IP>:8080/deploy.html`  
-管理设置页（管理 Token、诊断报告推送）：`http://<中心IP>:8080/settings.html`
+管理设置页（全部中心参数、管理 Token、诊断报告推送）：`http://<中心IP>:8080/settings.html`
 
 已有中心升级时**不要删库**。`metrics_history` 可能有数 GB。诊断调度、主机列和同机改址都是加法：`diagnostic_reports` 补列，`hosts` 增加可空列 `hidden`、`hidden_at`、`asset_meta`，`deploy_targets` 增加可空列 `retired`、`retired_at`。手工展示地址和历史 IP 写在已有 `asset_meta` JSON 里。不改 `hosts.host_id`，不重写历史上报。
 
@@ -305,16 +305,16 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
 | GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
-| GET/POST | `/api/v1/settings` | 管理 Token 与报告推送。GET 不回显明文；POST 在已启用管理 Token 时要带请求头 |
+| GET/POST | `/api/v1/settings` | 管理 Token、报告推送，以及全部中心参数（分组、说明、默认值）。GET 不回显管理 Token / Agent 上报 Token 明文，Webhook 打码。POST 在已启用管理 Token 时要带请求头。中心参数写入 `config/center.json` |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页）。写操作在启用管理 Token 后要带请求头 |
 
 `token`（`config/center.json` 或部署参数）只在 `POST /api/v1/metrics` 校验 Agent 上报，不是网页登录。管理 Token 是另一把可选口令，见下面「管理 Token 与报告推送」。
 
-诊断报告的读接口直接打开。中心进程按 `report_schedule` 自动生成上一完整周期（默认日报 00:10、周报周一 00:20、月报每月 1 日 00:30，上海时间），错过不补。口径、去重、`generated_at` 与越界样本见 `docs/13-diagnostic-reports.md`（基本不用为 CPU/加速卡平均与繁忙均 <5%，不再使用 15%/10%）。
+诊断报告的读接口直接打开。中心进程按 `report_schedule` 自动生成上一完整周期（默认日报 00:10、周报周一 00:20、月报每月 1 日 00:30，上海时间），错过不补。口径、去重、`generated_at` 与越界样本见 `docs/13-diagnostic-reports.md`。基本不用默认仍是 CPU/加速卡平均 <5% 且繁忙 <5%（不再使用旧模板的 15%/10%）；空闲线、高负荷线和最少样本数在 `report` 段，可在设置页改。改时段繁忙线不会改这两条。
 
 ## 管理 Token 与报告推送
 
-打开 `/settings.html`。
+打开 `/settings.html`。这一页同时编辑 `config/center.json` 里的中心参数（按保留与清理、异常着色、诊断报告阈值、时段利用率、报告时刻、上报 Token、服务与部署分组，常用项在前，每项有说明，未配置显示默认并可恢复）以及下面两项。除监听地址、端口、数据目录需要重启外，其余保存后当前进程立即生效。说明见 `config/center.example.md`。
 
 **管理 Token（可选）**
 
@@ -333,7 +333,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 细节见 `docs/13-diagnostic-reports.md`。
 
-异常阈值见中心配置中的 `anomaly` 段（示例见 `config/center.example.json`）。
+异常着色、报告阈值和其它中心参数见 `config/center.example.json`，旁注在 `config/center.example.md`，设置页可以改。
 
 ## 文档
 

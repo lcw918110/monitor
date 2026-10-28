@@ -69,12 +69,12 @@
 
 | 判定 | 条件 |
 | --- | --- |
-| 高负荷 | 样本数 ≥10，且 CPU 繁忙占比 ≥40% 或 CPU P95 ≥85%；加速卡同样（有卡且样本够时） |
-| 基本不用 | **生成时刻在线**且样本数 ≥10；CPU 平均 <5% **且** 繁忙 <5%；有加速卡则加速卡平均也 <5% **且** 繁忙 <5% |
+| 高负荷 | 样本数 ≥ `report.min_samples`（默认 10），且 CPU 繁忙占比 ≥ `report.high_busy_gte`（默认 0.40，即 40%）或 CPU P95 ≥ `report.high_p95_gte`（默认 85%）；加速卡同样（有卡且样本够时） |
+| 基本不用 | **生成时刻在线**且样本数 ≥ `report.min_samples`（默认 10）；CPU 平均 < `report.idle_avg_lt`（默认 5%）**且** 繁忙 < `report.idle_busy_lt`（默认 0.05，即 5%）；有加速卡则加速卡平均和繁忙也要低于同样两条线 |
 | 样本不足 | 在线但样本不够，或有卡却没有加速卡样本。不判成空闲，也不编数 |
 | 离线 | 生成时刻已离线。只写末次上报时间，**不把末次快照当实时用量** |
 
-5% 是收紧后的空闲线。更早的报告模板曾用 CPU 平均 <15%、加速卡平均 <10%，**当前产品不用那两档**。
+默认空闲线是平均 <5% 且繁忙 <5%（`report.idle_avg_lt` / `report.idle_busy_lt`）。更早的报告模板曾用 CPU 平均 <15%、加速卡平均 <10%，**未改配置时不用那两档**。这四条线和最少样本数在 `config/center.json` 的 `report` 段，也可以在设置页改；不写就用上面的默认。改 `period_util` 的繁忙线**不会**带动空闲线或高负荷线。已入库的旧报告不自动重算。
 
 已落入高负荷的主机不再重复算作基本不用。
 
@@ -82,7 +82,7 @@
 
 主机排行、闲忙两极（高负荷 / 基本不用）和排行 CSV 带手工维护的**负责人**、**用途**。没填时正文写「未填」，CSV 里是空字符串。这些字段来自 `hosts.asset_meta`，采集端不会改写。已经入库的旧报告不会自动补上这两列，需要对该窗口再生成一次。隐藏发生在生成之后才生效：旧报告里仍可能出现后来被隐藏的主机。
 
-磁盘单独成节：集群平均 / P95 / 最高；主机按窗口内最高 `disk_percent` 分 ≥85% 与 ≥95%（跟 `anomaly.disk_*` 一致）。多挂载的最满路径来自该窗口历史点里的 `disks[]`。历史里没有挂载列表时写「挂载样本不足」，不用生成时刻的快照回填过去。磁盘满不等于算力忙。
+磁盘单独成节：集群平均 / P95 / 最高；主机按窗口内最高 `disk_percent` 分档，线跟 `anomaly.disk_warn_percent` / `anomaly.disk_critical_percent`（默认 ≥85% 与 ≥95%）。内存偏高用 `anomaly.mem_warn_percent`（默认 85%）。多挂载的最满路径来自该窗口历史点里的 `disks[]`。历史里没有挂载列表时写「挂载样本不足」，不用生成时刻的快照回填过去。磁盘满不等于算力忙。
 
 缺任何指标就写「样本不足」或「无加速卡」。
 
@@ -125,7 +125,7 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 
 表 `diagnostic_reports` 与主机库同一个 SQLite。列：周期、半开请求窗、是否裁剪、Markdown、完整 JSON，以及 `source`、`status`、`error`、`generated_at`。已有库只做 `ADD COLUMN`，不重写 `metrics_history`。
 
-`retention_days` 的清理**只** `DELETE FROM metrics_history WHERE ts < 截止`。不删除 `diagnostic_reports`。报告正文因此可以在原始点过期之后继续打开；窗口若被保留期裁短，抬头仍写 clamped。
+`retention_days` 的清理**只** `DELETE FROM metrics_history WHERE ts < 截止`。不删除 `diagnostic_reports`。报告正文因此可以在原始点过期之后继续打开；窗口若被保留期裁短，抬头仍写 clamped。设为 0 时不按天数删除，诊断窗口也不再被裁成 7 天。
 
 历史点在原有趋势字段之外，有精简 `system.disks[]`（`mount` / `percent` / `used_gb` / `total_gb`），便于点名最满挂载。没有 `disks[]` 的旧点保持原样。时段统计的 avg/P95 仍只用汇总 `disk_percent`。越界的挂载利用率不参与「最满路径」。
 
@@ -139,7 +139,11 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 
 ## 管理 Token 与报告推送
 
-设置页：`/settings.html`。配置写在中心库 `admin_settings`，不进 `config/center.json`，升级保留 `data/` 时会留下来。
+设置页：`/settings.html`。同一页配置全部中心参数，以及管理 Token、报告推送。
+
+中心参数（保留天数、`anomaly`、`period_util`、`report` 空闲/高负荷线、`report_schedule`、监听地址、Agent 上报 Token 等）写入 `config/center.json`。文件里没写的键用代码默认，和 `config/center.example.json` 一致；字段说明见 `config/center.example.md`。设置页保存后，报告生成、异常着色、时段繁忙线、清理间隔和定时时刻**当前进程立即生效**。`host`、`port`、`data_dir` 写入文件后要重启 `monitor-center` 才换绑定，这不是升级。接口不回显 Agent 上报 Token 明文。
+
+管理 Token 和报告推送仍写在中心库 `admin_settings`，不进 `config/center.json`，升级保留 `data/` 时会留下来。读取接口不回显管理 Token 明文，Webhook 继续打码。
 
 ### 管理 Token
 
@@ -175,6 +179,6 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 
 已安装的中心在工作站执行 `scripts/push_upgrade.sh`（中心上跑的是这次包里的 `scripts/upgrade_center.sh`）。先 `--check-only`，通过后再正式升级。脚本保留 `config/center.json`、`data/` 和已放置的便携包；健康检查失败只回滚代码和单元，不覆盖数据库。不要把手写 `systemctl restart` 或直接执行 `scripts/lib/sync_tree.sh` 当成升级。步骤见 `docs/14-ops-runbook.md`。
 
-不必为了启用调度去改配置。要改时刻或关掉某一档，编辑中心机上的 `report_schedule` 后重启 `monitor-center` 让进程重读配置；这只重读配置，不换代码。
+不必为了启用调度去改配置。要改时刻、阈值或保留天数，优先用设置页，保存后当前进程就按新值工作。手改中心机上的 `config/center.json` 之后仍要重启 `monitor-center` 才会重读文件；这只重读配置，不换代码，也不是升级。
 
 不要清空数据库。Agent 仍只走 `/deploy.html` 与中心机 `deploy_runner` / `deploy_fleet.sh`，不要在笔记本上用 sshpass/scp 旁路安装。采集端的越界过滤随 Agent 升级生效；不升级 Agent 时，中心侧报告仍然排除已入库的脏样本。

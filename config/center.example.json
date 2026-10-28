@@ -24,6 +24,13 @@
     "busy_cpu_percent": 80,
     "busy_accel_percent": 80
   },
+  "report": {
+    "idle_avg_lt": 5.0,
+    "idle_busy_lt": 0.05,
+    "high_busy_gte": 0.40,
+    "high_p95_gte": 85.0,
+    "min_samples": 10
+  },
   "deploy": {
     "python_bundles": "/opt/monitor/vendor/python"
   },
