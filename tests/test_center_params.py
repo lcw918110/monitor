@@ -194,8 +194,10 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("idle_busy_lt", text)
         self.assertIn("0.05", text)
         self.assertIn("high_busy_gte", text)
-        html = open(os.path.join(ROOT, "center", "static", "settings.html"), encoding="utf-8").read()
-        script = open(os.path.join(ROOT, "center", "static", "settings.js"), encoding="utf-8").read()
+        with open(os.path.join(ROOT, "center", "static", "settings.html"), encoding="utf-8") as handle:
+            html = handle.read()
+        with open(os.path.join(ROOT, "center", "static", "settings.js"), encoding="utf-8") as handle:
+            script = handle.read()
         self.assertIn("centerLead", html)
         self.assertIn("管理 Token", html)
         self.assertIn("企业微信", html)

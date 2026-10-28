@@ -74,7 +74,7 @@ def _field(key, label, description, kind, default, **extra):
     return item
 
 
-def _num(key, label, description, default, unit, low, high, step=1, kind="number"):
+def _num(key, label, description, default, unit, low, high, step=1, kind="number", **extra):
     return _field(
         key,
         label,
@@ -85,6 +85,7 @@ def _num(key, label, description, default, unit, low, high, step=1, kind="number
         min=low,
         max=high,
         step=step,
+        **extra,
     )
 
 
@@ -807,9 +808,10 @@ def _configured(user_doc: Dict[str, Any], field: Dict[str, Any]) -> bool:
     present, _value = _lookup(user_doc, field["key"])
     if present:
         return True
-    if field["key"] in ANOMALY_ALIASES:
-        alias = "anomaly." + ANOMALY_ALIASES[field["key"]]
-        alias_present, _alias_value = _lookup(user_doc, alias)
+    # 目录键是 anomaly.accel_*，别名表的键不带前缀。
+    old = ANOMALY_ALIASES.get(field["key"].split(".")[-1])
+    if old:
+        alias_present, _alias_value = _lookup(user_doc, "anomaly." + old)
         if alias_present:
             return True
     return False
