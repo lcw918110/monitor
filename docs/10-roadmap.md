@@ -2,7 +2,7 @@
 
 | 文档版本 | 1.1 |
 | 编制日期 | 2026-07-28 |
-| 最近修订 | 2026-10-27（NH-10：容量探针与备份/恢复；双中心推迟） |
+| 最近修订 | 2026-10-27（NH-01 固定 `/opt/monitor`；NH-02 重写 SRS；N2 / NH-04 单独立项） |
 | 对应基线 | README v1.10.0 |
 
 状态约定：`todo` / `doing` / `done` / `blocked`
@@ -17,7 +17,7 @@
 - 监测台三页签：实时监控（排序、完整 IP、资源组、负责人/用途、规格与利用率分列、离线不展示实时数字、隐藏/导入资产）、时段统计、使用诊断（日/周/月报告入库；中心按时生成，错过不补；排行和闲忙带负责人/用途）
 - `retention_days` 可配。展示地址优先手工地址 / 未停用清单 / host_id，跳过 `198.18.0.0/15`。同机改址保留 host_id 和历史上报，旧 IP 进历史，旧部署目标停用；apply 时记下可撤销状态。`previous_ips: []` 可清空历史 IP，部署目标可用 `retired` 恢复
 - Agent 下限仍是 3.6。没有合适解释器时使用中心上的便携 CPython。中心升级走 `scripts/push_upgrade.sh` / `scripts/upgrade_center.sh`：先从单元套用 `LD_LIBRARY_PATH`/`PATH` 再测新包，通过才同步；回滚不动 `data/`。预同步测试在沙箱里跑（假 systemctl、临时 HOME），不会停掉现场的 `monitor-agent`。`--check-only` 只上传到 `/tmp` 并做同步前测试和磁盘预检。不喂数据的 ssh 使用 `ssh -n`，预同步测试的 stdin 接到 `/dev/null`。便携包用 `scripts/push_python_bundles.sh` 放到中心（远端目录不存在也会创建）
-- 部署：只走 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。Excel/CSV 导入；密码登录需要**中心机**的 `sshpass`（或改用私钥）。Agent 默认 `/opt/monitor-agent`，Center 默认 `/opt/monitor`。笔记本 sshpass/scp 装 Agent 已废弃
+- 部署：只走 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh`。Excel/CSV 导入；密码登录需要**中心机**的 `sshpass`（或改用私钥）。Agent 默认 `/opt/monitor-agent`。生产中心全局一套，目录固定 `/opt/monitor`（NH-01）。`push_upgrade.sh` 与 `push_python_bundles.sh` 不加 `--dir`。家目录 `~/monitor` 与 `local_up.sh` 的试用目录不走产品升级路径。笔记本 sshpass/scp 装 Agent 已废弃
 - 本地守护：`scripts/local_up.sh` / `local_down.sh`
 - v1.10.0 已开始做体验，不新增监测能力：监测台和部署页共用顶栏（总览 / 主机 / 诊断 / 运维）；实时页有「今日关注」（离线、磁盘快满、卡异常、高负载）；加速卡健康列和异常说明用人话，原始 `health` 仍留在数据里；诊断报告里的主机行可点进主机详情（`#host=`）。长期空闲清单、把部署页收进同一页、中心升级引导界面都还没做
 
@@ -43,6 +43,8 @@
 ---
 
 ### N2. 框架化：指标可扩展，采集变更尽量不牵动其余代码 — `todo`
+
+**跟踪**：[Issue #35 N2 指标框架化（NH-04）](https://github.com/lcw918110/monitor/issues/35)。已单独立项，不与 NH-02/NH-03 同轮实现。本轮不写指标框架化代码，不改采集、存储或页面去适配「命名空间 + 键」。
 
 **目标**：后续新增/调整检测指标时，**优先只改采集实现**（Agent 侧采集模块或脚本），中心存储、API、前端尽量通过约定自动适配，避免到处改字段。
 
@@ -319,12 +321,13 @@ v1.10.0 先把四个入口放到同一顶栏。部署仍是 `/deploy.html`，时
 3. **U2** 运维闭环（部署收进同一壳；升级只引导 `push_upgrade.sh --check-only` 再正式升级）
 4. **O6** 中心自身可观测、**O2** 离线恢复这条任务走完、**O3** 保留期和断档（O3 的数字等 **N4**）
 5. **U3** 可选：保存筛选（含长期空闲）仍待做。管理 API Token（O5）和诊断报告推送已在设置页，不包含保存筛选
+6. **N2** 指标框架化。已单独立项，不与 NH-02/NH-03 同轮实现。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)。本轮不写代码
 
 **仍保留的实装与能力（不因体验项删掉）**
 
 1. **N1** 服务器实装（真实环境闭环，暴露 U / O 在纸面上看不到的问题）
 2. **N4** 容量摸底（探针见 `docs/15-capacity-lab.md`；O3 只引用填好的结果表，不引用冒烟数字）
-3. **N2** 框架化（降低以后加指标的成本）
+3. **N2** 框架化（独立条目，见上面「接着」第 6 条与 [Issue #35](https://github.com/lcw918110/monitor/issues/35)；不并进 NH-02 或 NH-03）
 4. **N3** 拓扑可视化（依赖部署和探查稳定之后）
 
 ---

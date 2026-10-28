@@ -2,6 +2,12 @@
 
 这是现行操作说明，对应仓库里的脚本。和本文冲突时以脚本为准，并应改本文。
 
+## 生产中心目录（NH-01，已拍板）
+
+监控中心是**全局一套**，不分用户。生产安装目录固定 **`/opt/monitor`**。`scripts/push_upgrade.sh` 与 `scripts/push_python_bundles.sh` **不加** `--dir`，只作用于 `/opt/monitor`（便携包为 `/opt/monitor/vendor/python`）。
+
+家目录 `~/monitor` 不走产品升级路径。本机试用使用 `scripts/local_up.sh`（默认目录是仓库内 `.deploy-center`，可用 `MONITOR_CENTER_DIR` 改），不要对试用目录执行 `push_upgrade.sh`。`deploy_center.sh` 在非 root 时仍会把默认目录改成 `~/monitor`；那只是本机落点。生产中心用 root 安装到 `/opt/monitor`。对 `~/monitor` 跑升级脚本会去找 `/opt/monitor`：目录不存在就退出；若 `/opt/monitor` 是另一套安装，则会升级那一套。
+
 中心换代码只走 `scripts/push_upgrade.sh` → 新包里的 `scripts/upgrade_center.sh`。Agent 只走中心「客户端部署」或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`。不要另写 rsync、手写备份或 `systemctl restart` 来升级，也不要从笔记本用 `sshpass` + `scp` 装 Agent。`scripts/backup_center.sh` 和 `scripts/restore_center.sh` 不是第二条升级路径，也不是第二条 Agent 部署路径。
 
 **双中心 / 双活 / SQLite 多写 / 自动故障切换：不做。** 这里的「弱高可用」只是：升级前和单独备份都能留下一份可恢复的副本，由人决定恢复代码还是连数据库一起恢复。
@@ -12,7 +18,7 @@
 
 | 做什么 | 命令 | 不做什么 |
 | --- | --- | --- |
-| 第一次装中心 | 在中心机执行 `scripts/deploy_center.sh` | 不要用 `upgrade_center.sh` 做首次安装。安装目录不存在时它会直接退出 |
+| 第一次装生产中心 | 在中心机以 root 执行 `scripts/deploy_center.sh`，目录 `/opt/monitor` | 不要用 `upgrade_center.sh` 做首次安装。安装目录不存在时它会直接退出。非 root 落到 `~/monitor` 不是生产安装，也不走 `push_upgrade.sh` |
 | 升级已经装好的中心 | 在工作站执行 `scripts/push_upgrade.sh` | 不要手写 `cp`、`git archive`、`rsync`，也不要 `systemctl restart` 当作换代码 |
 | 不升级，只做一份备份 | 在中心机执行 `scripts/backup_center.sh` | 它不换代码、不重启、不部署 Agent |
 | 从备份恢复 | 在中心机执行 `scripts/restore_center.sh` | 不能用它来安装新版本。新版本仍走 `push_upgrade.sh` |
@@ -38,7 +44,7 @@ SSHPASS='***' scripts/push_upgrade.sh root@<中心> HEAD
 
 `MONITOR_PUSH_DRY=1` 只打印将使用的 SSH 命令，不连接。设置了 `SSHPASS` 但本机没有 `sshpass` 时，脚本退出，不会悄悄改用普通 `ssh`。
 
-这条命令**只升级 `/opt/monitor`**。非 root 首次安装若落在 `~/monitor`，不能靠省略参数指到家目录。便携包同样只同步到 `/opt/monitor/vendor/python`。
+这条命令**只升级 `/opt/monitor`**，没有 `--dir`。便携包同样只同步到 `/opt/monitor/vendor/python`，`push_python_bundles.sh` 也不加 `--dir`。`~/monitor` 与 `local_up.sh` 的试用目录都不在这条路径上，见上文「生产中心目录」。
 
 工作站实际做的事：
 
@@ -163,7 +169,7 @@ scripts/push_python_bundles.sh root@<中心>
 "deploy": { "python_bundles": "/opt/monitor/vendor/python" }
 ```
 
-`push_python_bundles.sh` 的远端目录仍是 `/opt/monitor/vendor/python`，父目录不存在时会先 `mkdir -p`。中心升级不会删掉这里的 tar.gz。网页部署和 `deploy_fleet.sh` 在目标机没有合适解释器时上传并解压：root 解到 `/usr/local/monitor-python`，否则解到安装目录下的 `python/`。
+`push_python_bundles.sh` 的远端目录固定是 `/opt/monitor/vendor/python`，不加 `--dir`。父目录不存在时会先 `mkdir -p`。中心升级不会删掉这里的 tar.gz。网页部署和 `deploy_fleet.sh` 在目标机没有合适解释器时上传并解压：root 解到 `/usr/local/monitor-python`，否则解到安装目录下的 `python/`。
 
 ## 隐藏主机
 
