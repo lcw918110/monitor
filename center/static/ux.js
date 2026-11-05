@@ -156,11 +156,54 @@
       });
   }
 
+  /** 无数据、失败的日/周/月报告仍留在列表里，不因为没有样本而隐藏。 */
+  function reportListItemVisible(report) {
+    return !!(report && (report.id || report.id === 0));
+  }
+
+  /**
+   * full：有样本，按章节渲染。
+   * empty：窗口没有上报，只留报告壳和一句说明。
+   * failed：生成失败，仍留壳和原因。
+   */
+  function reportPresentation(report) {
+    report = report || {};
+    var payload = report.payload || {};
+    var title = report.title || payload.title || "使用诊断";
+    if (report.status === "failed") {
+      return {
+        mode: "failed",
+        title: title,
+        message: report.error || payload.error || "生成失败，报告仍保留在列表中。",
+      };
+    }
+    var samples = payload.sample_count;
+    var noSamples =
+      report.empty === true ||
+      report.empty === 1 ||
+      payload.empty === true ||
+      samples === 0 ||
+      samples === "0";
+    var sections = payload.sections || [];
+    var markdown = report.markdown || payload.markdown || "";
+    if (noSamples || (!sections.length && !markdown)) {
+      return {
+        mode: "empty",
+        title: title,
+        message:
+          "这一窗口没有可汇总的上报。报告已留在列表里，日、周、月都一样，不会消失，也不编造利用率。",
+      };
+    }
+    return { mode: "full", title: title, message: "" };
+  }
+
   return {
     accelHealthLabel: accelHealthLabel,
     attentionTags: attentionTags,
     parseLocationHash: parseLocationHash,
     loadPerCoreHigh: loadPerCoreHigh,
     applyHealthVersion: applyHealthVersion,
+    reportListItemVisible: reportListItemVisible,
+    reportPresentation: reportPresentation,
   };
 });

@@ -33,6 +33,9 @@
   let periodMode = "preset"; // preset | custom
   let periodFromTs = null;
   let periodToTs = null;
+  let periodDetailToken = 0;
+  let periodDetailKey = "";
+  let periodDetailPoints = null;
   let busyCpu = 80;
   let busyAccel = 80;
   const PERIOD_OPTIONS = [
@@ -117,6 +120,19 @@
     parseLocationHash: function () {
       return { tab: "realtime", hostId: "", focus: "" };
     },
+    reportListItemVisible: function (report) {
+      return !!(report && (report.id || report.id === 0));
+    },
+    reportPresentation: function (report) {
+      report = report || {};
+      if (report.status === "failed") {
+        return { mode: "failed", title: report.title || "使用诊断", message: report.error || "生成失败" };
+      }
+      if (report.empty || (report.payload && report.payload.empty)) {
+        return { mode: "empty", title: report.title || "使用诊断", message: "这一窗口没有可汇总的上报。" };
+      }
+      return { mode: "full", title: report.title || "使用诊断", message: "" };
+    },
   };
 
   function fmtPct(v) {
@@ -154,6 +170,16 @@
       ":" +
       p(d.getSeconds())
     );
+  }
+
+  function fmtDuration(seconds) {
+    seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return h + " 小时 " + m + " 分";
+    if (m > 0) return m + " 分 " + s + " 秒";
+    return s + " 秒";
   }
 
   function fmtUptime(sec) {
@@ -999,6 +1025,124 @@
     if (link) link.setAttribute("href", "/api/v1/export/period-stats.csv?" + periodQuery());
   }
 
+  function formatOfflineRanges(intervals) {
+    const list = intervals || [];
+    if (!list.length) return "-";
+    const shown = list.slice(0, 3).map((span) => {
+      const end = span.until_window_end ? "窗口结束" : fmtTime(span.to_ts);
+      return fmtTime(span.from_ts) + " ~ " + end + "（" + fmtDuration(span.seconds) + "）";
+    });
+    let text = shown.join("；");
+    if (list.length > 3) text += "；另有 " + (list.length - 3) + " 段";
+    return escapeHtml(text);
+  }
+
+  function renderOfflineOverview(data) {
+    const off = (data && data.offline) || {};
+    const threshold = off.offline_seconds != null ? off.offline_seconds : 90;
+    const hosts = off.hosts || [];
+    const total = off.host_total != null ? off.host_total : (data && data.host_count) || 0;
+    let html = '<div class="offline-overview">';
+    html += '<div class="section-title">离线概览</div>';
+    html +=
+      '<p class="muted">超过 ' +
+      escapeHtml(String(threshold)) +
+      " 秒没有上报记为离线，和监测台的在线判定是同一条线。只看已有历史上报，第一次上报之前不算离线。</p>";
+    if (!hosts.length) {
+      html += '<p class="empty">这一时段没有离线。</p>';
+    } else {
+      const shownHosts = hosts.slice(0, 12);
+      html +=
+        "<p><strong>离线 " +
+        hosts.length +
+        " 台</strong> / " +
+        total +
+        " 台 · " +
+        (off.interval_count || 0) +
+        " 段 · 累计 " +
+        fmtDuration(off.total_seconds) +
+        "</p>";
+      html +=
+        '<table class="period-stats-table offline-table"><thead><tr><th>主机</th><th>次数</th><th>累计</th><th>离线时段</th></tr></thead><tbody>';
+      shownHosts.forEach((h) => {
+        const label = h.address || h.hostname || h.host_id || "-";
+        html +=
+          "<tr><td>" +
+          escapeHtml(label) +
+          "</td><td>" +
+          (h.interval_count || 0) +
+          "</td><td>" +
+          fmtDuration(h.total_seconds) +
+          "</td><td>" +
+          formatOfflineRanges(h.intervals) +
+          "</td></tr>";
+      });
+      html += "</tbody></table>";
+      if (hosts.length > shownHosts.length) {
+        html +=
+          '<p class="muted">另有 ' +
+          (hosts.length - shownHosts.length) +
+          " 台，点左侧主机可看该机全部时段。</p>";
+      }
+    }
+    if (off.incomplete) {
+      html += '<p class="muted">有主机的历史上报达到读取上限，窗口末尾是否离线未判断。</p>';
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function renderHostOffline(offline) {
+    if (!offline) {
+      return '<p class="muted">离线时段随主机列表一起返回。若这里是空的，先等左侧时段统计加载完。</p>';
+    }
+    const intervals = offline.intervals || [];
+    let html = '<div class="offline-overview">';
+    html += '<div class="section-title">离线时段</div>';
+    if (!intervals.length) {
+      html += '<p class="empty">这一时段该机没有离线。</p>';
+    } else {
+      html +=
+        "<p><strong>离线 " +
+        (offline.interval_count || intervals.length) +
+        " 段</strong> · 累计 " +
+        fmtDuration(offline.total_seconds) +
+        "</p>";
+      html += "<ul class=\"offline-ranges\">";
+      intervals.forEach((span) => {
+        const end = span.until_window_end ? "窗口结束" : fmtTime(span.to_ts);
+        html +=
+          "<li>" +
+          escapeHtml(fmtTime(span.from_ts) + " ~ " + end) +
+          " · " +
+          fmtDuration(span.seconds) +
+          "</li>";
+      });
+      html += "</ul>";
+    }
+    if (offline.complete === false) {
+      html += '<p class="muted">历史上报达到读取上限，窗口末尾是否离线未判断。</p>';
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function periodHostFromList(hostId) {
+    const hosts = (periodUtilData && periodUtilData.hosts) || [];
+    for (let i = 0; i < hosts.length; i++) {
+      if (hosts[i] && hosts[i].host_id === hostId) return hosts[i];
+    }
+    return null;
+  }
+
+  function markPeriodRows(hostId) {
+    if (!el.periodUtilBody) return;
+    Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((row) => {
+      const id = decodeURIComponent(row.getAttribute("data-id") || "");
+      row.classList.toggle("active", id === hostId);
+    });
+  }
+
   function renderPeriodUtil(data) {
     periodUtilData = data;
     if (!el.periodUtilBody) return;
@@ -1012,7 +1156,8 @@
     }
     const cluster = data.cluster || {};
     const hosts = data.hosts || [];
-    let html = "";
+    const scrollTop = el.periodUtilBody.scrollTop;
+    let html = renderOfflineOverview(data);
     const clusterSummary =
       cluster.accel_summary || data.accel_summary || "";
     html +=
@@ -1042,6 +1187,7 @@
     if (!hosts.length) {
       html += '<p class="muted">暂无主机</p>';
       el.periodUtilBody.innerHTML = html;
+      el.periodUtilBody.scrollTop = scrollTop;
       return;
     }
     const sorted = hosts.slice().sort((a, b) =>
@@ -1132,34 +1278,10 @@
     });
     html += "</tbody></table></div>";
     el.periodUtilBody.innerHTML = html;
+    el.periodUtilBody.scrollTop = scrollTop;
     const periodTable = el.periodUtilBody.querySelector(".period-hosts-table");
     syncSortHeaders(periodTable, periodSortKey, periodSortDir);
-    if (periodTable) {
-      Array.from(periodTable.querySelectorAll("thead th[data-sort]")).forEach((th) => {
-        th.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          const next = applyHeaderSort(
-            periodSortKey,
-            periodSortDir,
-            th.getAttribute("data-sort")
-          );
-          periodSortKey = next.key;
-          periodSortDir = next.dir;
-          if (periodUtilData) renderPeriodUtil(periodUtilData);
-        });
-      });
-    }
-    Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((tr) => {
-      tr.addEventListener("click", () => {
-        selectedId = decodeURIComponent(tr.getAttribute("data-id"));
-        loadPeriodHostDetail(selectedId);
-        renderHosts(allHosts);
-        Array.from(el.periodUtilBody.querySelectorAll("tr")).forEach((r) =>
-          r.classList.remove("active")
-        );
-        tr.classList.add("active");
-      });
-    });
+    markPeriodRows(selectedId);
   }
 
   async function loadPeriodUtil() {
@@ -1225,60 +1347,95 @@
     return html;
   }
 
-  async function loadPeriodHostDetail(hostId) {
+  function paintPeriodDetail(hostId, stats, points, flags) {
+    if (!el.periodDetailBody || selectedId !== hostId) return;
+    const host = hostById(hostId);
+    if (el.periodDetailTitle) {
+      el.periodDetailTitle.textContent =
+        (host && (host.address || host.hostname || host.host_id)) ||
+        (stats && (stats.address || stats.hostname || stats.host_id)) ||
+        hostId;
+    }
+    const loadingCharts = flags && flags.loadingCharts;
+    if (!stats && loadingCharts) {
+      el.periodDetailBody.innerHTML = '<p class="muted">正在读取该机这一时段…</p>';
+      return;
+    }
+    const tableStats = {
+      metrics: (stats && stats.metrics) || {},
+      sample_count: stats && stats.sample_count,
+      from_ts: stats && stats.from_ts,
+      to_ts: stats && stats.to_ts,
+      window: (stats && stats.window) || (periodUtilData && periodUtilData.window),
+      busy_thresholds:
+        (stats && stats.busy_thresholds) ||
+        (periodUtilData && periodUtilData.busy_thresholds),
+    };
+    let html = renderHostOffline(stats && stats.offline);
+    html += '<div class="section-title">时段指标</div>';
+    const liveSummary =
+      (stats && stats.accel_summary) || (host && host.accel_summary) || "";
+    if (liveSummary) {
+      html +=
+        '<p class="accel-inv">' +
+        escapeHtml(liveSummary) +
+        (stats && stats.accel_count ? " · 共 " + stats.accel_count + " 张" : "") +
+        "</p>";
+    }
+    html += renderPeriodStatsTable(tableStats);
+    if (points) html += renderPeriodCharts(points);
+    else if (loadingCharts) html += '<p class="muted">正在读取该机趋势…</p>';
+    el.periodDetailBody.innerHTML = html;
+  }
+
+  async function loadPeriodHostDetail(hostId, opts) {
     if (!el.periodDetailBody) return;
+    const quiet = !!(opts && opts.quiet);
     if (!hostId) {
+      periodDetailKey = "";
+      periodDetailPoints = null;
+      periodDetailToken += 1;
       if (el.periodDetailTitle) el.periodDetailTitle.textContent = "请选择主机";
       el.periodDetailBody.innerHTML =
         '<p class="empty">点选左侧主机，查看该机时段指标与趋势</p>';
       return;
     }
-    const host = hostById(hostId);
-    if (el.periodDetailTitle) {
-      el.periodDetailTitle.textContent =
-        (host && (host.address || host.hostname || host.host_id)) || hostId;
+    const key = hostId + "?" + periodQuery();
+    const cached = periodHostFromList(hostId);
+    if (quiet && key === periodDetailKey) {
+      if (cached) paintPeriodDetail(hostId, cached, periodDetailPoints, {});
+      return;
     }
-    let hist = { points: [] };
-    let periodStats = null;
+    const token = ++periodDetailToken;
+    periodDetailKey = key;
+    periodDetailPoints = null;
+    paintPeriodDetail(hostId, cached, null, { loadingCharts: true });
     let histMinutes = detailMinutes;
     if (periodMode === "custom" && periodFromTs && periodToTs) {
       histMinutes = Math.max(1, Math.ceil((periodToTs - periodFromTs) / 60));
     }
-    const histLimit = Math.min(
-      2000,
-      Math.max(240, Math.ceil(histMinutes / 2))
-    );
+    const histLimit = Math.min(2000, Math.max(240, Math.ceil(histMinutes / 2)));
     try {
       const base = "/api/v1/hosts/" + encodeURIComponent(hostId);
-      const [hr, sr] = await Promise.all([
-        fetch(base + "/history?" + periodQuery("limit=" + histLimit)),
-        fetch(base + "/period-stats?" + periodQuery()),
-      ]);
+      const jobs = [fetch(base + "/history?" + periodQuery("limit=" + histLimit))];
+      if (!cached) jobs.push(fetch(base + "/period-stats?" + periodQuery()));
+      const results = await Promise.all(jobs);
+      if (token !== periodDetailToken || selectedId !== hostId) return;
+      const hr = results[0];
+      let hist = { points: [] };
       if (hr.ok) hist = await hr.json();
-      if (sr.ok) periodStats = await sr.json();
+      let stats = cached;
+      if (!stats && results[1] && results[1].ok) stats = await results[1].json();
+      if (token !== periodDetailToken || selectedId !== hostId) return;
+      periodDetailPoints = hist.points || [];
+      paintPeriodDetail(hostId, stats, periodDetailPoints, {});
     } catch (e) {
+      if (token !== periodDetailToken || selectedId !== hostId) return;
       el.periodDetailBody.innerHTML =
-        '<p class="muted">时段统计加载失败：' + escapeHtml(e.message) + "</p>";
-      return;
-    }
-    const pts = hist.points || [];
-    let html = '<div class="section-title">时段指标</div>';
-    const liveSummary =
-      (periodStats && periodStats.accel_summary) ||
-      (host && host.accel_summary) ||
-      "";
-    if (liveSummary) {
-      html +=
-        '<p class="accel-inv">' +
-        escapeHtml(liveSummary) +
-        ((periodStats && periodStats.accel_count)
-          ? " · 共 " + periodStats.accel_count + " 张"
-          : "") +
+        '<p class="empty">这一台的时段详情没有读出来：' +
+        escapeHtml(e.message) +
         "</p>";
     }
-    html += renderPeriodStatsTable(periodStats);
-    html += renderPeriodCharts(pts);
-    el.periodDetailBody.innerHTML = html;
   }
 
   function hostDiskCell(h) {
@@ -2569,7 +2726,7 @@ function renderHosts(hosts) {
       renderHosts(hosts);
       if (currentTab === "period") {
         await loadPeriodUtil();
-        if (selectedId) await loadPeriodHostDetail(selectedId);
+        if (selectedId) await loadPeriodHostDetail(selectedId, { quiet: true });
       } else if (currentTab === "reports") {
         // 诊断预览来自已入库报告，定时刷新不重算、不打断阅读
       } else if (selectedId) {
@@ -2627,22 +2784,29 @@ function renderHosts(hosts) {
 
   function renderReportDocument(report) {
     if (!el.reportPreview) return;
-    activeReport = report || null;
-    const sections = (report && report.payload && report.payload.sections) || [];
-    const failed = report && report.status === "failed";
-    let html = "<h3>" + escapeHtml(report.title || "使用诊断") + "</h3>";
+    report = report || {};
+    activeReport = report;
+    const view = UX.reportPresentation(report);
+    const failed = view.mode === "failed";
+    const sections =
+      view.mode === "full" ? (report.payload && report.payload.sections) || [] : [];
+    let html = "<h3>" + escapeHtml(view.title || "使用诊断") + "</h3>";
     html +=
       '<p class="muted">' +
       escapeHtml(reportSourceLabel(report.source)) +
       " · " +
-      (failed ? "失败" : "成功") +
+      (failed ? "失败" : view.mode === "empty" ? "无数据" : "成功") +
       " · 实际生成 " +
       escapeHtml(fmtReportTime(report.generated_at || report.created_at)) +
       "</p>";
-    if (failed && report.error) {
-      html += '<p class="empty">失败原因：' + escapeHtml(report.error) + "</p>";
-    }
-    if (!sections.length && report.markdown) {
+    if (view.mode !== "full") {
+      html +=
+        '<div class="report-empty"><strong>' +
+        (failed ? "这份报告没有生成成功" : "没有可汇总的上报") +
+        "</strong><p>" +
+        escapeHtml(view.message) +
+        "</p></div>";
+    } else if (!sections.length && report.markdown) {
       html += "<pre>" + escapeHtml(report.markdown) + "</pre>";
     }
     sections.forEach((sec) => {
@@ -2713,23 +2877,26 @@ function renderHosts(hosts) {
 
   function renderReportList(reports) {
     if (!el.reportList) return;
-    if (!reports.length) {
+    const visible = (reports || []).filter((item) => UX.reportListItemVisible(item));
+    if (!visible.length) {
       el.reportList.innerHTML =
-        '<p class="muted">还没有报告。选择周期后点「生成并保存」。</p>';
+        '<p class="empty">还没有报告。选择日报、周报或月报后点「生成并保存」。没有上报时也会留下一份，并标明无数据。</p>';
       return;
     }
-    el.reportList.innerHTML = reports
+    el.reportList.innerHTML = visible
       .map((r) => {
         const active = Number(r.id) === Number(activeReportId) ? " active" : "";
         const clamp = r.clamped ? " · 已按保留期裁剪" : "";
         const failed = r.status === "failed";
+        const empty = !failed && (r.empty === true || r.empty === 1);
+        const state = failed ? "失败" : empty ? "无数据" : "成功";
         const badge =
           '<span class="report-badge' +
           (failed ? " bad" : "") +
           '">' +
           escapeHtml(reportSourceLabel(r.source)) +
           " · " +
-          (failed ? "失败" : "成功") +
+          state +
           "</span>";
         const reason = failed && r.error ? " · " + r.error : "";
         return (
@@ -2806,6 +2973,7 @@ function renderHosts(hosts) {
       let text = (data.label || "") + " " + (data.range_text || "");
       if (data.clamped) text += "（将被保留期裁剪）";
       if (data.window_error) text += "（" + data.window_error + "）";
+      if (data.empty) text += " · 这一窗口没有上报，生成后仍会留下报告";
       el.reportWindowHint.textContent = text;
     } catch (e) {
       el.reportWindowHint.textContent = e.message || "";
@@ -2861,6 +3029,30 @@ function renderHosts(hosts) {
     }
   }
 
+  if (el.periodUtilBody) {
+    el.periodUtilBody.addEventListener("click", (ev) => {
+      const th = ev.target.closest && ev.target.closest("thead th[data-sort]");
+      if (th && el.periodUtilBody.contains(th)) {
+        const next = applyHeaderSort(
+          periodSortKey,
+          periodSortDir,
+          th.getAttribute("data-sort")
+        );
+        periodSortKey = next.key;
+        periodSortDir = next.dir;
+        if (periodUtilData) renderPeriodUtil(periodUtilData);
+        return;
+      }
+      const tr = ev.target.closest && ev.target.closest("tr[data-id]");
+      if (!tr || !el.periodUtilBody.contains(tr)) return;
+      const id = decodeURIComponent(tr.getAttribute("data-id") || "");
+      if (!id) return;
+      const key = id + "?" + periodQuery();
+      selectedId = id;
+      markPeriodRows(id);
+      if (periodDetailKey !== key) loadPeriodHostDetail(id);
+    });
+  }
   el.btnRefresh.addEventListener("click", refresh);
   el.filterQ.addEventListener("input", () => renderHosts(allHosts));
   el.filterType.addEventListener("change", () => renderHosts(allHosts));

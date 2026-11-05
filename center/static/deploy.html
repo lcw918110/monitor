@@ -28,114 +28,19 @@
   </header>
 
   <main class="deploy-layout">
-    <section class="panel">
-      <div class="panel-head"><h2>部署设置</h2></div>
-      <div class="form-grid" id="settingsForm">
-        <label>中心对外访问地址 <span class="req">*</span>
-          <input id="publicUrl" placeholder="http://192.168.x.x:8080（自动填本机局域网，勿用 127.0.0.1）" />
-        </label>
-        <label>默认 SSH 用户
-          <input id="sshUser" placeholder="如 root / ubuntu" value="root" />
-        </label>
-        <label>默认 SSH 密码（可选）
-          <input id="sshPassword" type="password" placeholder="留空=不改已保存密码；有密码则优先用密码登录" autocomplete="new-password" />
-        </label>
-        <label>默认 SSH 端口
-          <input id="sshPort" type="number" value="22" min="1" max="65535" placeholder="22" />
-        </label>
-        <label>远端安装目录（Agent 默认 /opt/monitor-agent，避免覆盖同机 Center 的 /opt/monitor；非 root 写 /opt 会 sudo）
-          <input id="remoteDir" placeholder="/opt/monitor-agent" />
-        </label>
-        <label>全局 SSH 私钥路径（可选）
-          <input id="sshKey" placeholder="~/.ssh/id_rsa —— 所有未单独指定密钥的客户端共用" />
-        </label>
-        <label>上报间隔（秒）
-          <input id="interval" type="number" value="15" />
-        </label>
-      </div>
-      <div class="form-actions">
-        <button type="button" id="btnSaveSettings" class="btn primary">保存设置</button>
-        <span class="muted" id="settingsHint">「对外地址」= 远端 Agent 上报用的中心地址，默认本机局域网 IP，一般不要填 127.0.0.1。密码部署请在<strong>中心机</strong>安装 sshpass，或改用密钥。不要从笔记本 scp/sshpass 旁路安装。</span>
+    <section class="panel wide ops-intro">
+      <div class="panel-head"><h2>给机器装上采集</h2></div>
+      <div class="pad">
+        <ol>
+          <li>确认「中心地址」是别的机器能访问的地址，不要填 127.0.0.1。</li>
+          <li>把机器加进下面的清单，或用表格一次导入。导入只改清单，不会马上安装。</li>
+          <li>勾选后点「部署勾选」。部署会在对方机器安装或覆盖采集端，点之前会再确认。</li>
+        </ol>
+        <p class="muted">采集端默认装在 <code>/opt/monitor-agent</code>，中心仍在 <code>/opt/monitor</code>。密码登录需要这台中心机已安装 sshpass，也可以改用密钥。清单里的「删除」只去掉这一行，不会卸载已经装好的采集端。</p>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-head"><h2>添加客户端</h2></div>
-      <div class="form-grid">
-        <label>IP / 主机名 <span class="req">*</span>
-          <input id="tIp" placeholder="10.0.0.21" />
-        </label>
-        <label>host_id
-          <input id="tHostId" placeholder="默认等于 IP" />
-        </label>
-        <label>显示名
-          <input id="tHostname" placeholder="可选" />
-        </label>
-        <label>类型
-          <select id="tType">
-            <option value="auto">auto（自动：有加速卡→gpu，否则→cpu）</option>
-            <option value="cpu">cpu（仅系统指标，不采加速卡）</option>
-            <option value="gpu">gpu（系统 + 各厂商加速卡）</option>
-          </select>
-        </label>
-        <label>SSH 用户
-          <input id="tUser" placeholder="空则用上方默认用户" />
-        </label>
-        <label>SSH 密码（可选，仅此客户端）
-          <div class="password-field">
-            <input id="tPassword" type="password" placeholder="有则用密码登录；空则用默认密码/密钥" autocomplete="new-password" />
-            <button type="button" class="pwd-toggle" data-target="tPassword" aria-label="显示或隐藏密码" title="显示/隐藏密码">
-              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5 0-9.3 3.1-11 7 1.7 3.9 6 7 11 7s9.3-3.1 11-7c-1.7-3.9-6-7-11-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M2.1 3.5 3.5 2.1 21.9 20.5 20.5 21.9l-3.1-3.1A12.5 12.5 0 0 1 12 19c-5 0-9.3-3.1-11-7a13.7 13.7 0 0 1 4.3-5.1L2.1 3.5zM12 7a5 5 0 0 1 4.9 6.1l-1.6-1.6A2.5 2.5 0 0 0 12.5 8.7L12 7zm-7.4 4.1A11.4 11.4 0 0 0 12 17c1.4 0 2.7-.3 3.9-.8l-1.7-1.7A5 5 0 0 1 8.5 9.8L4.6 11.1zM12 5c1.2 0 2.3.2 3.4.6l-1.6 1.6A5 5 0 0 0 8.2 12L6.5 10.3C7.9 6.9 9.8 5 12 5z"/></svg>
-            </button>
-          </div>
-        </label>
-        <label>SSH 端口（默认 22）
-          <input id="tPort" type="number" value="22" min="1" max="65535" placeholder="22" />
-        </label>
-        <label>此客户端私钥路径（可选）
-          <input id="tKey" placeholder="空则用全局私钥/本机默认钥" />
-        </label>
-        <label>此客户端安装目录（可选）
-          <input id="tRemoteDir" placeholder="空则用上方默认；新产品默认 /opt/monitor-agent" />
-        </label>
-        <label style="grid-column: 1 / -1;">指定机器（配置后自动探查连通性）
-          <input id="tPeers" placeholder="网关=10.0.0.1;存储=10.0.0.50 或 10.0.0.1,10.0.0.2" />
-        </label>
-      </div>
-      <p class="muted">编辑已有目标时可以修改 IP 和 host_id。另一个目标已经使用该 IP 时会拒绝保存。密码留空不会改掉已保存的密码。清单里的「停用 / 恢复」只改 retired，不改 IP、host_id 和密码。同机改址请在监测台主机详情里用「更换 IP」，旧目标会标为已停用且不再参与部署。</p>
-      <p class="muted">目标机没有 Python ≥ 3.6（Ubuntu 16.04 的 3.5 不够）时，中心会上传 <code>deploy.python_bundles</code> 目录里的便携解释器。相关失败短码：<code>python_bundle_missing</code>、<code>python_bundle_checksum</code>、<code>python_bundle_arch</code>、<code>python_bundle_extract</code>、<code>python_bundle_exec</code>。apt/yum 安装失败不会挡住这次回退。</p>
-      <div class="form-actions">
-        <button type="button" id="btnAdd" class="btn primary">添加到清单</button>
-        <button type="button" id="btnTestSsh" class="btn">测试连通/部署条件</button>
-        <button type="button" id="btnCancelEdit" class="btn" hidden>取消编辑</button>
-        <span class="muted" id="testHint"></span>
-      </div>
-      <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
-        <h2>下载资源</h2>
-      </div>
-      <div class="pad">
-        <div class="form-actions" style="padding-left:0;">
-          <a class="link" href="/api/v1/deploy/template.xlsx">Excel 导入模板</a>
-          <a class="link" href="/api/v1/deploy/install-script">目标机补跑脚本（deploy_agent.sh 包装）</a>
-          <span class="muted">Excel 模板用于清单导入。补跑脚本不是第二条安装路径，仅在产品部署已同步代码后使用。</span>
-        </div>
-      </div>
-      <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
-        <h2>批量导入</h2>
-      </div>
-      <div class="pad">
-        <div class="form-actions" style="padding-left:0;">
-          <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;">
-            选择 Excel/CSV 导入
-            <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
-          </label>
-          <span class="muted" id="excelHint">表头：ip、ssh_port、ssh_user、ssh_password、ssh_key_path、host_type、peer_hosts 等；端口默认 22</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel wide">
+    <section class="panel wide" id="opsTargets">
       <div class="panel-head">
         <h2>部署清单</h2>
         <div class="filters">
@@ -147,30 +52,135 @@
         <table>
           <thead>
             <tr>
-              <th><input type="checkbox" id="chkAll" /></th>
+              <th><input type="checkbox" id="chkAll" aria-label="勾选全部未停用的机器" /></th>
               <th>IP</th>
               <th>端口</th>
               <th>host_id</th>
               <th>类型</th>
-              <th>SSH认证</th>
-              <th>指定机器</th>
+              <th>登录方式</th>
+              <th>要一起看的机器</th>
               <th>网络</th>
               <th>部署状态</th>
-              <th>最近消息</th>
+              <th>最近结果</th>
               <th>操作</th>
             </tr>
           </thead>
-          <tbody id="targetBody"></tbody>
+          <tbody id="targetBody">
+            <tr><td colspan="11" class="ops-state">正在加载部署清单…</td></tr>
+          </tbody>
         </table>
       </div>
     </section>
 
-    <section class="panel wide">
+    <section class="panel wide" id="opsLog">
       <div class="panel-head">
-        <h2>部署日志</h2>
-        <span class="muted" id="jobMeta">暂无任务</span>
+        <h2>部署过程</h2>
+        <span class="muted" id="jobMeta">还没有开始</span>
       </div>
-      <pre class="log" id="jobLog">等待部署任务...</pre>
+      <pre class="log" id="jobLog">还没有部署任务。勾选机器后点「部署勾选」，过程会写在这里。</pre>
+    </section>
+
+    <section class="panel" id="opsAdd">
+      <div class="panel-head"><h2>加入一台机器</h2></div>
+      <div class="form-grid">
+        <label>IP / 主机名 <span class="req">*</span>
+          <input id="tIp" placeholder="例如 10.0.0.21" />
+        </label>
+        <label>监控里的名字 host_id
+          <input id="tHostId" placeholder="不填就用 IP" />
+        </label>
+        <label>显示名
+          <input id="tHostname" placeholder="可选，方便认人" />
+        </label>
+        <label>采什么
+          <select id="tType">
+            <option value="auto">自动：有加速卡就采卡，否则只采系统</option>
+            <option value="cpu">只采 CPU / 内存 / 磁盘 / 网络</option>
+            <option value="gpu">系统 + 加速卡</option>
+          </select>
+        </label>
+        <label>SSH 用户
+          <input id="tUser" placeholder="不填就用右侧的默认用户" />
+        </label>
+        <label>这台机器的 SSH 密码
+          <div class="password-field">
+            <input id="tPassword" type="password" placeholder="不填就用默认密码或密钥" autocomplete="new-password" />
+            <button type="button" class="pwd-toggle" data-target="tPassword" aria-label="显示或隐藏密码" title="显示/隐藏密码">
+              <svg class="icon-eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5c-5 0-9.3 3.1-11 7 1.7 3.9 6 7 11 7s9.3-3.1 11-7c-1.7-3.9-6-7-11-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/></svg>
+              <svg class="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden><path fill="currentColor" d="M2.1 3.5 3.5 2.1 21.9 20.5 20.5 21.9l-3.1-3.1A12.5 12.5 0 0 1 12 19c-5 0-9.3-3.1-11-7a13.7 13.7 0 0 1 4.3-5.1L2.1 3.5zM12 7a5 5 0 0 1 4.9 6.1l-1.6-1.6A2.5 2.5 0 0 0 12.5 8.7L12 7zm-7.4 4.1A11.4 11.4 0 0 0 12 17c1.4 0 2.7-.3 3.9-.8l-1.7-1.7A5 5 0 0 1 8.5 9.8L4.6 11.1zM12 5c1.2 0 2.3.2 3.4.6l-1.6 1.6A5 5 0 0 0 8.2 12L6.5 10.3C7.9 6.9 9.8 5 12 5z"/></svg>
+            </button>
+          </div>
+        </label>
+        <label>SSH 端口
+          <input id="tPort" type="number" value="22" min="1" max="65535" placeholder="22" />
+        </label>
+        <label>这台机器单独用的私钥
+          <input id="tKey" placeholder="不填就用右侧的默认私钥" />
+        </label>
+        <label>安装目录
+          <input id="tRemoteDir" placeholder="不填就用默认 /opt/monitor-agent" />
+        </label>
+        <label style="grid-column: 1 / -1;">要一起探测的机器
+          <input id="tPeers" placeholder="例如 网关=10.0.0.1;存储=10.0.0.50" />
+        </label>
+      </div>
+      <p class="muted">改一台已有机器时，可以改 IP 和 host_id。另一台已经占用这个 IP 时会拒绝保存。密码留空不会清掉已经保存的密码。停用只是不再参与部署，密码还在。同一台机器换 IP，请到监测台主机详情里用「更换 IP」。</p>
+      <p class="muted">对方没有 Python 3.6 或更新版本时，中心会带上便携解释器。失败时看清单里的短码，下面有人话说明。</p>
+      <div class="form-actions">
+        <button type="button" id="btnAdd" class="btn primary">加入清单</button>
+        <button type="button" id="btnTestSsh" class="btn">先测能不能连上</button>
+        <button type="button" id="btnCancelEdit" class="btn" hidden>取消编辑</button>
+        <span class="muted" id="testHint"></span>
+      </div>
+      <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
+        <h2>用表格一次加入</h2>
+      </div>
+      <div class="pad">
+        <div class="form-actions" style="padding-left:0;">
+          <a class="link" href="/api/v1/deploy/template.xlsx">下载表格模板</a>
+          <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;">
+            选择 Excel/CSV
+            <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
+          </label>
+          <span class="muted" id="excelHint">表头含 ip、ssh_port、ssh_user、ssh_password、ssh_key_path。端口不填就是 22。导入前会再确认，确认后只写入清单。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="opsSettings">
+      <div class="panel-head"><h2>不常改的连接</h2></div>
+      <div class="settings-copy">
+        <p>中心地址和默认登录方式设好后很少再动。单台机器可以在左边覆盖。</p>
+      </div>
+      <div class="form-grid" id="settingsForm">
+        <label>中心地址 <span class="req">*</span>
+          <input id="publicUrl" placeholder="http://&lt;中心IP&gt;:8080，自动填本机局域网，不要用 127.0.0.1" />
+        </label>
+        <label>默认 SSH 用户
+          <input id="sshUser" placeholder="如 root / ubuntu" value="root" />
+        </label>
+        <label>默认 SSH 密码
+          <input id="sshPassword" type="password" placeholder="留空表示不改已保存的密码" autocomplete="new-password" />
+        </label>
+        <label>默认 SSH 端口
+          <input id="sshPort" type="number" value="22" min="1" max="65535" placeholder="22" />
+        </label>
+        <label>默认安装目录
+          <input id="remoteDir" placeholder="/opt/monitor-agent" />
+        </label>
+        <label>默认私钥
+          <input id="sshKey" placeholder="没单独指定私钥的机器共用这一把" />
+        </label>
+        <label>上报间隔（秒）
+          <input id="interval" type="number" value="15" min="5" />
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="btnSaveSettings" class="btn primary">保存连接设置</button>
+        <a class="link" href="/api/v1/deploy/install-script">补跑脚本</a>
+        <span class="muted" id="settingsHint">中心地址是采集端回传数据用的。密码方式要在这台中心机安装 sshpass，或改用密钥。不要从自己的笔记本另拷一份安装包。</span>
+      </div>
+      <p class="muted">补跑脚本只在清单部署已经把代码同步过去之后，到那台机器上再跑一次。它不是另一条安装办法。</p>
     </section>
   </main>
 

@@ -1207,6 +1207,67 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   padding-top: 0;
 }
 
+.offline-overview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  background: var(--bg-soft);
+}
+
+.offline-overview .empty {
+  text-align: left;
+  margin: 8px 0;
+}
+
+.offline-ranges {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.offline-ranges li {
+  margin: 4px 0;
+}
+
+.report-empty {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 20px 16px;
+  margin: 12px 0;
+  text-align: center;
+}
+
+.report-empty strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.report-empty p {
+  margin: 0;
+}
+
+.ops-intro ol {
+  margin: 8px 0 0 18px;
+  padding: 0;
+}
+
+.ops-intro li {
+  margin: 4px 0;
+}
+
+.settings-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ops-state {
+  color: var(--muted);
+  padding: 16px;
+  text-align: left;
+}
+
 .param-list {
   display: grid;
   gap: 12px;

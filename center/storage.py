@@ -161,6 +161,96 @@ def aggregate_series(
     return out
 
 
+def offline_intervals(
+    timestamps: Optional[List[int]],
+    window_from: int,
+    window_to: int,
+    offline_seconds: int,
+    prior_ts: Optional[int] = None,
+    first_ts: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """窗口内没有被上报覆盖到的时段。
+
+    一条上报在 T 时刻让主机保持在线，直到 T+offline_seconds（含）。
+    与实时在线判定相同：距上次上报不超过 offline_seconds 仍算在线。
+    不新增传感器。主机第一次上报之前的时间不算离线。
+    返回的 to_ts：中途恢复时是下一次上报时刻；一直到窗口结束则为窗口结束时刻。
+    """
+    start = int(window_from)
+    window_end = int(window_to)
+    if window_end < start:
+        return []
+    end = window_end + 1
+    try:
+        threshold = int(offline_seconds)
+    except (TypeError, ValueError):
+        threshold = 90
+    if threshold < 1:
+        threshold = 1
+    if first_ts is not None and int(first_ts) > window_end:
+        return []
+    domain_from = start
+    if first_ts is not None and int(first_ts) > domain_from:
+        domain_from = int(first_ts)
+    if domain_from >= end:
+        return []
+
+    points: List[int] = []
+    if prior_ts is not None:
+        points.append(int(prior_ts))
+    for raw in timestamps or []:
+        if raw is None:
+            continue
+        try:
+            points.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    points = sorted(set(points))
+
+    covers: List[List[int]] = []
+    for ts in points:
+        left = domain_from if ts < domain_from else ts
+        right = ts + threshold + 1
+        if right > end:
+            right = end
+        if left < right:
+            covers.append([left, right])
+    covers.sort()
+    merged: List[List[int]] = []
+    for left, right in covers:
+        if not merged or left > merged[-1][1]:
+            merged.append([left, right])
+        elif right > merged[-1][1]:
+            merged[-1][1] = right
+
+    def _span(left: int, right: int) -> Dict[str, Any]:
+        until_end = right >= end
+        if until_end:
+            return {
+                "from_ts": left,
+                "to_ts": window_end,
+                "seconds": window_end - left + 1,
+                "until_window_end": True,
+            }
+        return {
+            "from_ts": left,
+            "to_ts": right,
+            "seconds": right - left,
+            "until_window_end": False,
+        }
+
+    spans: List[Dict[str, Any]] = []
+    cursor = domain_from
+    for left, right in merged:
+        if cursor < left:
+            spans.append(_span(cursor, left))
+        if right > cursor:
+            cursor = right
+    if cursor < end:
+        spans.append(_span(cursor, end))
+    return [item for item in spans if int(item.get("seconds") or 0) >= 1]
+
+
 class Storage:
     def __init__(
         self,
@@ -233,7 +323,8 @@ class Storage:
                         source TEXT NOT NULL DEFAULT 'manual',
                         status TEXT NOT NULL DEFAULT 'ok',
                         error TEXT,
-                        generated_at INTEGER
+                        generated_at INTEGER,
+                        empty INTEGER
                     );
                     CREATE INDEX IF NOT EXISTS idx_diag_reports_created
                         ON diagnostic_reports(created_at DESC, id DESC);
@@ -275,6 +366,7 @@ class Storage:
                         "generated_at",
                         "ALTER TABLE diagnostic_reports ADD COLUMN generated_at INTEGER",
                     ),
+                    ("empty", "ALTER TABLE diagnostic_reports ADD COLUMN empty INTEGER"),
                 )
                 for name, sql in diag_alters:
                     if name not in diag_cols:
@@ -1328,6 +1420,54 @@ class Storage:
                 points.append(self._apply_rated_fallback(pt, rated_fallback))
         return points
 
+    def _history_edges(
+        self, host_id: str, before_ts: int
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """返回 (该机最早一条上报, 窗口起点之前最近一条)。没有则为 None。"""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT MIN(ts) AS first_ts,
+                           MAX(CASE WHEN ts < ? THEN ts END) AS prior_ts
+                    FROM metrics_history
+                    WHERE host_id=?
+                    """,
+                    (int(before_ts), host_id),
+                ).fetchone()
+            finally:
+                conn.close()
+        if not row:
+            return None, None
+        first = row["first_ts"]
+        prior = row["prior_ts"]
+        return (
+            int(first) if first is not None else None,
+            int(prior) if prior is not None else None,
+        )
+
+    def count_visible_samples(self, from_ts: int, to_ts: int) -> int:
+        """未隐藏主机在闭区间内的历史上报条数。隐藏主机不计入诊断预览。"""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM metrics_history
+                    WHERE ts>=? AND ts<=?
+                      AND host_id NOT IN (
+                        SELECT host_id FROM hosts WHERE hidden=1
+                      )
+                    """,
+                    (int(from_ts), int(to_ts)),
+                ).fetchone()
+            finally:
+                conn.close()
+        if not row:
+            return 0
+        return int(row["n"] or 0)
+
     def _fetch_history_rows(
         self,
         host_id: str,
@@ -1354,11 +1494,12 @@ class Storage:
         self,
         rows: List[Any],
         rated_fallback: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Dict[str, List[float]], Optional[int], Optional[int], int, Dict[str, Any]]:
+    ) -> Tuple[Dict[str, List[float]], Optional[int], Optional[int], int, Dict[str, Any], List[int]]:
         series: Dict[str, List[float]] = {key: [] for key in PERIOD_METRIC_KEYS}
         first_ts = None
         last_ts = None
         parsed = 0
+        timestamps: List[int] = []
         excluded_count = 0
         excluded_by_metric: Dict[str, int] = {}
         for row in rows:
@@ -1373,6 +1514,7 @@ class Storage:
                 excluded_by_metric[metric] = excluded_by_metric.get(metric, 0) + 1
                 excluded_count += 1
             parsed += 1
+            timestamps.append(int(pt["ts"]))
             if first_ts is None:
                 first_ts = pt["ts"]
             last_ts = pt["ts"]
@@ -1398,7 +1540,7 @@ class Storage:
         return series, first_ts, last_ts, parsed, {
             "count": excluded_count,
             "by_metric": excluded_by_metric,
-        }
+        }, timestamps
 
     @staticmethod
     def _metrics_from_series(
@@ -1451,9 +1593,29 @@ class Storage:
         rows = self._fetch_history_rows(
             host_id, int(window["from_ts"]), int(window["to_ts"]), max_rows=row_cap
         )
-        series, first_ts, last_ts, parsed, excluded = self._series_from_rows(
+        series, first_ts, last_ts, parsed, excluded, timestamps = self._series_from_rows(
             rows, rated_fallback=rated_fallback
         )
+        first_ever, prior_ts = self._history_edges(host_id, int(window["from_ts"]))
+        truncated = len(rows) >= row_cap
+        intervals = offline_intervals(
+            timestamps,
+            int(window["from_ts"]),
+            int(window["to_ts"]),
+            int(self.offline_seconds),
+            prior_ts=prior_ts,
+            first_ts=first_ever,
+        )
+        offline_complete = not truncated
+        if truncated:
+            intervals = [item for item in intervals if not item.get("until_window_end")]
+        offline = {
+            "offline_seconds": int(self.offline_seconds),
+            "complete": offline_complete,
+            "intervals": intervals,
+            "interval_count": len(intervals),
+            "total_seconds": sum(int(item.get("seconds") or 0) for item in intervals),
+        }
         if busy_thresholds is None:
             thresholds = dict(DEFAULT_BUSY_THRESHOLDS)
         else:
@@ -1491,8 +1653,9 @@ class Storage:
             "window": window,
             "busy_thresholds": thresholds,
             "metrics": self._metrics_from_series(series, thresholds),
-            "history_truncated": len(rows) >= row_cap,
+            "history_truncated": truncated,
             "excluded_samples": excluded,
+            "offline": offline,
         }
         if include_series:
             result["_series"] = series
@@ -1595,6 +1758,7 @@ class Storage:
                     "metrics": stats.get("metrics") or {},
                     "history_truncated": bool(stats.get("history_truncated")),
                     "excluded_samples": host_excluded,
+                    "offline": stats.get("offline") or {},
                 }
             )
 
@@ -1602,6 +1766,37 @@ class Storage:
             h.get("accel_inventory") for h in host_rows
         )
         excluded_hosts.sort(key=lambda item: (-int(item.get("count") or 0), str(item.get("host_id") or "")))
+        offline_hosts: List[Dict[str, Any]] = []
+        offline_incomplete = False
+        offline_intervals_n = 0
+        offline_seconds_total = 0
+        for host in host_rows:
+            host_offline = host.get("offline") or {}
+            if not host_offline.get("complete", True):
+                offline_incomplete = True
+            count = int(host_offline.get("interval_count") or 0)
+            if count <= 0:
+                continue
+            seconds = int(host_offline.get("total_seconds") or 0)
+            offline_intervals_n += count
+            offline_seconds_total += seconds
+            offline_hosts.append(
+                {
+                    "host_id": host.get("host_id"),
+                    "hostname": host.get("hostname") or host.get("host_id"),
+                    "address": host.get("address") or "",
+                    "interval_count": count,
+                    "total_seconds": seconds,
+                    "complete": bool(host_offline.get("complete", True)),
+                    "intervals": host_offline.get("intervals") or [],
+                }
+            )
+        offline_hosts.sort(
+            key=lambda item: (
+                -int(item.get("total_seconds") or 0),
+                str(item.get("host_id") or ""),
+            )
+        )
 
         return {
             "minutes": window["minutes"],
@@ -1631,6 +1826,19 @@ class Storage:
                 "accel_inventory": cluster_identity.get("inventory") or [],
             },
             "hosts": host_rows,
+            "offline": {
+                "offline_seconds": int(self.offline_seconds),
+                "host_total": len(host_rows),
+                "host_count": len(offline_hosts),
+                "interval_count": offline_intervals_n,
+                "total_seconds": offline_seconds_total,
+                "incomplete": offline_incomplete,
+                "rule": (
+                    "超过 offline_seconds 秒没有上报记为离线，与监测台在线判定相同。"
+                    "主机第一次上报之前不算离线。历史上报被保留期删掉的部分无法回看。"
+                ),
+                "hosts": offline_hosts,
+            },
         }
 
     def fullest_disk_mount(
@@ -1694,6 +1902,7 @@ class Storage:
         error: Optional[str] = None,
         generated_at: Optional[int] = None,
         replace: bool = True,
+        empty: bool = False,
     ) -> Dict[str, Any]:
         """同一 (period, 半开窗口) 只保留一行。
 
@@ -1729,7 +1938,7 @@ class Storage:
                         """
                         UPDATE diagnostic_reports SET
                             title=?, clamped=?, markdown=?, payload=?,
-                            source=?, status=?, error=?, generated_at=?
+                            source=?, status=?, error=?, generated_at=?, empty=?
                         WHERE id=?
                         """,
                         (
@@ -1741,6 +1950,7 @@ class Storage:
                             status,
                             error,
                             gen_col,
+                            1 if empty else 0,
                             report_id,
                         ),
                     )
@@ -1760,8 +1970,8 @@ class Storage:
                         INSERT INTO diagnostic_reports (
                             period_type, title, requested_from_ts, requested_to_ts,
                             clamped, created_at, markdown, payload,
-                            source, status, error, generated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            source, status, error, generated_at, empty
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             window_key[0],
@@ -1776,6 +1986,7 @@ class Storage:
                             status,
                             error,
                             gen_col,
+                            1 if empty else 0,
                         ),
                     )
                     conn.commit()
@@ -1795,7 +2006,8 @@ class Storage:
                 rows = conn.execute(
                     """
                     SELECT id, period_type, title, requested_from_ts, requested_to_ts,
-                           clamped, created_at, generated_at, source, status, error
+                           clamped, created_at, generated_at, source, status, error,
+                           empty
                     FROM diagnostic_reports
                     WHERE id IN (
                         SELECT MAX(id) FROM diagnostic_reports
@@ -1825,6 +2037,7 @@ class Storage:
             "source": row["source"] or "manual",
             "status": row["status"] or "ok",
             "error": row["error"] or None,
+            "empty": bool(row["empty"]) if "empty" in row.keys() and row["empty"] else False,
         }
 
     def get_diagnostic_report(self, report_id: int) -> Optional[Dict[str, Any]]:
@@ -1835,7 +2048,7 @@ class Storage:
                     """
                     SELECT id, period_type, title, requested_from_ts, requested_to_ts,
                            clamped, created_at, generated_at, source, status, error,
-                           markdown, payload
+                           empty, markdown, payload
                     FROM diagnostic_reports WHERE id=?
                     """,
                     (int(report_id),),

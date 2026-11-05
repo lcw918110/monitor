@@ -36,10 +36,13 @@ GET /api/v1/period-stats?minutes=1440&host_ids=gpu-01,app-01
 
 `host_ids` 为可选逗号分隔过滤。响应包含：
 
-- `hosts[]`：每台主机的聚合（含最新快照的 `accel_summary` / `accel_count` / `accel_inventory`，型号+数量，不参与 idle/busy）
+- `hosts[]`：每台主机的聚合（含最新快照的 `accel_summary` / `accel_count` / `accel_inventory`，型号+数量，不参与 idle/busy）。每台另有 `offline`：`intervals[]`（`from_ts` / `to_ts` / `seconds` / `until_window_end`）、`interval_count`、`total_seconds`、`complete`
+- `offline`：这一窗口的离线概览。`host_count` 是至少有一段离线的主机数，`interval_count` / `total_seconds` 是合计。`hosts[]` 按累计时长从长到短。`incomplete` 为真表示有主机触达读取上限，末尾未判断
 - `cluster.metrics`：集群汇总
 - 顶层与 `cluster` 亦含集群盘点 `accel_summary` / `accel_inventory`
 - `rollup`: `"sample_weighted"`
+
+离线时段不进入 avg / P95 / 繁忙占比，也不改变闲忙两极。一条上报覆盖其后 `offline_seconds` 秒（含）。两次上报的间隔没有超过这条线，就不记离线。
 
 ### 导出 CSV
 
@@ -101,7 +104,8 @@ GET /api/v1/hosts/{id}/history?from_ts=...&to_ts=...&limit=240
 2. 可调 CPU / 加速卡繁忙阈值
 3. 集群汇总表 + 各主机表（平均 / P95 / 繁忙占比等）
 4. 「导出 CSV」下载当前窗口报表
-5. 点选主机查看该机时段指标表与趋势（与本页时间窗相同）
+5. 点选主机查看该机时段指标表与趋势（与本页时间窗相同）。点选只换右侧详情：左侧列表保持滚动位置和当前选中行，加载提示只出现在右侧；快速连点时，过期的请求不会把上一台的内容写回来。定时刷新在时间窗没变时不重拉趋势
+6. 左侧最上面是**离线概览**：离线台数、离线段数、累计时长，以及每台的离线时段。单机详情同样先写这段，再写利用率。超过 `offline_seconds`（默认 90 秒）没有上报记为离线，和监测台在线判定是同一条线，不另加传感器。主机第一次上报之前不算离线。窗口末尾若因单机读取上限被截断，不把截断之后猜成离线
 
 ## 在运行中的中心上核对
 

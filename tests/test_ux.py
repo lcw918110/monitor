@@ -79,7 +79,13 @@ class AgentVersionTests(unittest.TestCase):
         with open(os.path.join(ROOT, "center/static/deploy.html"), encoding="utf-8") as fh:
             deploy_html = fh.read()
         self.assertIn("applyHealthVersion", app_js)
+        self.assertIn("periodDetailToken", app_js)
+        self.assertIn("离线概览", app_js)
+        self.assertIn("reportPresentation", app_js)
+        self.assertNotIn("loadPeriodHostDetail(selectedId);\n        renderHosts(allHosts);", app_js)
         self.assertIn("applyHealthVersion", deploy_js)
+        self.assertIn("不会卸载", deploy_html)
+        self.assertIn("部署勾选", deploy_html)
         self.assertIn('src="/ux.js"', deploy_html)
         self.assertLess(deploy_html.find('src="/ux.js"'), deploy_html.find('src="/deploy.js"'))
 
@@ -157,6 +163,19 @@ const load = ux.attentionTags({
 }, { cpu_critical_percent: 95 });
 assert.deepStrictEqual(load, ["load"]);
 assert.strictEqual(ux.parseLocationHash("#reports").tab, "reports");
+const emptyDay = ux.reportPresentation({
+  id: 1, title: "使用诊断日报", status: "ok", empty: true, source: "manual",
+  payload: { empty: true, sample_count: 0, sections: [{ title: "1. 抬头" }] },
+});
+assert.strictEqual(emptyDay.mode, "empty");
+assert.ok(emptyDay.message.indexOf("没有") >= 0);
+assert.strictEqual(ux.reportListItemVisible({ id: 2, empty: true, period_type: "week" }), true);
+assert.strictEqual(ux.reportListItemVisible({ id: 3, status: "failed", period_type: "month" }), true);
+const failed = ux.reportPresentation({ id: 3, title: "周报", status: "failed", error: "超出保留期", payload: { sections: [] } });
+assert.strictEqual(failed.mode, "failed");
+const full = ux.reportPresentation({ id: 4, title: "月报", status: "ok", payload: { sample_count: 3, sections: [{ title: "1" }], markdown: "x" } });
+assert.strictEqual(full.mode, "full");
+assert.strictEqual(ux.reportListItemVisible({}), false);
 assert.strictEqual(ux.parseLocationHash("#hosts").focus, "hosts");
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").hostId, "gpu/1");
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").tab, "realtime");

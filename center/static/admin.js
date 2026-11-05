@@ -87,7 +87,7 @@
     if (readToken()) {
       state.textContent = "已填写。写操作会带上它，关闭标签页后需要再填。";
     } else {
-      state.textContent = "已在中心启用。请填写后才能部署、改主机、生成报告或保存设置。";
+      state.textContent = "已在中心启用。填写后点「本页使用」，部署、改主机、生成报告和保存设置都会带上它。关闭标签页后要再填。";
     }
   }
 
