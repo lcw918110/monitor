@@ -135,18 +135,19 @@ class CatalogTests(unittest.TestCase):
         ids = [group["id"] for group in GROUPS]
         self.assertEqual(
             ids,
-            ["retention", "anomaly", "report", "period", "schedule", "security", "service"],
+            ["schedule", "report", "period", "anomaly", "retention", "security", "service"],
         )
-        self.assertEqual(GROUPS[0]["fields"][0]["key"], "retention_days")
-        retention = [field["key"] for field in GROUPS[0]["fields"]]
+        by_id = {group["id"]: group for group in GROUPS}
+        self.assertEqual(by_id["schedule"]["fields"][0]["key"], "report_schedule.enabled")
+        retention = [field["key"] for field in by_id["retention"]["fields"]]
         self.assertLess(retention.index("retention_days"), retention.index("cleanup_interval_seconds"))
-        anomaly = [field["key"] for field in GROUPS[1]["fields"]]
+        anomaly = [field["key"] for field in by_id["anomaly"]["fields"]]
         self.assertEqual(anomaly[0], "anomaly.cpu_load_per_core_warn")
         self.assertLess(
             anomaly.index("anomaly.cpu_load_per_core_warn"),
             anomaly.index("anomaly.accel_mem_critical_percent"),
         )
-        report = [field["key"] for field in GROUPS[2]["fields"]]
+        report = [field["key"] for field in by_id["report"]["fields"]]
         self.assertEqual(report[0], "report.idle_avg_lt")
         self.assertLess(report.index("report.high_busy_gte"), report.index("report.min_samples"))
         self.assertEqual(GROUPS[-1]["id"], "service")
@@ -420,8 +421,8 @@ class SettingsApiTests(unittest.TestCase):
         code, page = _request("GET", self.base + "/api/v1/settings")
         self.assertEqual(code, 200, page)
         groups = page["center"]["groups"]
-        self.assertEqual(groups[0]["id"], "retention")
-        self.assertEqual(groups[0]["fields"][0]["key"], "retention_days")
+        self.assertEqual(groups[0]["id"], "schedule")
+        self.assertEqual(groups[0]["fields"][0]["key"], "report_schedule.enabled")
         self.assertTrue(groups[0]["fields"][0]["using_default"])
         self.assertIn("影响", groups[0]["fields"][0]["description"])
         self.assertNotIn("old-agent", json.dumps(page, ensure_ascii=False))

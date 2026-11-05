@@ -108,7 +108,7 @@ GROUPS: List[Dict[str, Any]] = [
             _num(
                 "offline_seconds",
                 "离线判定",
-                "用途：多久没有上报就把主机当成离线。单位：秒。影响：监测台上的在线/离线显示，以及诊断报告里离线主机不计入基本不用。建议大于采样间隔，且至少 15 秒。",
+                "用途：多久没有上报就把主机当成离线。单位：秒。影响：监测台在线/离线、诊断报告里离线主机不计入基本不用，以及时段统计的离线次数和离线时段（两次上报相隔超过这条线才记一段）。建议大于采样间隔，且至少 15 秒。",
                 90,
                 "秒",
                 15,
@@ -502,6 +502,20 @@ GROUPS: List[Dict[str, Any]] = [
         ],
     },
 ]
+
+# 操作人员更常改的放前面：报告何时生成、诊断阈值、时段繁忙线。
+# 着色和保留其次。上报 Token 与监听地址靠后。组内字段顺序不变。
+_OPERATOR_GROUP_ORDER = (
+    "schedule",
+    "report",
+    "period",
+    "anomaly",
+    "retention",
+    "security",
+    "service",
+)
+_group_rank = {name: index for index, name in enumerate(_OPERATOR_GROUP_ORDER)}
+GROUPS.sort(key=lambda group: _group_rank.get(group["id"], 100))
 
 
 def _index_fields() -> Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]]:

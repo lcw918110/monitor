@@ -187,23 +187,16 @@
       return;
     }
     say("centerPath", center.config_path ? "文件 " + center.config_path : "");
-    var securityNavDone = false;
+    addNav("报告时刻", "#group-schedule");
+    addNav("报告推送", "#sectionPush");
+    addNav("管理 Token", "#sectionToken");
     center.groups.forEach(function (group) {
       var host = lead;
       if (group.anchor === "security") host = security || lead;
       if (group.anchor === "tail") host = tail || lead;
-      if (group.anchor === "security" && !securityNavDone) {
-        addNav("诊断报告推送", "#sectionPush");
-        addNav("管理 Token", "#sectionToken");
-        securityNavDone = true;
-      }
       if (host) host.insertAdjacentHTML("beforeend", renderGroup(group));
       addNav(group.title, "#group-" + group.id);
     });
-    if (!securityNavDone) {
-      addNav("诊断报告推送", "#sectionPush");
-      addNav("管理 Token", "#sectionToken");
-    }
   }
 
   function controlsIn(root) {
@@ -287,6 +280,10 @@
     var saveGroup = button.getAttribute("data-save-group");
     var restoreGroup = button.getAttribute("data-restore-group");
     if (restore) {
+      var article = button.closest ? button.closest(".param-field") : null;
+      var labelNode = article ? article.querySelector(".param-label") : null;
+      var label = labelNode ? String(labelNode.textContent || "").trim() : restore;
+      if (!window.confirm("把「" + (label || "这一项") + "」恢复成内置默认？只改这一项。")) return;
       postCenter({ restore: [restore] });
       return;
     }
@@ -302,10 +299,21 @@
   }
 
   async function load() {
+    say("centerHint", "正在读取设置…");
     var res = await fetch("/api/v1/settings");
     var data = await readJson(res);
     if (!res.ok || !data.ok) {
-      say("tokenHint", (data && data.error) || "读取设置失败");
+      var message = (data && data.error) || "读取设置失败";
+      say("tokenHint", message);
+      say("pushHint", message);
+      say("centerHint", "");
+      var lead = $("centerLead");
+      if (lead) {
+        lead.innerHTML =
+          '<section class="panel"><p class="empty">设置没有读出来：' +
+          esc(message) +
+          "。点右上角「刷新」再试。</p></section>";
+      }
       return;
     }
     applyView(data.settings || {});
@@ -365,7 +373,12 @@
       push_enabled: !!($("pushEnabled") && $("pushEnabled").checked),
       push_channel: ($("pushChannel") && $("pushChannel").value) || "wecom",
     };
-    var webhook = ($("pushWebhook").value || "").trim();
+    var webhookInput = $("pushWebhook");
+    var webhook = (webhookInput && webhookInput.value || "").trim();
+    var placeholder = (webhookInput && webhookInput.placeholder) || "";
+    if (body.push_enabled && !webhook && placeholder.indexOf("已保存") < 0) {
+      if (!window.confirm("还没有填写机器人地址。开启后也不会把报告发出去。仍要保存吗？")) return;
+    }
     if (webhook) body.push_webhook_url = webhook;
     var res = await fetch("/api/v1/settings", {
       method: "POST",

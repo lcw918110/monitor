@@ -857,8 +857,51 @@ class ReportConfigAndRetentionTests(unittest.TestCase):
             deleted = storage.cleanup_old_metrics()
             self.assertGreaterEqual(deleted, 1)
             self.assertEqual(storage.get_diagnostic_report(1)["markdown"], "KEEP_ME")
+            self.assertFalse(storage.get_diagnostic_report(1)["empty"])
         finally:
             tmp.cleanup()
+
+
+class EmptyReportTests(unittest.TestCase):
+    def test_day_week_month_without_samples_stay_listed(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        storage = Storage(
+            os.path.join(tmp.name, "t.db"),
+            offline_seconds=90,
+            retention_days=400,
+        )
+        as_of = _ts(2026, 10, 12, 12, 0)
+        saved = []
+        for period in ("day", "week", "month"):
+            code, payload = reports_mod.handle_generate_report(
+                storage,
+                json.dumps({"period": period, "as_of": as_of}).encode("utf-8"),
+                generated_at=as_of,
+                clock=as_of,
+            )
+            self.assertEqual(code, 200, payload)
+            report = payload["report"]
+            self.assertEqual(report["status"], "ok")
+            self.assertTrue(report["empty"])
+            self.assertTrue(report["payload"]["empty"])
+            self.assertEqual(report["payload"]["sample_count"], 0)
+            self.assertIn("没有可汇总的上报", report["markdown"])
+            self.assertIn("不编造利用率", report["markdown"])
+            saved.append(report["id"])
+            code, preview = reports_mod.handle_report_preview(
+                storage, "period=%s&as_of=%s" % (period, as_of)
+            )
+            self.assertEqual(code, 200, preview)
+            self.assertTrue(preview["empty"])
+            self.assertEqual(preview["sample_count"], 0)
+        listed = storage.list_diagnostic_reports()
+        self.assertEqual(sorted(item["id"] for item in listed), sorted(saved))
+        self.assertTrue(all(item["empty"] for item in listed))
+        self.assertEqual({item["period_type"] for item in listed}, {"day", "week", "month"})
+        again = storage.get_diagnostic_report(saved[0])
+        self.assertTrue(again["empty"])
+        self.assertIn("没有可汇总的上报", again["markdown"])
 
 
 if __name__ == "__main__":

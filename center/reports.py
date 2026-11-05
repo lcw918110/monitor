@@ -997,6 +997,12 @@ def build_report(
         head["paragraphs"].append(
             "保留期：retention_days=%s。本窗口未被裁剪。" % retention_days
         )
+    empty_window = int(current.get("sample_count") or 0) == 0
+    if empty_window:
+        head["paragraphs"].insert(
+            0,
+            "本窗口没有可汇总的上报。报告仍会保存，日、周、月一样留在列表里，不编造利用率。",
+        )
     sections.append(head)
 
     overview = _section("2. 总览")
@@ -1514,6 +1520,7 @@ def build_report(
         "excluded_samples": current.get("excluded_samples")
         or {"count": 0, "by_metric": {}, "hosts": []},
         "sample_count": current.get("sample_count") or 0,
+        "empty": empty_window,
         "history_truncated": bool(current.get("history_truncated")),
         "sections": sections,
         "rankings": rankings,
@@ -1558,6 +1565,13 @@ def handle_report_preview(storage: Storage, query: str = "") -> Tuple[int, Dict[
     )
     if bounds_err and not win_err:
         win_err = bounds_err
+    sample_count = None
+    empty = False
+    if window and not win_err:
+        sample_count = storage.count_visible_samples(
+            int(window["from_ts"]), int(window["to_ts"])
+        )
+        empty = sample_count == 0
     return 200, {
         "ok": True,
         "period": bounds["period"],
@@ -1571,6 +1585,8 @@ def handle_report_preview(storage: Storage, query: str = "") -> Tuple[int, Dict[
         "window_error": win_err,
         "actual_from_ts": window.get("from_ts") if window else None,
         "actual_to_ts_inclusive": window.get("to_ts") if window else None,
+        "sample_count": sample_count,
+        "empty": empty,
     }
 
 
@@ -1675,6 +1691,7 @@ def handle_generate_report(
         error=doc.get("error"),
         generated_at=doc.get("generated_at"),
         replace=bool(replace),
+        empty=bool(doc.get("empty")),
     )
     if saved.get("action") == "skipped":
         return 200, {"ok": True, "skipped": True, "report": saved}

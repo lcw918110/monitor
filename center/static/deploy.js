@@ -5,6 +5,27 @@
 
   const DEFAULT_AGENT_DIR = "/opt/monitor-agent";
 
+  const ERROR_HINTS = {
+    ssh_unreachable: "连不上。核对 IP、端口（默认 22）和网络。",
+    auth_fail: "登录被拒绝。核对用户名、密码或私钥。",
+    sshpass_missing: "这台中心机没有 sshpass。安装它，或改用密钥。",
+    key_missing: "私钥文件不在中心机上。",
+    sudo_required: "往 /opt 安装需要 sudo。",
+    center_url_missing: "先填写并保存中心地址。",
+    no_python: "对方没有 Python 3.6 或更新版本。",
+    python_install_fail: "自动安装 Python 失败，会再尝试便携解释器。",
+    python_bundle_missing: "中心上没有对应架构的便携 Python。",
+    python_bundle_checksum: "便携 Python 校验没通过。",
+    python_bundle_arch: "没有适合这台机器架构的便携 Python。",
+    python_bundle_extract: "便携 Python 解压失败。",
+    python_bundle_exec: "便携 Python 启动失败。",
+    dir_not_writable: "安装目录写不进去。",
+    agent_start_fail: "采集端没有跑起来，或上报自检失败。",
+    package_incomplete: "安装包不完整。中心目录里要保留 agent。",
+    timeout: "这一次等太久了。",
+    sync_tool_missing: "中心机缺少同步文件用的命令。",
+  };
+
   const $ = (id) => document.getElementById(id);
 
   function escapeHtml(s) {
@@ -130,13 +151,29 @@
     return "沿用全局";
   }
 
+  function targetStateCell(body, message) {
+    body.innerHTML =
+      '<tr><td colspan="11" class="ops-state">' + message + "</td></tr>";
+  }
+
   async function loadTargets() {
-    const res = await fetch("/api/v1/deploy/targets");
-    const data = await res.json();
+    const body = $("targetBody");
+    let data = {};
+    let res;
+    try {
+      res = await fetch("/api/v1/deploy/targets");
+      data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || "清单读取失败");
+    } catch (e) {
+      targetStateCell(
+        body,
+        "清单没有读出来：" + escapeHtml(e.message || "未知错误") + "。点右上角刷新再试。"
+      );
+      return;
+    }
     const targets = data.targets || [];
     if (!targets.length) {
-      $("targetBody").innerHTML =
-        '<tr><td colspan="11" class="muted">暂无目标，请先添加或导入 Excel（含指定机器列）</td></tr>';
+      targetStateCell(body, "清单是空的。在下方加入一台机器，或用表格导入。");
       return;
     }
     $("targetBody").innerHTML = targets
@@ -195,9 +232,11 @@
             if (code && msg.indexOf("[" + code + "]") === 0) {
               msg = msg.slice(code.length + 2).replace(/^\s+/, "");
             }
+            const hint = ERROR_HINTS[code] || "";
             return (
               (code ? "<code>" + escapeHtml(code) + "</code> " : "") +
-              escapeHtml(msg)
+              escapeHtml(msg) +
+              (hint ? '<div class="muted">' + escapeHtml(hint) + "</div>" : "")
             );
           })() +
           "</td>" +
@@ -247,10 +286,15 @@
 
     Array.from(document.querySelectorAll("[data-del]")).forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm("确认删除该目标？")) return;
-        await fetch("/api/v1/deploy/targets/" + btn.getAttribute("data-del"), {
+        if (!confirm("只从这份清单里删除，不会卸载对方机器上已经装好的采集端。确定删除？")) return;
+        const res = await fetch("/api/v1/deploy/targets/" + btn.getAttribute("data-del"), {
           method: "DELETE",
         });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || (data && data.ok === false)) {
+          alert((data && data.error) || "删除失败");
+          return;
+        }
         loadTargets();
       });
     });
@@ -313,7 +357,7 @@
 
   function clearEdit() {
     editingId = null;
-    $("btnAdd").textContent = "添加到清单";
+    $("btnAdd").textContent = "加入清单";
     $("btnCancelEdit").hidden = true;
     $("tIp").value = "";
     $("tHostId").value = "";
@@ -412,6 +456,10 @@
 
   async function importExcelFile(file) {
     if (!file) return;
+    if (!confirm("将把「" + file.name + "」写入部署清单。不会马上安装采集端。继续？")) {
+      $("excelHint").textContent = "已取消导入";
+      return;
+    }
     $("excelHint").textContent = "正在导入 " + file.name + " ...";
     const buf = await file.arrayBuffer();
     const res = await fetch("/api/v1/deploy/targets/import-excel", {
@@ -439,13 +487,23 @@
   }
 
   async function runDeploy(ids) {
+    if (ids !== "all" && (!ids || !ids.length)) {
+      alert("请先勾选要安装的机器");
+      return;
+    }
+    const who = ids === "all" ? "清单里所有未停用的机器" : "勾选的 " + ids.length + " 台";
+    if (
+      !confirm(
+        "将向" +
+          who +
+          "安装或覆盖采集端（默认目录 /opt/monitor-agent）。已经停用的不会动。确定继续？"
+      )
+    ) {
+      return;
+    }
     if (!(await ensureSettingsSaved())) return;
     const body =
       ids === "all" ? { target_ids: "all" } : { target_ids: ids };
-    if (ids !== "all" && (!ids || !ids.length)) {
-      alert("请先勾选目标");
-      return;
-    }
     const res = await fetch("/api/v1/deploy/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

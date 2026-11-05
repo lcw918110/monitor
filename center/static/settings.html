@@ -34,8 +34,14 @@
         <span class="muted" id="centerPath"></span>
       </div>
       <div class="settings-copy">
-        <p>这里改的是中心实际在用的配置，写入 <code>config/center.json</code>。保留天数、异常着色、诊断报告的空闲/高负荷线、时段繁忙线和报告时刻，保存后当前进程立即按新值工作。监听地址、端口和数据目录只写入文件，要重启 <code>monitor-center</code> 才换，这不是升级。</p>
-        <p>文件里没写的项显示内置默认，可以单条、整组或全部恢复默认。管理 Token 未设置时，保存和其它写操作不校验；设置之后要带当前 Token。监测台读接口仍然开放。Agent 上报 Token 只校验指标上报。</p>
+        <p>先改这三处就够处理日常：报告什么时候出、报告发到哪个群、谁能改配置。着色、保留天数和监听地址不常动，放在后面。</p>
+        <div class="settings-quick">
+          <a class="btn" href="#group-schedule">报告时刻</a>
+          <a class="btn" href="#sectionPush">报告推送</a>
+          <a class="btn" href="#sectionToken">管理 Token</a>
+        </div>
+        <p>改动写入 <code>config/center.json</code>。报告时刻、空闲/高负荷线、时段繁忙线、异常着色和保留天数，保存后当前进程马上按新值工作。监听地址、端口和数据目录只写入文件，要重启 <code>monitor-center</code> 才换，这不是升级。</p>
+        <p>没改过的项显示「默认」，可以单条、整组或全部恢复。恢复前会再确认。管理 Token 未设置时，保存和其它写操作不校验；设置之后，页面上方黄条里的口令会带到写操作。监测台读数仍然开放。Agent 上报 Token 只校验指标上报，和这里的管理 Token 不是同一把。</p>
       </div>
       <nav id="centerNav" class="settings-nav" aria-label="参数分组"></nav>
       <div class="form-actions">
@@ -90,7 +96,7 @@
       </div>
       <div class="settings-copy">
         <p>这是中心写操作的一把共享口令，不是登录账号，也<strong>不是</strong> Agent 上报用的 <code>token</code>。上报仍只校验 <code>POST /api/v1/metrics</code>。</p>
-        <p id="tokenBootstrap">未设置时，部署、改主机、生成报告、保存设置都和现在一样不校验。请在中心能被别人访问之前先在这里设上。设上之后，这些写操作都要带当前 Token；清空也要带。读监测数据不需要。更换或清空时，先在页面上方黄条填入当前 Token，再点「本页使用」。</p>
+        <p id="tokenBootstrap">未设置时，部署、改主机、生成报告、保存设置都不校验。中心能被别人访问之前，请先在这里设上。设上之后，这些写操作都要带当前 Token；清空也要带。读监测数据不需要。页面上方黄条和这里是同一把口令：黄条只在这个标签页记住，关闭后要再填一次。更换或清空时，先在黄条填入当前 Token，再点「本页使用」。</p>
         <p>保存后只留哈希，页面不再显示明文。忘记时，在中心机执行 <code>sqlite3 data/monitor.db "DELETE FROM admin_settings WHERE key='management_token_sha256';"</code>，然后立刻重新设置。也可以在首次启动前用环境变量 <code>MONITOR_MANAGEMENT_TOKEN</code> 写入（已有 Token 时不会覆盖）。</p>
       </div>
       <div class="form-grid">

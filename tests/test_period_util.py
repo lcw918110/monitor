@@ -15,7 +15,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from center import api as api_mod
-from center.storage import Storage, aggregate_series, percentile
+from center.storage import Storage, aggregate_series, offline_intervals, percentile
 
 
 def _post(storage: Storage, host_id: str, ts: int, cpu: float, **extra) -> None:
@@ -309,6 +309,78 @@ class PeriodAggAndClusterTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(pstats["sample_count"], 1)
         self.assertEqual(pstats["metrics"]["cpu_percent"]["avg"], 11)
+
+
+class OfflineIntervalTests(unittest.TestCase):
+    def test_gap_longer_than_threshold_is_offline(self) -> None:
+        spans = offline_intervals(
+            [1000, 1010, 1015, 2000],
+            1000,
+            2100,
+            90,
+            first_ts=1000,
+        )
+        self.assertEqual(len(spans), 2)
+        self.assertEqual(spans[0]["from_ts"], 1106)
+        self.assertEqual(spans[0]["to_ts"], 2000)
+        self.assertEqual(spans[0]["seconds"], 894)
+        self.assertFalse(spans[0]["until_window_end"])
+        self.assertTrue(spans[1]["until_window_end"])
+        self.assertEqual(spans[1]["from_ts"], 2091)
+        self.assertEqual(spans[1]["to_ts"], 2100)
+        self.assertEqual(spans[1]["seconds"], 10)
+
+    def test_steady_samples_and_prior_coverage_are_not_offline(self) -> None:
+        steady = list(range(0, 301, 15))
+        self.assertEqual(offline_intervals(steady, 0, 300, 90, first_ts=0), [])
+        # 窗口开始前 10 秒有上报，阈值 90 秒，开头仍算在线。
+        self.assertEqual(
+            offline_intervals([], 0, 50, 90, prior_ts=-10, first_ts=-10),
+            [],
+        )
+
+    def test_silence_before_first_report_is_not_offline(self) -> None:
+        spans = offline_intervals([50, 60], 0, 200, 90, first_ts=50)
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0]["from_ts"], 151)
+        self.assertTrue(spans[0]["until_window_end"])
+        self.assertEqual(
+            offline_intervals([], 0, 100, 90, first_ts=500),
+            [],
+        )
+
+    def test_cluster_offline_overview_uses_existing_samples(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        storage = Storage(os.path.join(tmp.name, "t.db"), offline_seconds=90, retention_days=7)
+        end = int(time.time()) - 30
+        start = end - 600
+        # 全程按 15 秒上报，离线阈值 90 秒，不应进入离线概览。
+        for ts in range(start, start + 601, 15):
+            _post(storage, "steady", ts, 10, hostname="steady", primary_ip="10.0.0.8")
+        # 中间断了 400 秒，超过 90 秒。
+        _post(storage, "gappy", start, 10, hostname="gappy", primary_ip="10.0.0.9")
+        _post(storage, "gappy", start + 400, 10, hostname="gappy", primary_ip="10.0.0.9")
+        code, payload = api_mod.handle_cluster_period_stats(
+            storage,
+            "from_ts=%s&to_ts=%s" % (start, start + 600),
+        )
+        self.assertEqual(code, 200, payload)
+        offline = payload["offline"]
+        self.assertEqual(offline["offline_seconds"], 90)
+        self.assertEqual(offline["host_count"], 1)
+        self.assertEqual(offline["hosts"][0]["host_id"], "gappy")
+        self.assertGreaterEqual(offline["hosts"][0]["interval_count"], 1)
+        self.assertGreater(offline["total_seconds"], 90)
+        host = next(item for item in payload["hosts"] if item["host_id"] == "gappy")
+        self.assertEqual(host["offline"]["interval_count"], offline["hosts"][0]["interval_count"])
+        code, one = api_mod.handle_host_period_stats(
+            storage,
+            "gappy",
+            "from_ts=%s&to_ts=%s" % (start, start + 600),
+        )
+        self.assertEqual(code, 200, one)
+        self.assertGreaterEqual(one["offline"]["interval_count"], 1)
 
 
 if __name__ == "__main__":
