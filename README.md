@@ -337,6 +337,8 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 文档
 
+给客户机房交接时，用下面三份对外手册。它们按现行 v1.10.0 编写，步骤与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致：部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。
+
 | 文档 | 说明 |
 | --- | --- |
 | `docs/01-requirements.md` | 需求规格（现行正文，可单独阅读） |
@@ -351,6 +353,9 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
 | **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机，以及备份 / 恢复 / 回滚（弱高可用；双中心不做）** |
 | `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA） |
+| **[`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)** | **对外部署手册：给客户机房的安装、升级、备份、验收** |
+| **[`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)** | **对外使用手册：监测台、诊断、设置、只读 API** |
+| **[`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)** | **对外交付资料清单：交什么文件、给谁、部署前后检查** |
 | **`docs/10-roadmap.md`** | **下一步：体验 U1–U3、长期运维 O1–O7，以及实装 / 容量 / 框架化 / 拓扑** |
 | `docs/audit-tech-debt-2026-10-27.md` | 技术债审计。待人拍板的项在文内 NEEDS_HUMAN，不在这里实现 |
 
