@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">设置 · 中心参数 / 管理 Token / 报告推送 · v1.12.0</p>
+        <p class="sub">设置 · 中心参数 / 管理 Token / 报告推送 · v1.13.0</p>
       </div>
     </div>
     <nav class="shell-nav" aria-label="主导航">
@@ -49,6 +49,66 @@
         <button type="button" id="btnSaveAll" class="btn primary">保存已修改的中心参数</button>
         <button type="button" id="btnRestoreAll" class="btn">全部恢复默认</button>
         <span class="muted" id="centerHint"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="sectionDataGuard">
+      <div class="panel-head">
+        <h2>重点数据守护</h2>
+        <span class="muted" id="guardStatus">加载中…</span>
+      </div>
+      <div class="settings-copy">
+        <p>只对勾选的主机或整个资源组生效，这些机器在实时页上标成<strong>重点数据机</strong>。用来发现重点数据可能正在离开的迹象：外传异常、路径完整性变化、未允许网段外连、可移动磁盘挂载。发现之后进今日关注的「数据外传异常」，并记进时段统计和使用诊断。</p>
+        <p>它不能保证数据出不去，也不拦截连接、不读文件内容、不抓包。拦得住要靠防火墙和目录权限。加密隧道里的内容看不到，也指不出究竟是哪一个文件离开了。正常的备份和同步必须写进白名单，否则会报数据外传异常。</p>
+        <p>主机上单独保存的设置优先于资源组。清除本条之后，这台主机改回跟随资源组；资源组没有设置时，就不再是重点数据机。读失败的路径在详情里显示为「-」。</p>
+      </div>
+      <div class="form-grid">
+        <label>作用范围
+          <select id="guardScope">
+            <option value="host">单台主机</option>
+            <option value="group">整个资源组</option>
+          </select>
+        </label>
+        <label>主机或资源组
+          <select id="guardTarget"></select>
+        </label>
+        <label class="check-line span-2">
+          <input id="guardEnabled" type="checkbox" />
+          标为重点数据机
+        </label>
+        <label class="span-2">受保护路径（每行一个目录或文件）
+          <textarea id="guardPaths" rows="4" placeholder="/data/important"></textarea>
+        </label>
+        <label class="span-2">允许的内网目的网段（可选，每行一个 CIDR。留空则不按网段判断外连）
+          <textarea id="guardCidrs" rows="3" placeholder="10.0.0.0/8"></textarea>
+        </label>
+        <label>外传速率（Mbps，留空表示不看速率）
+          <input id="guardMbps" type="number" min="0.1" max="100000" step="0.1" placeholder="例如 100" />
+        </label>
+        <label>速率要连续保持（秒）
+          <input id="guardSustain" type="number" min="15" max="3600" step="1" value="60" />
+        </label>
+        <label>一段时间的发送量（MB，留空表示不看量）
+          <input id="guardVolume" type="number" min="1" step="1" placeholder="例如 1024" />
+        </label>
+        <label>发送量的统计窗口（秒）
+          <input id="guardVolumeWindow" type="number" min="60" max="86400" step="1" value="3600" />
+        </label>
+        <label class="span-2">相对平时发送的倍数（可选。留空表示不跟平时比，只看上面的速率或发送量）
+          <input id="guardBaseline" type="number" min="1" max="100" step="0.1" placeholder="例如 3" />
+        </label>
+        <label class="span-2">白名单目的地址（备份、同步的网段或 IP，每行一个）
+          <textarea id="guardAllowDest" rows="3" placeholder="10.8.0.0/24"></textarea>
+        </label>
+        <label class="span-2">白名单进程名（只写名字，例如 rsync，每行一个）
+          <textarea id="guardAllowProc" rows="3" placeholder="rsync"></textarea>
+        </label>
+      </div>
+      <p class="settings-copy" id="guardSource"></p>
+      <div class="form-actions">
+        <button type="button" id="btnSaveGuard" class="btn primary">保存重点数据守护</button>
+        <button type="button" id="btnClearGuard" class="btn">清除本条</button>
+        <span class="muted" id="guardHint"></span>
       </div>
     </section>
 

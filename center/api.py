@@ -167,6 +167,9 @@ def handle_metrics_post(
     if error:
         return error
     assert prepared is not None
+    from center.data_guard import apply_ingest
+
+    guard_reply = apply_ingest(storage, prepared)
     status = storage.upsert_metric(prepared, remote_ip=remote_ip)
     if status == "rejected":
         return _bad_request("补报缺少采集时间 timestamp")
@@ -174,6 +177,7 @@ def handle_metrics_post(
         "ok": True,
         "status": status,
         "spool_retention_hours": _spool_hours(storage),
+        "data_guard": guard_reply,
     }
 
 
@@ -209,6 +213,8 @@ def handle_metrics_batch(
     accepted = 0
     duplicate = 0
     rejected: List[Dict[str, Any]] = []
+    from center.data_guard import apply_ingest
+
     for sample in samples:
         if isinstance(sample, dict) and expected_token and not sample.get("token"):
             sample = dict(sample)
@@ -227,6 +233,7 @@ def handle_metrics_batch(
         assert prepared is not None
         if "backfill" not in prepared:
             prepared["backfill"] = True
+        apply_ingest(storage, prepared)
         status = storage.upsert_metric(prepared, remote_ip=remote_ip)
         if status == "inserted":
             accepted += 1
@@ -395,6 +402,7 @@ def _flatten_period_row(
     accel_count: Any = None,
     accel_summary: Any = None,
     offline: Optional[Dict[str, Any]] = None,
+    data_guard: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     off = offline or {}
     nodata = off.get("no_data") or {}
@@ -421,6 +429,16 @@ def _flatten_period_row(
         row["%s_max" % metric] = agg.get("max")
         row["%s_p95" % metric] = agg.get("p95")
         row["%s_busy_ratio" % metric] = agg.get("busy_ratio")
+    guard = data_guard or {}
+    row["data_guard_marked"] = 1 if guard.get("marked") else 0
+    for kind in (
+        "egress_anomaly",
+        "path_integrity",
+        "unallowed_cidr",
+        "removable_mount",
+    ):
+        row["%s_count" % kind] = int(guard.get("%s_count" % kind) or 0)
+        row["%s_seconds" % kind] = int(guard.get("%s_seconds" % kind) or 0)
     return row
 
 
@@ -449,6 +467,7 @@ def handle_export_period_csv(
             cluster.get("accel_count") or payload.get("accel_count"),
             cluster.get("accel_summary") or payload.get("accel_summary"),
             payload.get("offline") or {},
+            cluster.get("data_guard") or {},
         )
     ]
     for host in payload.get("hosts") or []:
@@ -465,6 +484,7 @@ def handle_export_period_csv(
                 host.get("accel_count"),
                 host.get("accel_summary"),
                 host.get("offline") or {},
+                host.get("data_guard") or {},
             )
         )
     return 200, write_labeled_csv(rows, period_columns())
@@ -497,6 +517,9 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         flat["asset_gpu"] = asset.get("gpu") or ""
         flat["asset_model"] = asset.get("model") or ""
         flat["asset_notes"] = asset.get("notes") or ""
+        guard = row.get("data_guard") or {}
+        flat["data_guard_marked"] = bool(guard.get("marked"))
+        flat["data_guard_attention"] = bool(guard.get("attention"))
         rows.append(flat)
     return 200, write_labeled_csv(rows, HOST_COLUMNS)
 

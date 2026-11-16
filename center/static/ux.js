@@ -90,6 +90,8 @@
       loadPerCoreHigh(host.load5, cores, th.cpu_load_per_core_warn);
     var cpuHigh = !!codes.cpu_util_critical || (cpu != null && cpu >= cpuCrit);
     if (loadHigh || cpuHigh) tags.push("load");
+    var guard = host.data_guard || {};
+    if (guard.attention) tags.push("data_exfil");
     return tags;
   }
 

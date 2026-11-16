@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent import __version__ as AGENT_VERSION
+from agent.data_guard_run import DataGuardRunner, resolve_state_dir
 from agent.metrics.accelerators import (
     collect_accelerators,
     collect_nvidia_processes,
@@ -56,7 +57,7 @@ def resolve_identity(cfg: Dict[str, Any]) -> Dict[str, str]:
     return {"hostname": hostname, "host_id": host_id}
 
 
-def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def build_payload(cfg: Dict[str, Any], guard_block: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ident = resolve_identity(cfg)
     system = collect_system(disk_path=cfg.get("disk_path") or "/")
     configured = normalize_host_type(cfg.get("host_type"))
@@ -88,6 +89,8 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "gpu_processes": gpu_procs,
         "agent_version": AGENT_VERSION,
     }
+    if isinstance(guard_block, dict):
+        payload["data_guard"] = guard_block
     token = cfg.get("token") or ""
     if token:
         payload["token"] = token
@@ -121,7 +124,13 @@ def submit_payload(
             spool.set_retention_hours(hours)
         _flush_one_batch(cfg, spool, sender, payload)
         return int(code), body, "sent"
-    state = spool.enqueue(payload)
+    if isinstance(payload.get("data_guard"), dict):
+        # 重点数据观察跟整笔指标进同一条 24 小时队列，不另建库。
+        from agent.spool import enqueue_data_guard
+
+        state = enqueue_data_guard(spool, payload)
+    else:
+        state = spool.enqueue(payload)
     return int(code), body, state
 
 
@@ -150,6 +159,7 @@ def run_loop(cfg: Dict[str, Any], config_path: Optional[str] = None) -> None:
     interval = max(5, int(cfg.get("interval_seconds") or 15))
     ident = resolve_identity(cfg)
     spool = open_spool(cfg, config_path)
+    runner = DataGuardRunner(resolve_state_dir(cfg))
     print(
         "Agent 启动: host_id=%s → %s (间隔 %ss，断网样本留 %sh)"
         % (ident["host_id"], url, interval, spool.retention_hours)
@@ -158,7 +168,11 @@ def run_loop(cfg: Dict[str, Any], config_path: Optional[str] = None) -> None:
         started = time.time()
         try:
             payload = build_payload(cfg)
+            block = runner.collect(payload.get("system") or {})
+            if block:
+                payload["data_guard"] = block
             code, body, state = submit_payload(cfg, payload, spool)
+            runner.on_result(code, body, spooled=state != "sent")
             sysinfo = payload.get("system") or {}
             acc = payload.get("accelerators") or []
             if state == "sent":
@@ -221,8 +235,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     spool = open_spool(cfg, config_path)
     if args.once:
+        runner = DataGuardRunner(resolve_state_dir(cfg))
         payload = build_payload(cfg)
+        block = runner.collect(payload.get("system") or {})
+        if block:
+            payload["data_guard"] = block
         code, body, state = submit_payload(cfg, payload, spool)
+        runner.on_result(code, body, spooled=state != "sent")
         print("once code=%s body=%s spool=%s" % (code, body, state))
         if state != "sent":
             raise SystemExit(1)

@@ -101,7 +101,54 @@ HOST_COLUMNS: List[ExportColumn] = [
     ExportColumn("asset_gpu", "资产GPU", "手工填写的 GPU 说明", "无"),
     ExportColumn("asset_model", "资产型号", "手工填写的型号或资产编号", "无"),
     ExportColumn("asset_notes", "资产备注", "手工备注", "无"),
+    ExportColumn(
+        "data_guard_marked",
+        "重点数据机",
+        "当前是否被标为重点数据机。只有标了的主机才做重点数据守护。True 为是",
+        "无",
+    ),
+    ExportColumn(
+        "data_guard_attention",
+        "数据外传异常",
+        "当前快照是否有数据外传异常。离线主机不算进今日关注，这里为 False。这是迹象，不是拦截",
+        "无",
+    ),
 ]
+
+
+def _guard_count_columns() -> List[ExportColumn]:
+    rows = [
+        ("egress_anomaly", "外传异常", "发送速率持续偏高，或一段时间的发送量超过设置"),
+        ("path_integrity", "路径完整性变化", "受保护路径突然变小，或路径下、路径旁出现大归档"),
+        ("unallowed_cidr", "未允许网段外连", "连到允许网段和白名单之外的目的地址"),
+        ("removable_mount", "可移动磁盘挂载", "出现 U 盘一类的可移动磁盘挂载"),
+    ]
+    columns = [
+        ExportColumn(
+            "data_guard_marked",
+            "重点数据机",
+            "当前是否被标为重点数据机。1 为是。未标记的主机这几项次数为 0",
+            "无",
+        )
+    ]
+    for key, label, meaning in rows:
+        columns.append(
+            ExportColumn(
+                "%s_count" % key,
+                "%s次数" % label,
+                "这一窗口里出现「%s」的上报次数。%s" % (label, meaning),
+                "次",
+            )
+        )
+        columns.append(
+            ExportColumn(
+                "%s_seconds" % key,
+                "%s时长（秒）" % label,
+                "相邻上报仍处于「%s」时累计的秒数。间隔超过离线阈值的不连成一段" % label,
+                "秒",
+            )
+        )
+    return columns
 
 
 _PERIOD_METRIC_TEXT = {
@@ -190,6 +237,7 @@ def period_columns() -> List[ExportColumn]:
                     "0～1" if stat_key == "busy_ratio" else (unit or "无"),
                 )
             )
+    columns.extend(_guard_count_columns())
     return columns
 
 
@@ -227,6 +275,7 @@ RANKING_COLUMNS: List[ExportColumn] = [
     ExportColumn("fullest_mount", "最满挂载", "窗口内占用率最高的挂载路径。没有挂载样本时为空", "无"),
     ExportColumn("fullest_mount_percent", "最满挂载占用率（%）", "该挂载的占用率", "%"),
 ]
+RANKING_COLUMNS.extend(_guard_count_columns())
 
 
 def _section_lines(title: str, columns: Sequence[ExportColumn]) -> List[str]:
@@ -259,6 +308,8 @@ def field_guide_text() -> str:
         "「断网（已补报）」：机器和采集端还在采样，样本先留在本机 data/spool，恢复后按原来的采集时间补上。图表和时段统计会被填上。",
         "默认在本机保留 24 小时，可在设置页改「断网补报保留」。队列溢出会报给中心，丢掉的那段记成「离线（无数据）」，不是一声不响的空洞。",
         "补上的点参与时段统计、导出和诊断报告，闲忙规则不变。趋势图悬停仍是上海时间；没有补上的空档数值是横线，并标明「离线（无数据）」。",
+        "重点数据守护只覆盖被标成重点数据机的主机。它发现外传异常、路径完整性变化、未允许网段外连和可移动磁盘挂载，不能保证数据出不去，也看不到加密隧道里的内容，不能指出究竟是哪一个文件离开了。备份和同步要写进白名单。磁盘占用率仍然只表示容量。",
+        "外传异常次数、路径完整性变化次数、未允许网段外连次数、可移动磁盘挂载次数，以及各自的时长（秒），来自重点数据机的上报。发送失败时跟指标一起留在 data/spool。JSON 里对应 egress_anomaly、path_integrity、unallowed_cidr、removable_mount，键名保持英文。",
         "",
     ]
     lines.extend(_section_lines("一、主机快照 hosts.csv", HOST_COLUMNS))

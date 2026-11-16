@@ -437,3 +437,15 @@ def apply_flush_response(spool: Spool, stamps: List[int], code: int, body: str) 
     hours = retention_hours_from_body(body)
     if hours is not None:
         spool.set_retention_hours(hours)
+
+
+def enqueue_data_guard(spool, payload):
+    # type: (Spool, Dict[str, Any]) -> str
+    """重点数据观察随整笔指标进入现有队列。
+
+    v1.12 落地的是 Spool.enqueue，没有 agent.report_spool 模块。
+    payload 里应已带 data_guard。这里不另建 24 小时指标库。
+    """
+    if not isinstance(payload, dict):
+        return "overflow"
+    return spool.enqueue(payload)

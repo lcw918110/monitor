@@ -495,6 +495,51 @@ def _host_label(host: Dict[str, Any]) -> str:
     return address or hid or "-"
 
 
+def _guard_rank_fields(guard: Dict[str, Any]) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {"data_guard_marked": 1 if guard.get("marked") else 0}
+    for kind in (
+        "egress_anomaly",
+        "path_integrity",
+        "unallowed_cidr",
+        "removable_mount",
+    ):
+        fields["%s_count" % kind] = int(guard.get("%s_count" % kind) or 0)
+        fields["%s_seconds" % kind] = int(guard.get("%s_seconds" % kind) or 0)
+    return fields
+
+
+def _data_guard_section(hosts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    from common.data_guard import KIND_LABELS, KINDS, LIMITATION
+
+    section = _section("10. 重点数据守护")
+    section["paragraphs"] = [
+        LIMITATION,
+        "只统计被标为重点数据机的主机。未标记的机器即使曾经上报过，也不算进下面的次数。闲忙两极不看这些次数。",
+        "若已启用诊断报告推送，本节会随使用诊断发到原来的企业微信、钉钉或飞书，不另建通知。",
+    ]
+    marked = [host for host in hosts if (host.get("data_guard") or {}).get("marked")]
+    if not marked:
+        section["notes"] = ["当前没有重点数据机。到设置页打开重点数据守护后，下一份报告才会有次数。"]
+        return section
+    headers = ["主机", "资源组"]
+    for kind in KINDS:
+        label = KIND_LABELS[kind]
+        headers.append("%s次数" % label)
+        headers.append("%s时长（秒）" % label)
+    rows = []
+    host_ids = []
+    for host in marked:
+        guard = host.get("data_guard") or {}
+        row = [_host_label(host), host.get("group_name") or "未分组"]
+        for kind in KINDS:
+            row.append(str(int(guard.get("%s_count" % kind) or 0)))
+            row.append(str(int(guard.get("%s_seconds" % kind) or 0)))
+        rows.append(row)
+        host_ids.append(str(host.get("host_id") or ""))
+    _add_table(section, headers, rows, host_ids=host_ids)
+    return section
+
+
 def _section(title: str, paragraphs: Optional[List[str]] = None) -> Dict[str, Any]:
     return {"title": title, "paragraphs": list(paragraphs or []), "tables": [], "notes": []}
 
@@ -1432,6 +1477,7 @@ def build_report(
     if len(hosts) > len(preview_hosts):
         appendix["notes"].append("附录表格仅列出前 100 台，其余见 CSV。")
     sections.append(appendix)
+    sections.append(_data_guard_section(hosts))
 
     rankings: List[Dict[str, Any]] = []
     for item in classified:
@@ -1472,6 +1518,7 @@ def build_report(
                 "fullest_mount_percent": (mount or {}).get("percent"),
             }
         )
+        rankings[-1].update(_guard_rank_fields(host.get("data_guard") or {}))
 
     markdown = render_markdown(title, sections)
     doc = {
