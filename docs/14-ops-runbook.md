@@ -8,7 +8,7 @@
 
 家目录 `~/monitor` 不走产品升级路径。本机试用使用 `scripts/local_up.sh`（默认目录是仓库内 `.deploy-center`，可用 `MONITOR_CENTER_DIR` 改），不要对试用目录执行 `push_upgrade.sh`。`deploy_center.sh` 在非 root 时仍会把默认目录改成 `~/monitor`；那只是本机落点。生产中心用 root 安装到 `/opt/monitor`。对 `~/monitor` 跑升级脚本会去找 `/opt/monitor`：目录不存在就退出；若 `/opt/monitor` 是另一套安装，则会升级那一套。
 
-中心换代码只走 `scripts/push_upgrade.sh` → 新包里的 `scripts/upgrade_center.sh`。Agent 只走中心「客户端部署」或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`。不要另写 rsync、手写备份或 `systemctl restart` 来升级，也不要从笔记本用 `sshpass` + `scp` 装 Agent。`scripts/backup_center.sh` 和 `scripts/restore_center.sh` 不是第二条升级路径，也不是第二条 Agent 部署路径。
+中心换代码只走 `scripts/push_upgrade.sh` → 新包里的 `scripts/upgrade_center.sh`。Agent 只走中心「客户端部署」或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`。不要另写 rsync、手写备份或 `systemctl restart` 来升级，也不要从笔记本用 `sshpass` + `scp` 装 Agent。采集端的断网补报队列在安装目录 `data/spool`（生产默认 `/opt/monitor-agent/data/spool`）。覆盖安装不删除 `data/`，所以进程重启和升级都留着未送出的样本。机器本身停了或磁盘没了，这段就是「离线（无数据）」，不要在中心补造。`scripts/backup_center.sh` 和 `scripts/restore_center.sh` 不是第二条升级路径，也不是第二条 Agent 部署路径。
 
 **双中心 / 双活 / SQLite 多写 / 自动故障切换：不做。** 这里的「弱高可用」只是：升级前和单独备份都能留下一份可恢复的副本，由人决定恢复代码还是连数据库一起恢复。
 

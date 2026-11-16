@@ -53,6 +53,25 @@ DEFAULT_BUSY_THRESHOLDS = {
 PERIOD_MAX_ROWS = 60000
 
 
+def _flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value) != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return False
+
+
+def _collection_ts(value: Any) -> Optional[int]:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -276,6 +295,130 @@ def offline_intervals(
     return [item for item in spans if int(item.get("seconds") or 0) >= 1]
 
 
+def _span_half_open(span: Dict[str, Any]) -> Tuple[int, int]:
+    start = int(span["from_ts"])
+    if span.get("until_window_end"):
+        return start, int(span["to_ts"]) + 1
+    return start, int(span["to_ts"])
+
+
+def interval_difference(
+    source: Optional[List[Dict[str, Any]]],
+    remove: Optional[List[Dict[str, Any]]],
+    window_end: int,
+) -> List[Dict[str, Any]]:
+    """source 里没有被 remove 盖住的部分。用于从「只有实时点」的空档里减去「仍然没有样本」的空档。"""
+    removers: List[List[int]] = []
+    for span in remove or []:
+        left, right = _span_half_open(span)
+        if right > left:
+            removers.append([left, right])
+    removers.sort()
+    pieces: List[List[int]] = []
+    for span in source or []:
+        left, right = _span_half_open(span)
+        cursor = left
+        for ra, rb in removers:
+            if rb <= cursor:
+                continue
+            if ra >= right:
+                break
+            if ra > cursor:
+                pieces.append([cursor, min(ra, right)])
+            cursor = max(cursor, rb)
+            if cursor >= right:
+                break
+        if cursor < right:
+            pieces.append([cursor, right])
+    end = int(window_end)
+    out: List[Dict[str, Any]] = []
+    for start, stop in pieces:
+        if stop <= start:
+            continue
+        until = stop == end + 1
+        if until:
+            item = {
+                "from_ts": start,
+                "to_ts": end,
+                "seconds": end - start + 1,
+                "until_window_end": True,
+            }
+        else:
+            item = {
+                "from_ts": start,
+                "to_ts": stop,
+                "seconds": stop - start,
+                "until_window_end": False,
+            }
+        if int(item["seconds"]) >= 1:
+            out.append(item)
+    return out
+
+
+def _label_spans(
+    spans: List[Dict[str, Any]],
+    kind: str,
+    label: str,
+) -> List[Dict[str, Any]]:
+    labeled = []
+    for span in spans:
+        item = dict(span)
+        item["kind"] = kind
+        item["label"] = label
+        labeled.append(item)
+    return labeled
+
+
+def split_offline_intervals(
+    points: Optional[List[Tuple[int, bool]]],
+    window_from: int,
+    window_to: int,
+    offline_seconds: int,
+    prior_ts: Optional[int] = None,
+    prior_live_ts: Optional[int] = None,
+    first_ts: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """没有样本的空档是「离线（无数据）」；只被补报盖住的时段是「断网（已补报）」。"""
+    all_ts: List[int] = []
+    live_ts: List[int] = []
+    for raw in points or []:
+        ts = int(raw[0])
+        backfill = bool(raw[1])
+        all_ts.append(ts)
+        if not backfill:
+            live_ts.append(ts)
+    no_data = offline_intervals(
+        all_ts,
+        window_from,
+        window_to,
+        offline_seconds,
+        prior_ts=prior_ts,
+        first_ts=first_ts,
+    )
+    live_gaps = offline_intervals(
+        live_ts,
+        window_from,
+        window_to,
+        offline_seconds,
+        prior_ts=prior_live_ts,
+        first_ts=first_ts,
+    )
+    filled = interval_difference(live_gaps, no_data, int(window_to))
+    return (
+        _label_spans(no_data, "no_data", "离线（无数据）"),
+        _label_spans(filled, "backfill", "断网（已补报）"),
+    )
+
+
+def _offline_part(spans: List[Dict[str, Any]], label: str) -> Dict[str, Any]:
+    return {
+        "label": label,
+        "intervals": spans,
+        "interval_count": len(spans),
+        "total_seconds": sum(int(item.get("seconds") or 0) for item in spans),
+    }
+
+
 class Storage:
     def __init__(
         self,
@@ -286,6 +429,7 @@ class Storage:
         self.db_path = db_path
         self.offline_seconds = offline_seconds
         self.retention_days = retention_days
+        self.spool_retention_hours = 24
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(os.path.abspath(db_path)) or ".", exist_ok=True)
         self._init_db()
@@ -319,10 +463,23 @@ class Storage:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         host_id TEXT NOT NULL,
                         ts INTEGER NOT NULL,
-                        payload TEXT NOT NULL
+                        payload TEXT NOT NULL,
+                        received_at INTEGER,
+                        backfill INTEGER
                     );
                     CREATE INDEX IF NOT EXISTS idx_metrics_host_ts
                         ON metrics_history(host_id, ts);
+                    CREATE TABLE IF NOT EXISTS spool_overflows (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        host_id TEXT NOT NULL,
+                        from_ts INTEGER NOT NULL,
+                        to_ts INTEGER NOT NULL,
+                        dropped INTEGER NOT NULL,
+                        reason TEXT,
+                        reported_at INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_spool_overflow_host
+                        ON spool_overflows(host_id, from_ts);
                     CREATE TABLE IF NOT EXISTS resource_groups (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL UNIQUE,
@@ -370,7 +527,16 @@ class Storage:
                     conn.execute("ALTER TABLE hosts ADD COLUMN hidden_at INTEGER")
                 if "asset_meta" not in cols:
                     conn.execute("ALTER TABLE hosts ADD COLUMN asset_meta TEXT")
-                # 诊断报告列只做加法。不改 metrics_history，避免在大库上重写历史上报。
+                # 历史上报只加可空列，不重写已有行。received_at 是中心收到的时刻，ts 仍是采集时间。
+                hist_cols = {
+                    r[1]
+                    for r in conn.execute("PRAGMA table_info(metrics_history)").fetchall()
+                }
+                if "received_at" not in hist_cols:
+                    conn.execute("ALTER TABLE metrics_history ADD COLUMN received_at INTEGER")
+                if "backfill" not in hist_cols:
+                    conn.execute("ALTER TABLE metrics_history ADD COLUMN backfill INTEGER")
+                # 诊断报告列只做加法。不改 metrics_history 的已有行，避免在大库上重写历史上报。
                 diag_cols = {
                     r[1]
                     for r in conn.execute(
@@ -417,15 +583,29 @@ class Storage:
         self,
         payload: Dict[str, Any],
         remote_ip: Optional[str] = None,
-    ) -> None:
+    ) -> str:
+        """按采集时间入库。返回 inserted、duplicate 或 rejected。
+
+        实时样本仍用这次的 timestamp 刷新快照（和以前一样，旧时间戳会把主机判离线）。
+        补报不把 last_seen / 末次快照改回更早的采集时间，避免恢复时把当前用量盖掉。
+        同一 (host_id, timestamp) 只留第一笔。
+        """
         host_id = payload["host_id"]
         hostname = payload.get("hostname") or host_id
         host_type = payload.get("host_type") or "cpu"
-        ts = int(payload.get("timestamp") or time.time())
-        raw = json.dumps(payload, ensure_ascii=False)
-        compact = json.dumps(self._compact_history_payload(payload), ensure_ascii=False)
+        is_backfill = _flag(payload.get("backfill"))
+        ts = _collection_ts(payload.get("timestamp"))
         now = int(time.time())
-        system = payload.get("system") or {}
+        if ts is None:
+            if is_backfill:
+                return "rejected"
+            ts = now
+        stored = dict(payload)
+        stored["timestamp"] = ts
+        stored.pop("token", None)
+        raw = json.dumps(stored, ensure_ascii=False)
+        compact = json.dumps(self._compact_history_payload(stored), ensure_ascii=False)
+        system = stored.get("system") or {}
         if not isinstance(system, dict):
             system = {}
         # normalize_ip 会丢掉回环 / 169.254 / 198.18/15（Clash TUN 假 IP）
@@ -440,29 +620,153 @@ class Storage:
         with self._lock:
             conn = self._connect()
             try:
+                duplicate = conn.execute(
+                    "SELECT 1 FROM metrics_history WHERE host_id=? AND ts=? LIMIT 1",
+                    (host_id, ts),
+                ).fetchone()
+                row = conn.execute(
+                    "SELECT last_seen FROM hosts WHERE host_id=?",
+                    (host_id,),
+                ).fetchone()
+                if row is None:
+                    conn.execute(
+                        """
+                        INSERT INTO hosts (
+                            host_id, hostname, host_type, last_seen, last_payload,
+                            created_at, last_remote_ip
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (host_id, hostname, host_type, ts, raw, now, stored_ip),
+                    )
+                elif is_backfill and int(row["last_seen"]) >= ts:
+                    if stored_ip:
+                        conn.execute(
+                            """
+                            UPDATE hosts
+                            SET last_remote_ip=COALESCE(?, last_remote_ip)
+                            WHERE host_id=?
+                            """,
+                            (stored_ip, host_id),
+                        )
+                elif is_backfill:
+                    conn.execute(
+                        """
+                        UPDATE hosts
+                        SET hostname=?, host_type=?, last_seen=?, last_payload=?,
+                            last_remote_ip=COALESCE(?, last_remote_ip)
+                        WHERE host_id=?
+                        """,
+                        (hostname, host_type, ts, raw, stored_ip, host_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE hosts
+                        SET hostname=?, host_type=?, last_seen=?, last_payload=?,
+                            last_remote_ip=COALESCE(?, last_remote_ip)
+                        WHERE host_id=?
+                        """,
+                        (hostname, host_type, ts, raw, stored_ip, host_id),
+                    )
+                if duplicate:
+                    conn.commit()
+                    return "duplicate"
                 conn.execute(
                     """
-                    INSERT INTO hosts (
-                        host_id, hostname, host_type, last_seen, last_payload,
-                        created_at, last_remote_ip
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(host_id) DO UPDATE SET
-                        hostname=excluded.hostname,
-                        host_type=excluded.host_type,
-                        last_seen=excluded.last_seen,
-                        last_payload=excluded.last_payload,
-                        last_remote_ip=COALESCE(excluded.last_remote_ip, hosts.last_remote_ip)
+                    INSERT INTO metrics_history
+                        (host_id, ts, payload, received_at, backfill)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (host_id, hostname, host_type, ts, raw, now, stored_ip),
+                    (host_id, ts, compact, now, 1 if is_backfill else 0),
                 )
-                conn.execute(
-                    "INSERT INTO metrics_history (host_id, ts, payload) VALUES (?, ?, ?)",
-                    (host_id, ts, compact),
-                )
+                conn.commit()
+                return "inserted"
+            finally:
+                conn.close()
+
+    def record_spool_overflows(
+        self,
+        host_id: str,
+        events: Optional[List[Dict[str, Any]]],
+    ) -> int:
+        """记下采集端丢掉的时段。同一范围重复上报不另计。"""
+        stored = 0
+        now = int(time.time())
+        hid = str(host_id or "").strip()
+        if not hid:
+            return 0
+        with self._lock:
+            conn = self._connect()
+            try:
+                for event in events or []:
+                    if not isinstance(event, dict):
+                        continue
+                    try:
+                        from_ts = int(event.get("from_ts"))
+                        to_ts = int(event.get("to_ts"))
+                        dropped = int(event.get("dropped") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if to_ts < from_ts or dropped < 1:
+                        continue
+                    reason = str(event.get("reason") or "")[:40]
+                    exists = conn.execute(
+                        """
+                        SELECT 1 FROM spool_overflows
+                        WHERE host_id=? AND from_ts=? AND to_ts=? AND dropped=?
+                        LIMIT 1
+                        """,
+                        (hid, from_ts, to_ts, dropped),
+                    ).fetchone()
+                    if exists:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO spool_overflows
+                            (host_id, from_ts, to_ts, dropped, reason, reported_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (hid, from_ts, to_ts, dropped, reason, now),
+                    )
+                    stored += 1
                 conn.commit()
             finally:
                 conn.close()
+        return stored
+
+    def spool_overflows_between(
+        self,
+        host_id: str,
+        from_ts: int,
+        to_ts: int,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT from_ts, to_ts, dropped, reason
+                    FROM spool_overflows
+                    WHERE host_id=? AND to_ts>=? AND from_ts<=?
+                    ORDER BY from_ts ASC, id ASC
+                    """,
+                    (host_id, int(from_ts), int(to_ts)),
+                ).fetchall()
+            finally:
+                conn.close()
+        out = []
+        for row in rows:
+            out.append(
+                {
+                    "from_ts": int(row["from_ts"]),
+                    "to_ts": int(row["to_ts"]),
+                    "dropped": int(row["dropped"] or 0),
+                    "reason": row["reason"] or "",
+                    "label": "离线（无数据）",
+                }
+            )
+        return out
 
     @staticmethod
     def _compact_history_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1440,12 +1744,12 @@ class Storage:
                 # 先取最近 limit 条，再按时间正序返回，避免长窗口只拿到最旧点
                 rows = conn.execute(
                     """
-                    SELECT ts, payload FROM (
-                      SELECT ts, payload FROM metrics_history
+                    SELECT id, ts, payload, received_at, backfill FROM (
+                      SELECT id, ts, payload, received_at, backfill FROM metrics_history
                       WHERE host_id=? AND ts>=? AND ts<=?
-                      ORDER BY ts DESC
+                      ORDER BY ts DESC, id DESC
                       LIMIT ?
-                    ) ORDER BY ts ASC
+                    ) ORDER BY ts ASC, id ASC
                     """,
                     (host_id, since, until, limit),
                 ).fetchall()
@@ -1453,39 +1757,49 @@ class Storage:
                 conn.close()
 
         points: List[Dict[str, Any]] = []
+        seen = set()
         for row in rows:
+            ts = int(row["ts"])
+            if ts in seen:
+                continue
+            seen.add(ts)
             pt = self._history_point_from_row(row["ts"], row["payload"])
             if pt:
                 pt.pop("excluded_utils", None)
+                pt["backfill"] = _flag(row["backfill"])
+                if row["received_at"] is not None:
+                    pt["received_at"] = int(row["received_at"])
                 points.append(self._apply_rated_fallback(pt, rated_fallback))
         return points
 
     def _history_edges(
         self, host_id: str, before_ts: int
-    ) -> Tuple[Optional[int], Optional[int]]:
-        """返回 (该机最早一条上报, 窗口起点之前最近一条)。没有则为 None。"""
+    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+        """返回 (最早一条, 窗口前最近一条, 窗口前最近一条非补报)。"""
         with self._lock:
             conn = self._connect()
             try:
                 row = conn.execute(
                     """
                     SELECT MIN(ts) AS first_ts,
-                           MAX(CASE WHEN ts < ? THEN ts END) AS prior_ts
+                           MAX(CASE WHEN ts < ? THEN ts END) AS prior_ts,
+                           MAX(CASE WHEN ts < ? AND COALESCE(backfill, 0) = 0 THEN ts END) AS prior_live
                     FROM metrics_history
                     WHERE host_id=?
                     """,
-                    (int(before_ts), host_id),
+                    (int(before_ts), int(before_ts), host_id),
                 ).fetchone()
             finally:
                 conn.close()
         if not row:
-            return None, None
-        first = row["first_ts"]
-        prior = row["prior_ts"]
-        return (
-            int(first) if first is not None else None,
-            int(prior) if prior is not None else None,
-        )
+            return None, None, None
+
+        def _opt(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+            return int(value)
+
+        return _opt(row["first_ts"]), _opt(row["prior_ts"]), _opt(row["prior_live"])
 
     def count_visible_samples(self, from_ts: int, to_ts: int) -> int:
         """未隐藏主机在闭区间内的历史上报条数。隐藏主机不计入诊断预览。"""
@@ -1520,9 +1834,9 @@ class Storage:
             try:
                 return conn.execute(
                     """
-                    SELECT ts, payload FROM metrics_history
+                    SELECT id, ts, payload, received_at, backfill FROM metrics_history
                     WHERE host_id=? AND ts>=? AND ts<=?
-                    ORDER BY ts ASC
+                    ORDER BY ts ASC, id ASC
                     LIMIT ?
                     """,
                     (host_id, int(from_ts), int(to_ts), int(max_rows)),
@@ -1534,18 +1848,32 @@ class Storage:
         self,
         rows: List[Any],
         rated_fallback: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Dict[str, List[float]], Optional[int], Optional[int], int, Dict[str, Any], List[int]]:
+    ) -> Tuple[
+        Dict[str, List[float]],
+        Optional[int],
+        Optional[int],
+        int,
+        Dict[str, Any],
+        List[int],
+        List[Tuple[int, bool]],
+    ]:
         series: Dict[str, List[float]] = {key: [] for key in PERIOD_METRIC_KEYS}
         first_ts = None
         last_ts = None
         parsed = 0
         timestamps: List[int] = []
+        point_flags: List[Tuple[int, bool]] = []
+        seen_ts = set()
         excluded_count = 0
         excluded_by_metric: Dict[str, int] = {}
         for row in rows:
             pt = self._history_point_from_row(row["ts"], row["payload"])
             if not pt:
                 continue
+            ts = int(pt["ts"])
+            if ts in seen_ts:
+                continue
+            seen_ts.add(ts)
             pt = self._apply_rated_fallback(pt, rated_fallback)
             for item in pt.pop("excluded_utils", None) or []:
                 if not isinstance(item, dict):
@@ -1554,7 +1882,9 @@ class Storage:
                 excluded_by_metric[metric] = excluded_by_metric.get(metric, 0) + 1
                 excluded_count += 1
             parsed += 1
-            timestamps.append(int(pt["ts"]))
+            backfill = _flag(row["backfill"])
+            timestamps.append(ts)
+            point_flags.append((ts, backfill))
             if first_ts is None:
                 first_ts = pt["ts"]
             last_ts = pt["ts"]
@@ -1583,7 +1913,7 @@ class Storage:
         return series, first_ts, last_ts, parsed, {
             "count": excluded_count,
             "by_metric": excluded_by_metric,
-        }, timestamps
+        }, timestamps, point_flags
 
     @staticmethod
     def _metrics_from_series(
@@ -1636,28 +1966,40 @@ class Storage:
         rows = self._fetch_history_rows(
             host_id, int(window["from_ts"]), int(window["to_ts"]), max_rows=row_cap
         )
-        series, first_ts, last_ts, parsed, excluded, timestamps = self._series_from_rows(
-            rows, rated_fallback=rated_fallback
+        series, first_ts, last_ts, parsed, excluded, _timestamps, point_flags = (
+            self._series_from_rows(rows, rated_fallback=rated_fallback)
         )
-        first_ever, prior_ts = self._history_edges(host_id, int(window["from_ts"]))
+        first_ever, prior_ts, prior_live = self._history_edges(
+            host_id, int(window["from_ts"])
+        )
         truncated = len(rows) >= row_cap
-        intervals = offline_intervals(
-            timestamps,
+        no_data, filled = split_offline_intervals(
+            point_flags,
             int(window["from_ts"]),
             int(window["to_ts"]),
             int(self.offline_seconds),
             prior_ts=prior_ts,
+            prior_live_ts=prior_live,
             first_ts=first_ever,
         )
         offline_complete = not truncated
         if truncated:
-            intervals = [item for item in intervals if not item.get("until_window_end")]
+            no_data = [item for item in no_data if not item.get("until_window_end")]
+            filled = [item for item in filled if not item.get("until_window_end")]
+        overflows = self.spool_overflows_between(
+            host_id, int(window["from_ts"]), int(window["to_ts"])
+        )
+        no_data_part = _offline_part(no_data, "离线（无数据）")
+        filled_part = _offline_part(filled, "断网（已补报）")
         offline = {
             "offline_seconds": int(self.offline_seconds),
             "complete": offline_complete,
-            "intervals": intervals,
-            "interval_count": len(intervals),
-            "total_seconds": sum(int(item.get("seconds") or 0) for item in intervals),
+            "intervals": no_data,
+            "interval_count": no_data_part["interval_count"],
+            "total_seconds": no_data_part["total_seconds"],
+            "no_data": no_data_part,
+            "backfill": filled_part,
+            "overflows": overflows,
         }
         if busy_thresholds is None:
             thresholds = dict(DEFAULT_BUSY_THRESHOLDS)
@@ -1813,16 +2155,37 @@ class Storage:
         offline_incomplete = False
         offline_intervals_n = 0
         offline_seconds_total = 0
+        backfill_intervals_n = 0
+        backfill_seconds_total = 0
+        backfill_host_n = 0
+        no_data_host_n = 0
+        overflow_dropped = 0
+        overflow_host_n = 0
         for host in host_rows:
             host_offline = host.get("offline") or {}
             if not host_offline.get("complete", True):
                 offline_incomplete = True
-            count = int(host_offline.get("interval_count") or 0)
-            if count <= 0:
+            nodata = host_offline.get("no_data") or {}
+            filled = host_offline.get("backfill") or {}
+            count = int(nodata.get("interval_count") if nodata else host_offline.get("interval_count") or 0)
+            seconds = int(nodata.get("total_seconds") if nodata else host_offline.get("total_seconds") or 0)
+            bf_count = int(filled.get("interval_count") or 0)
+            bf_seconds = int(filled.get("total_seconds") or 0)
+            overflows = host_offline.get("overflows") or []
+            dropped = sum(int(item.get("dropped") or 0) for item in overflows)
+            if count <= 0 and bf_count <= 0 and not overflows:
                 continue
-            seconds = int(host_offline.get("total_seconds") or 0)
-            offline_intervals_n += count
-            offline_seconds_total += seconds
+            if count > 0:
+                no_data_host_n += 1
+                offline_intervals_n += count
+                offline_seconds_total += seconds
+            if bf_count > 0:
+                backfill_host_n += 1
+                backfill_intervals_n += bf_count
+                backfill_seconds_total += bf_seconds
+            if dropped:
+                overflow_host_n += 1
+                overflow_dropped += dropped
             offline_hosts.append(
                 {
                     "host_id": host.get("host_id"),
@@ -1831,12 +2194,18 @@ class Storage:
                     "interval_count": count,
                     "total_seconds": seconds,
                     "complete": bool(host_offline.get("complete", True)),
-                    "intervals": host_offline.get("intervals") or [],
+                    "intervals": (nodata.get("intervals") if nodata else host_offline.get("intervals")) or [],
+                    "no_data": nodata,
+                    "backfill": filled,
+                    "overflows": overflows,
                 }
             )
         offline_hosts.sort(
             key=lambda item: (
-                -int(item.get("total_seconds") or 0),
+                -(
+                    int(item.get("total_seconds") or 0)
+                    + int((item.get("backfill") or {}).get("total_seconds") or 0)
+                ),
                 str(item.get("host_id") or ""),
             )
         )
@@ -1876,8 +2245,27 @@ class Storage:
                 "interval_count": offline_intervals_n,
                 "total_seconds": offline_seconds_total,
                 "incomplete": offline_incomplete,
+                "no_data": {
+                    "label": "离线（无数据）",
+                    "host_count": no_data_host_n,
+                    "interval_count": offline_intervals_n,
+                    "total_seconds": offline_seconds_total,
+                },
+                "backfill": {
+                    "label": "断网（已补报）",
+                    "host_count": backfill_host_n,
+                    "interval_count": backfill_intervals_n,
+                    "total_seconds": backfill_seconds_total,
+                },
+                "overflows": {
+                    "host_count": overflow_host_n,
+                    "dropped": overflow_dropped,
+                },
                 "rule": (
-                    "超过 offline_seconds 秒没有上报记为离线，与监测台在线判定相同。"
+                    "实时页只显示「离线」：超过 offline_seconds 秒没有上报，中心看不出是机器停了还是网络断了。"
+                    "事后「离线（无数据）」是这段没有样本、也不会再补上；"
+                    "「断网（已补报）」是采集端把样本留在本机，恢复后按原来的采集时间补上的时段。"
+                    "补上的点参与平均、P95 和繁忙占比。闲忙仍只看 CPU 和加速卡。"
                     "主机第一次上报之前不算离线。历史上报被保留期删掉的部分无法回看。"
                 ),
                 "hosts": offline_hosts,

@@ -50,7 +50,12 @@ HOST_COLUMNS: List[ExportColumn] = [
     ExportColumn("address", "展示地址", "页面上的地址：手工地址、未停用的部署清单或 host_id 中的 IP", "无"),
     ExportColumn("group_name", "资源组", "中心侧资源组名称，未分组为空", "无"),
     ExportColumn("host_type", "主机类型", "cpu 或 gpu。gpu 表示带加速卡", "无"),
-    ExportColumn("online", "是否在线", "True 为在线，False 为离线。判定与页面相同", "无"),
+    ExportColumn(
+        "online",
+        "是否在线",
+        "True 为在线，False 为离线。这是实时状态：中断期间不区分机器停机和断网。事后的两种离线见时段统计",
+        "无",
+    ),
     ExportColumn("last_seen", "最近上报（Unix秒）", "最后一次上报的 Unix 时间戳", "Unix秒"),
     ExportColumn("cpu_percent", "CPU利用率（%）", "当前 CPU 利用率", "%"),
     ExportColumn("cpu_count", "CPU核数", "逻辑核数", "核"),
@@ -148,6 +153,30 @@ def period_columns() -> List[ExportColumn]:
         ExportColumn("sample_count", "样本数", "这一窗口里纳入统计的历史上报条数", "条"),
         ExportColumn("from_ts", "起始时间（Unix秒）", "实际有样本的起点，Unix 秒", "Unix秒"),
         ExportColumn("to_ts", "结束时间（Unix秒）", "实际有样本的终点，Unix 秒", "Unix秒"),
+        ExportColumn(
+            "offline_nodata_count",
+            "离线（无数据）段数",
+            "窗口内没有样本、之后也不会补上的段数。机器或采集端停了，或本地队列把样本丢掉了",
+            "段",
+        ),
+        ExportColumn(
+            "offline_nodata_seconds",
+            "离线（无数据）累计（秒）",
+            "上面这些段的累计时长。实时页在中断期间只显示「离线」，这里是事后能确定的空档",
+            "秒",
+        ),
+        ExportColumn(
+            "backfill_count",
+            "断网（已补报）段数",
+            "采集端当时还在采样，恢复后按原来的采集时间补上的段数",
+            "段",
+        ),
+        ExportColumn(
+            "backfill_seconds",
+            "断网（已补报）累计（秒）",
+            "补上的时段时长。这些样本和平时上报一样进入平均、P95 和繁忙占比",
+            "秒",
+        ),
     ]
     for key in PERIOD_METRIC_KEYS:
         label, unit, meaning = _PERIOD_METRIC_TEXT.get(key, (key, "", key))
@@ -223,6 +252,13 @@ def field_guide_text() -> str:
         "磁盘I/O利用率是设备忙着做 I/O 的时间百分比，类似 iostat 的 %util，取整盘中的最大值，限制在 0～100。磁盘没有稳定的额定带宽，所以不算「速率 / 额定」。",
         "采集端刚启动、还没有上一笔计数时，这三项为空。旧的历史上报没有这三项时，时段统计里也是空的，不影响原来的 CPU、内存和磁盘占用。",
         "闲忙（基本不用 / 高负荷）只看 CPU 和加速卡。内存、磁盘占用、磁盘读写都不进入闲忙。没有配置繁忙阈值的列，繁忙占比留空。",
+        "",
+        "实时页面在中断期间只写「离线」，指标列是「-」。中心当时看不出机器是停了还是网络断了。",
+        "恢复之后，历史分成两种，名字就用这两个：",
+        "「离线（无数据）」：机器或采集端停了，或者本机队列超过保留时间把样本丢掉了。这段没有样本，也不会再补上。",
+        "「断网（已补报）」：机器和采集端还在采样，样本先留在本机 data/spool，恢复后按原来的采集时间补上。图表和时段统计会被填上。",
+        "默认在本机保留 24 小时，可在设置页改「断网补报保留」。队列溢出会报给中心，丢掉的那段记成「离线（无数据）」，不是一声不响的空洞。",
+        "补上的点参与时段统计、导出和诊断报告，闲忙规则不变。趋势图悬停仍是上海时间；没有补上的空档数值是横线，并标明「离线（无数据）」。",
         "",
     ]
     lines.extend(_section_lines("一、主机快照 hosts.csv", HOST_COLUMNS))

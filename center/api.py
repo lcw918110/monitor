@@ -106,6 +106,52 @@ def parse_period_request(
     return None, window, busy, host_ids
 
 
+def _spool_hours(storage: Storage) -> int:
+    try:
+        hours = int(getattr(storage, "spool_retention_hours", 24) or 24)
+    except (TypeError, ValueError):
+        hours = 24
+    if hours < 1:
+        hours = 24
+    return hours
+
+
+def _prepare_sample(
+    payload: Any,
+    expected_token: str = "",
+    require_timestamp: bool = False,
+) -> Tuple[Optional[Tuple[int, Dict[str, Any]]], Optional[Dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        return _bad_request("JSON 根节点必须是对象"), None
+    for field in REQUIRED_FIELDS:
+        if field not in payload:
+            return _bad_request("缺少字段: %s" % field), None
+    if not payload.get("host_id"):
+        return _bad_request("host_id 不能为空"), None
+    if not isinstance(payload.get("system"), dict):
+        return _bad_request("system 必须是对象"), None
+    prepared = dict(payload)
+    for key in ("gpus", "npus", "gpu_processes", "accelerators"):
+        val = prepared.get(key, [])
+        if val is None:
+            prepared[key] = []
+        elif not isinstance(val, list):
+            return _bad_request("%s 必须是数组" % key), None
+    if expected_token and prepared.get("token") != expected_token:
+        return (401, {"ok": False, "error": "token 无效"}), None
+    if require_timestamp and prepared.get("timestamp") in (None, ""):
+        return _bad_request("补报缺少采集时间 timestamp"), None
+    prepared.pop("token", None)
+    from common.host_type import normalize_host_type, resolve_auto_host_type
+
+    host_type = normalize_host_type(prepared.get("host_type"))
+    if host_type == "auto":
+        has_cards = bool(prepared.get("accelerators") or prepared.get("npus") or prepared.get("gpus"))
+        host_type = resolve_auto_host_type(has_cards)
+    prepared["host_type"] = host_type
+    return None, prepared
+
+
 def handle_metrics_post(
     storage: Storage,
     body: bytes,
@@ -117,43 +163,88 @@ def handle_metrics_post(
     except (UnicodeDecodeError, json.JSONDecodeError):
         return _bad_request("请求体必须是合法 JSON")
 
+    error, prepared = _prepare_sample(payload, expected_token=expected_token)
+    if error:
+        return error
+    assert prepared is not None
+    status = storage.upsert_metric(prepared, remote_ip=remote_ip)
+    if status == "rejected":
+        return _bad_request("补报缺少采集时间 timestamp")
+    return 200, {
+        "ok": True,
+        "status": status,
+        "spool_retention_hours": _spool_hours(storage),
+    }
+
+
+def handle_metrics_batch(
+    storage: Storage,
+    body: bytes,
+    expected_token: str = "",
+    remote_ip: str = "",
+) -> Tuple[int, Dict[str, Any]]:
+    """补报一批样本。单次最多 100 条，避免断网恢复时把中心打满。"""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _bad_request("请求体必须是合法 JSON")
     if not isinstance(payload, dict):
         return _bad_request("JSON 根节点必须是对象")
-
-    for field in REQUIRED_FIELDS:
-        if field not in payload:
-            return _bad_request(f"缺少字段: {field}")
-
-    if not payload.get("host_id"):
-        return _bad_request("host_id 不能为空")
-
-    if not isinstance(payload.get("system"), dict):
-        return _bad_request("system 必须是对象")
-
-    for key in ("gpus", "npus", "gpu_processes", "accelerators"):
-        val = payload.get(key, [])
-        if val is None:
-            payload[key] = []
-        elif not isinstance(val, list):
-            return _bad_request("%s 必须是数组" % key)
-
-    if expected_token:
-        if payload.get("token") != expected_token:
-            return 401, {"ok": False, "error": "token 无效"}
-
-    payload = dict(payload)
-    payload.pop("token", None)
-
-    from common.host_type import normalize_host_type, resolve_auto_host_type
-
-    host_type = normalize_host_type(payload.get("host_type"))
-    if host_type == "auto":
-        has_cards = bool(payload.get("accelerators") or payload.get("npus") or payload.get("gpus"))
-        host_type = resolve_auto_host_type(has_cards)
-    payload["host_type"] = host_type
-
-    storage.upsert_metric(payload, remote_ip=remote_ip)
-    return 200, {"ok": True}
+    token = payload.get("token") or ""
+    if expected_token and token != expected_token:
+        return 401, {"ok": False, "error": "token 无效"}
+    samples = payload.get("samples") or []
+    overflows = payload.get("overflows") or []
+    if not isinstance(samples, list) or not isinstance(overflows, list):
+        return _bad_request("samples 和 overflows 必须是数组")
+    if len(samples) > 100:
+        return _bad_request("samples 不能超过 100")
+    if not samples and not overflows:
+        return _bad_request("没有要接收的样本或溢出")
+    host_id = str(payload.get("host_id") or "")
+    if not host_id and samples and isinstance(samples[0], dict):
+        host_id = str(samples[0].get("host_id") or "")
+    if overflows and not host_id:
+        return _bad_request("溢出事件缺少 host_id")
+    accepted = 0
+    duplicate = 0
+    rejected: List[Dict[str, Any]] = []
+    for sample in samples:
+        if isinstance(sample, dict) and expected_token and not sample.get("token"):
+            sample = dict(sample)
+            sample["token"] = token
+        error, prepared = _prepare_sample(
+            sample,
+            expected_token=expected_token,
+            require_timestamp=True,
+        )
+        stamp = None
+        if isinstance(sample, dict):
+            stamp = sample.get("timestamp")
+        if error:
+            rejected.append({"timestamp": stamp, "error": error[1].get("error")})
+            continue
+        assert prepared is not None
+        if "backfill" not in prepared:
+            prepared["backfill"] = True
+        status = storage.upsert_metric(prepared, remote_ip=remote_ip)
+        if status == "inserted":
+            accepted += 1
+        elif status == "duplicate":
+            duplicate += 1
+        else:
+            rejected.append({"timestamp": prepared.get("timestamp"), "error": "未入库"})
+    stored_overflows = 0
+    if overflows:
+        stored_overflows = storage.record_spool_overflows(host_id, overflows)
+    return 200, {
+        "ok": True,
+        "accepted": accepted,
+        "duplicate": duplicate,
+        "rejected": rejected,
+        "stored_overflows": stored_overflows,
+        "spool_retention_hours": _spool_hours(storage),
+    }
 
 
 def _query_flag(qs: Dict[str, List[str]], key: str) -> bool:
@@ -303,7 +394,11 @@ def _flatten_period_row(
     metrics: Dict[str, Any],
     accel_count: Any = None,
     accel_summary: Any = None,
+    offline: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    off = offline or {}
+    nodata = off.get("no_data") or {}
+    filled = off.get("backfill") or {}
     row: Dict[str, Any] = {
         "scope": scope,
         "host_id": host_id,
@@ -314,6 +409,10 @@ def _flatten_period_row(
         "sample_count": sample_count or 0,
         "from_ts": from_ts or "",
         "to_ts": to_ts or "",
+        "offline_nodata_count": nodata.get("interval_count", off.get("interval_count") or 0),
+        "offline_nodata_seconds": nodata.get("total_seconds", off.get("total_seconds") or 0),
+        "backfill_count": filled.get("interval_count") or 0,
+        "backfill_seconds": filled.get("total_seconds") or 0,
     }
     for metric in PERIOD_METRIC_KEYS:
         agg = (metrics or {}).get(metric) or {}
@@ -349,6 +448,7 @@ def handle_export_period_csv(
             cluster.get("metrics") or {},
             cluster.get("accel_count") or payload.get("accel_count"),
             cluster.get("accel_summary") or payload.get("accel_summary"),
+            payload.get("offline") or {},
         )
     ]
     for host in payload.get("hosts") or []:
@@ -364,6 +464,7 @@ def handle_export_period_csv(
                 host.get("metrics") or {},
                 host.get("accel_count"),
                 host.get("accel_summary"),
+                host.get("offline") or {},
             )
         )
     return 200, write_labeled_csv(rows, period_columns())

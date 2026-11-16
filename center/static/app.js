@@ -743,18 +743,24 @@
     });
   }
 
-  function trendChart(title, points, color, kind) {
+  function trendChart(title, points, color, kind, gapSeconds) {
     const id = "trend" + ++trendSeq;
     const series = (points || []).map((point) => {
-      if (!point) return { ts: null, value: null };
+      if (!point) return { ts: null, value: null, backfill: false };
       const raw = point.value;
       const num = raw === null || raw === undefined || raw === "" ? null : Number(raw);
       return {
         ts: point.ts == null ? null : Number(point.ts),
         value: num === null || Number.isNaN(num) ? null : num,
+        backfill: !!point.backfill,
       };
     });
-    trendCharts[id] = { title: title, points: series, kind: kind || "" };
+    trendCharts[id] = {
+      title: title,
+      points: series,
+      kind: kind || "",
+      gapSeconds: gapSeconds || 90,
+    };
     const valued = series.filter(
       (point) => point.ts != null && !Number.isNaN(point.ts) && point.value != null
     );
@@ -848,11 +854,14 @@
     const rect = svg.getBoundingClientRect();
     if (!rect.width) return;
     let ratio = (ev.clientX - rect.left) / rect.width;
-    const hit = UX.nearestTrendPoint(spec.points, ratio);
+    const hit = UX.nearestTrendPoint(spec.points, ratio, spec.gapSeconds);
     if (!hit) {
       tip.hidden = true;
       return;
     }
+    let note = "";
+    if (hit.gap === "no_data") note = "离线（无数据）";
+    else if (hit.backfill) note = "断网（已补报）";
     tip.innerHTML =
       '<div class="chart-tip-time">' +
       escapeHtml(fmtShanghai(hit.ts)) +
@@ -860,6 +869,7 @@
       escapeHtml(spec.title) +
       " " +
       escapeHtml(formatTrendValue(hit.value, spec.kind)) +
+      (note ? " · " + escapeHtml(note) : "") +
       "</div>";
     tip.hidden = false;
     const pad = 14;
@@ -1215,44 +1225,67 @@
     return escapeHtml(text);
   }
 
+  function offlinePart(block, fallbackCount, fallbackSeconds) {
+    const part = block || {};
+    return {
+      count: part.interval_count != null ? part.interval_count : fallbackCount || 0,
+      seconds: part.total_seconds != null ? part.total_seconds : fallbackSeconds || 0,
+      intervals: part.intervals || [],
+    };
+  }
+
   function renderOfflineOverview(data) {
     const off = (data && data.offline) || {};
     const threshold = off.offline_seconds != null ? off.offline_seconds : 90;
     const hosts = off.hosts || [];
     const total = off.host_total != null ? off.host_total : (data && data.host_count) || 0;
+    const nodata = offlinePart(off.no_data, off.interval_count, off.total_seconds);
+    const filled = offlinePart(off.backfill, 0, 0);
     let html = '<div class="offline-overview">';
     html += '<div class="section-title">离线概览</div>';
     html +=
-      '<p class="muted">超过 ' +
+      '<p class="muted">实时页面在中断期间只显示「离线」（超过 ' +
       escapeHtml(String(threshold)) +
-      " 秒没有上报记为离线，和监测台的在线判定是同一条线。只看已有历史上报，第一次上报之前不算离线。</p>";
+      " 秒没有上报）。事后这里分开计：「离线（无数据）」是没有样本、也不会再补上；「断网（已补报）」是本机留存后按原采集时间补上的时段。第一次上报之前不算。</p>";
     if (!hosts.length) {
-      html += '<p class="empty">这一时段没有离线。</p>';
+      html += '<p class="empty">这一时段没有离线（无数据），也没有断网（已补报）。</p>';
     } else {
       const shownHosts = hosts.slice(0, 12);
       html +=
-        "<p><strong>离线 " +
+        "<p><strong>离线（无数据） " +
+        (nodata.count || 0) +
+        " 段</strong> · 累计 " +
+        fmtDuration(nodata.seconds) +
+        " · <strong>断网（已补报） " +
+        (filled.count || 0) +
+        " 段</strong> · 累计 " +
+        fmtDuration(filled.seconds) +
+        " · " +
         hosts.length +
-        " 台</strong> / " +
+        " / " +
         total +
-        " 台 · " +
-        (off.interval_count || 0) +
-        " 段 · 累计 " +
-        fmtDuration(off.total_seconds) +
-        "</p>";
+        " 台</p>";
       html +=
-        '<table class="period-stats-table offline-table"><thead><tr><th>主机</th><th>次数</th><th>累计</th><th>离线时段</th></tr></thead><tbody>';
+        '<table class="period-stats-table offline-table"><thead><tr><th>主机</th><th>离线（无数据）</th><th>断网（已补报）</th></tr></thead><tbody>';
       shownHosts.forEach((h) => {
         const label = h.address || h.hostname || h.host_id || "-";
+        const hostGap = offlinePart(h.no_data, h.interval_count, h.total_seconds);
+        const hostFill = offlinePart(h.backfill, 0, 0);
         html +=
           "<tr><td>" +
           escapeHtml(label) +
           "</td><td>" +
-          (h.interval_count || 0) +
+          (hostGap.count || 0) +
+          " 段 · " +
+          fmtDuration(hostGap.seconds) +
+          "<br>" +
+          formatOfflineRanges(hostGap.intervals.length ? hostGap.intervals : h.intervals) +
           "</td><td>" +
-          fmtDuration(h.total_seconds) +
-          "</td><td>" +
-          formatOfflineRanges(h.intervals) +
+          (hostFill.count || 0) +
+          " 段 · " +
+          fmtDuration(hostFill.seconds) +
+          "<br>" +
+          formatOfflineRanges(hostFill.intervals) +
           "</td></tr>";
       });
       html += "</tbody></table>";
@@ -1263,6 +1296,13 @@
           " 台，点左侧主机可看该机全部时段。</p>";
       }
     }
+    const overflow = off.overflows || {};
+    if (overflow.dropped) {
+      html +=
+        '<p class="muted">本地队列溢出丢掉 ' +
+        escapeHtml(String(overflow.dropped)) +
+        " 条。这些时段没有样本，记在「离线（无数据）」，不是静默空档。</p>";
+    }
     if (off.incomplete) {
       html += '<p class="muted">有主机的历史上报达到读取上限，窗口末尾是否离线未判断。</p>';
     }
@@ -1270,33 +1310,57 @@
     return html;
   }
 
+  function renderSpanList(intervals) {
+    let html = '<ul class="offline-ranges">';
+    (intervals || []).forEach((span) => {
+      const end = span.until_window_end ? "窗口结束" : fmtTime(span.to_ts);
+      html +=
+        "<li>" +
+        escapeHtml(fmtTime(span.from_ts) + " ~ " + end) +
+        " · " +
+        fmtDuration(span.seconds) +
+        "</li>";
+    });
+    html += "</ul>";
+    return html;
+  }
+
   function renderHostOffline(offline) {
     if (!offline) {
       return '<p class="muted">离线时段随主机列表一起返回。若这里是空的，先等左侧时段统计加载完。</p>';
     }
-    const intervals = offline.intervals || [];
+    const nodata = offlinePart(offline.no_data, offline.interval_count, offline.total_seconds);
+    const filled = offlinePart(offline.backfill, 0, 0);
+    if (!nodata.intervals.length && offline.intervals && offline.intervals.length && !offline.no_data) {
+      nodata.intervals = offline.intervals;
+    }
     let html = '<div class="offline-overview">';
     html += '<div class="section-title">离线时段</div>';
-    if (!intervals.length) {
-      html += '<p class="empty">这一时段该机没有离线。</p>';
+    if (!nodata.count && !filled.count) {
+      html += '<p class="empty">这一时段该机没有离线（无数据），也没有断网（已补报）。</p>';
     } else {
       html +=
-        "<p><strong>离线 " +
-        (offline.interval_count || intervals.length) +
+        "<p><strong>离线（无数据） " +
+        (nodata.count || 0) +
         " 段</strong> · 累计 " +
-        fmtDuration(offline.total_seconds) +
+        fmtDuration(nodata.seconds) +
         "</p>";
-      html += "<ul class=\"offline-ranges\">";
-      intervals.forEach((span) => {
-        const end = span.until_window_end ? "窗口结束" : fmtTime(span.to_ts);
-        html +=
-          "<li>" +
-          escapeHtml(fmtTime(span.from_ts) + " ~ " + end) +
-          " · " +
-          fmtDuration(span.seconds) +
-          "</li>";
-      });
-      html += "</ul>";
+      if (nodata.intervals.length) html += renderSpanList(nodata.intervals);
+      html +=
+        "<p><strong>断网（已补报） " +
+        (filled.count || 0) +
+        " 段</strong> · 累计 " +
+        fmtDuration(filled.seconds) +
+        "</p>";
+      if (filled.intervals.length) html += renderSpanList(filled.intervals);
+    }
+    const overflows = offline.overflows || [];
+    if (overflows.length) {
+      const dropped = overflows.reduce((sum, item) => sum + (Number(item.dropped) || 0), 0);
+      html +=
+        '<p class="muted">本地队列溢出丢掉 ' +
+        dropped +
+        " 条，记在「离线（无数据）」。</p>";
     }
     if (offline.complete === false) {
       html += '<p class="muted">历史上报达到读取上限，窗口末尾是否离线未判断。</p>';
@@ -1478,7 +1542,15 @@
     return (pts || []).map((point) => ({
       ts: point && point.ts,
       value: pick(point || {}),
+      backfill: !!(point && point.backfill),
     }));
+  }
+
+  function chartGapSeconds() {
+    const off = periodUtilData && periodUtilData.offline;
+    const raw = off && off.offline_seconds;
+    const num = Number(raw);
+    return num > 0 ? num : 90;
   }
 
   function chartCard(title, pts, color, kind, pick) {
@@ -1486,7 +1558,7 @@
       '<div class="chart-card"><div class="title">' +
       escapeHtml(title) +
       "</div>" +
-      trendChart(title, chartPoints(pts, pick), color, kind) +
+      trendChart(title, chartPoints(pts, pick), color, kind, chartGapSeconds()) +
       "</div>"
     );
   }

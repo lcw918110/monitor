@@ -140,7 +140,8 @@ cat > "$CFG" <<EOF
   "host_type": "${HOST_TYPE}",
   "token": "${TOKEN}",
   "interval_seconds": ${INTERVAL},
-  "disk_path": "/"
+  "disk_path": "/",
+  "spool_retention_hours": 24
 }
 EOF
 echo "已写入 $CFG"

@@ -94,7 +94,7 @@ GROUPS: List[Dict[str, Any]] = [
         "id": "retention",
         "anchor": "lead",
         "title": "保留与清理",
-        "description": "决定历史上报留多久、多久算离线，以及清理跑多勤。常用的保留天数在最前。",
+        "description": "决定历史上报留多久、多久算离线、断网时本机样本留多久，以及清理跑多勤。",
         "fields": [
             _num(
                 "retention_days",
@@ -108,11 +108,20 @@ GROUPS: List[Dict[str, Any]] = [
             _num(
                 "offline_seconds",
                 "离线判定",
-                "用途：多久没有上报就把主机当成离线。单位：秒。影响：监测台在线/离线、诊断报告里离线主机不计入基本不用，以及时段统计的离线次数和离线时段（两次上报相隔超过这条线才记一段）。建议大于采样间隔，且至少 15 秒。",
+                "用途：多久没有上报就把主机当成离线。单位：秒。影响：监测台实时状态只显示「离线」，看不出是机器停了还是网络断了；也决定时段里一段空档要多长才记。建议大于采样间隔，且至少 15 秒。诊断里当前离线的主机不计入基本不用。",
                 90,
                 "秒",
                 15,
                 86400,
+            ),
+            _num(
+                "spool_retention_hours",
+                "断网补报保留",
+                "用途：采集端送不出上报时，把样本留在本机 data/spool，网络恢复后按原来的采集时间补报。单位：小时。影响：超过这个时间仍送不出去就丢掉最旧的样本，并向中心报一笔溢出，这段记为「离线（无数据）」而不是悄悄空着。默认 24 小时。机器停机或磁盘没了，这段补不回来，同样是「离线（无数据）」。实时页面在中断期间只显示「离线」。成功上报后，中心把这个小时数下发给采集端。",
+                24,
+                "小时",
+                1,
+                168,
             ),
             _num(
                 "cleanup_interval_seconds",
@@ -448,7 +457,7 @@ GROUPS: List[Dict[str, Any]] = [
             _field(
                 "token",
                 "Agent 上报 Token",
-                "用途：Agent 上报口令。影响：只校验 POST /api/v1/metrics，不能用来改设置，也不是网页登录。留空的输入框表示不修改；要清空请点恢复默认，清空后上报不再校验。单位：无。保存后接口不回显明文。写在 center.json。",
+                "用途：Agent 上报口令。影响：只校验 POST /api/v1/metrics 和补报 POST /api/v1/metrics/batch，不能用来改设置，也不是网页登录。留空的输入框表示不修改；要清空请点恢复默认，清空后上报不再校验。单位：无。保存后接口不回显明文。写在 center.json。",
                 "secret",
                 "",
                 placeholder="留空表示不修改",
@@ -554,6 +563,7 @@ def default_center_config() -> Dict[str, Any]:
         "data_dir": "data",
         "token": "",
         "offline_seconds": 90,
+        "spool_retention_hours": 24,
         "retention_days": 7,
         "cleanup_interval_seconds": 3600,
         "anomaly": anomaly,
@@ -744,6 +754,7 @@ def _is_integral_field(field: Dict[str, Any]) -> bool:
     return key in (
         "retention_days",
         "offline_seconds",
+        "spool_retention_hours",
         "cleanup_interval_seconds",
         "port",
         "report.min_samples",
@@ -910,6 +921,10 @@ class CenterRuntime:
     def agent_token(self) -> str:
         with self._lock:
             return str(self.effective.get("token") or "")
+
+    def spool_retention_hours(self) -> int:
+        with self._lock:
+            return _cfg_int(self.effective.get("spool_retention_hours"), 24)
 
     def busy_thresholds(self) -> Dict[str, float]:
         return period_util_thresholds(self.period_util())
@@ -1117,6 +1132,9 @@ class CenterRuntime:
         if self.storage is not None:
             self.storage.retention_days = _cfg_int(cfg.get("retention_days"), 7)
             self.storage.offline_seconds = _cfg_int(cfg.get("offline_seconds"), 90)
+            self.storage.spool_retention_hours = _cfg_int(
+                cfg.get("spool_retention_hours"), 24
+            )
         if self.cleanup is not None:
             self.cleanup.interval = _cfg_int(cfg.get("cleanup_interval_seconds"), 3600)
         if self.scheduler is not None:

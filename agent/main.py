@@ -5,7 +5,7 @@ import json
 import os
 import socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent import __version__ as AGENT_VERSION
 from agent.metrics.accelerators import (
@@ -15,6 +15,16 @@ from agent.metrics.accelerators import (
 )
 from agent.metrics.system import collect_system
 from agent.sender import send_metrics
+from agent.spool import (
+    Spool,
+    apply_flush_response,
+    batch_url_for,
+    build_flush_body,
+    clamp_batch_size,
+    parse_retention_hours,
+    resolve_spool_dir,
+    retention_hours_from_body,
+)
 from common.host_type import normalize_host_type, resolve_auto_host_type
 from common.validate import validate_agent_config
 
@@ -28,6 +38,7 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
         "token": "",
         "interval_seconds": 15,
         "disk_path": "/",
+        "spool_retention_hours": 24,
     }
     if path and os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -83,22 +94,74 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def run_loop(cfg: Dict[str, Any]) -> None:
+def open_spool(cfg: Dict[str, Any], config_path: Optional[str]) -> Spool:
+    hours = parse_retention_hours(cfg.get("spool_retention_hours"), 24)
+    cap = cfg.get("spool_max_samples")
+    return Spool(
+        resolve_spool_dir(cfg, config_path),
+        retention_hours=hours,
+        max_samples=cap if cap not in (None, "") else None,
+        batch_size=clamp_batch_size(cfg.get("spool_batch_size") or 80),
+    )
+
+
+def submit_payload(
+    cfg: Dict[str, Any],
+    payload: Dict[str, Any],
+    spool: Spool,
+    send_fn: Any = None,
+) -> Tuple[int, str, str]:
+    """先送当前样本。失败则入队。成功则最多再补一批，避免把积压一次打满中心。"""
+    sender = send_fn or send_metrics
+    url = cfg.get("center_url") or "http://127.0.0.1:8080/api/v1/metrics"
+    code, body = sender(url, payload)
+    if 200 <= int(code) < 300:
+        hours = retention_hours_from_body(body)
+        if hours is not None:
+            spool.set_retention_hours(hours)
+        _flush_one_batch(cfg, spool, sender, payload)
+        return int(code), body, "sent"
+    state = spool.enqueue(payload)
+    return int(code), body, state
+
+
+def _flush_one_batch(cfg: Dict[str, Any], spool: Spool, sender: Any, payload: Dict[str, Any]) -> None:
+    token = str(cfg.get("token") or payload.get("token") or "")
+    built = build_flush_body(
+        spool,
+        token=token,
+        host_id=str(payload.get("host_id") or ""),
+        limit=spool.batch_size,
+    )
+    if built is None:
+        return
+    body, stamps = built
+    code, resp = sender(batch_url_for(cfg.get("center_url") or ""), body)
+    apply_flush_response(spool, stamps, code, resp)
+    if not (200 <= int(code) < 300):
+        print(
+            "[%s] 补报未完成 code=%s 队列仍保留"
+            % (time.strftime("%H:%M:%S"), code)
+        )
+
+
+def run_loop(cfg: Dict[str, Any], config_path: Optional[str] = None) -> None:
     url = cfg.get("center_url") or "http://127.0.0.1:8080/api/v1/metrics"
     interval = max(5, int(cfg.get("interval_seconds") or 15))
     ident = resolve_identity(cfg)
+    spool = open_spool(cfg, config_path)
     print(
-        "Agent 启动: host_id=%s → %s (间隔 %ss)"
-        % (ident["host_id"], url, interval)
+        "Agent 启动: host_id=%s → %s (间隔 %ss，断网样本留 %sh)"
+        % (ident["host_id"], url, interval, spool.retention_hours)
     )
     while True:
         started = time.time()
         try:
             payload = build_payload(cfg)
-            code, body = send_metrics(url, payload)
+            code, body, state = submit_payload(cfg, payload, spool)
             sysinfo = payload.get("system") or {}
             acc = payload.get("accelerators") or []
-            if 200 <= code < 300:
+            if state == "sent":
                 print(
                     "[%s] 上报成功 type=%s arch=%s cpu=%.1f%% cores=%s cards=%s"
                     % (
@@ -110,9 +173,14 @@ def run_loop(cfg: Dict[str, Any]) -> None:
                         len(acc),
                     )
                 )
+            elif state == "overflow":
+                print(
+                    "[%s] 上报失败且本地队列已满，最旧样本已丢弃 code=%s"
+                    % (time.strftime("%H:%M:%S"), code)
+                )
             else:
                 print(
-                    "[%s] 上报失败 code=%s body=%s"
+                    "[%s] 上报失败，已写入本地队列 code=%s body=%s"
                     % (time.strftime("%H:%M:%S"), code, body[:200])
                 )
         except Exception as exc:  # noqa: BLE001
@@ -151,15 +219,16 @@ def main(argv: Optional[List[str]] = None) -> None:
             print("[配置错误] %s" % err)
         raise SystemExit(2)
 
+    spool = open_spool(cfg, config_path)
     if args.once:
         payload = build_payload(cfg)
-        code, body = send_metrics(cfg["center_url"], payload)
-        print("once code=%s body=%s" % (code, body))
-        if not (200 <= code < 300):
+        code, body, state = submit_payload(cfg, payload, spool)
+        print("once code=%s body=%s spool=%s" % (code, body, state))
+        if state != "sent":
             raise SystemExit(1)
         return
 
-    run_loop(cfg)
+    run_loop(cfg, config_path)
 
 
 if __name__ == "__main__":
