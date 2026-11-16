@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.10.0**
+当前版本：**v1.11.0**
 
 运行环境：
 
@@ -20,7 +20,7 @@
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本。寒武纪 `cnmon info` 只按整行 `Card N` 分卡：利用率取 `MLU Average`，温度优先 Chip、其次 Board、否则取 Cluster 最大值，显存只认 Physical Memory Usage，功耗取 Power 的 Usage，健康取 Health State 下面的 Device（`Good` 视为正常；没有这一段就留空）。各厂商先读结构化输出（`nvidia-smi` CSV、`rocm-smi` / `amd-smi` JSON；`cnmon info -j` 只在临时目录里跑，避免在工作目录留下 `cnmon_info.json`），再退回文本。工具失败的 stderr / 退出码写进卡的 note。`nvidia-smi` 版本看 `-h` 抬头，不用会在 535/470 上失败的 `--version`。同一块卡按 PCI 总线号合并
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）。CPU 负载看 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。读不到负载时上报 null，页面显示 `-`，不写成 0
-- **详情统计**：监测台分 **「实时监控」** / **「时段统计」** / **「使用诊断」** 页签。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。选定时间范围后，左侧先给出离线台数和离线时段（按已有上报和离线阈值，不另加传感器）；点主机只换右侧详情。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
+- **详情统计**：顶栏一项一项进去：**实时监控**、**主机**、**时段统计**、**使用诊断**，再加上运维和设置。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总，包含磁盘读取、写入和磁盘 I/O 利用率（容量占用仍是原来的磁盘占用率）。选定时间范围后，主机表上方给出离线台数和离线时段（按已有上报和离线阈值，不另加传感器）；点主机只换右侧汇总和下方趋势，悬停趋势可看上海时间和数值。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
 - **隐藏与删除**：详情「从列表隐藏」后，该机退出列表、在线/离线统计、集群时段汇总和之后的诊断报告，历史上报仍在，可从「已隐藏」恢复。彻底删除要输入 `delete`（`DELETE /api/v1/hosts/{id}?confirm=delete`），连同该机历史一起去掉。可选同时删掉部署清单里 host_id 或 IP 对得上的目标。已隐藏的主机再上报也不会自动出现
@@ -297,8 +297,10 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/period-stats` | 集群时段利用（每主机 + 样本加权汇总） |
 | GET | `/api/v1/stats` | 集群即时统计 |
 | GET | `/api/v1/anomaly` | 异常判定汇总 |
-| GET | `/api/v1/export/hosts.csv` | 导出当前主机快照 |
-| GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表 |
+| GET | `/api/v1/export/hosts.csv` | 导出当前主机快照。表头为中文；`hosts.json` 仍是英文键 |
+| GET | `/api/v1/export/hosts.json` | 同上快照，英文键，给程序用 |
+| GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表，中文表头 |
+| GET | `/api/v1/export/field-guide.txt` | 汉字字段说明。另有 `hosts-fields.csv`、`period-stats-fields.csv`、`rankings-fields.csv` |
 | GET | `/api/v1/reports/preview?period=day\|week\|month` | 诊断报告时间窗预览（不计算） |
 | POST | `/api/v1/reports/generate` | 生成日/周/月诊断报告；同一窗口覆盖已有一行。正文可带 `window_date` 或 `as_of` |
 | GET | `/api/v1/reports` | 已保存的诊断报告列表 |
@@ -337,7 +339,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 文档
 
-给客户机房交接时，用下面三份对外手册。它们按现行 v1.10.0 编写，步骤与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致：部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册写了现行页面：时段统计的离线概览和只换右侧详情、无上报诊断仍入库并标「无数据」、部署清单的确认与删除范围、设置页首的三处入口。
+给客户机房交接时，用下面三份对外手册。它们按现行 v1.11.0 编写，步骤与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致：部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册写了现行页面：时段统计的离线概览和只换右侧详情、无上报诊断仍入库并标「无数据」、部署清单的确认与删除范围、设置页首的三处入口。
 
 | 文档 | 说明 |
 | --- | --- |

@@ -266,7 +266,8 @@ class ManagementGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.db = os.path.join(self.tmp.name, "monitor.db")
-        self.storage = Storage(self.db, offline_seconds=90, retention_days=40)
+        # 用例里的上报和 as_of 停在 2026-10。保留期按「现在」裁剪，天数要盖住那段日期。
+        self.storage = Storage(self.db, offline_seconds=90, retention_days=400)
         self.admin = AdminSettingsStore(self.db)
         set_push_store(self.admin)
         self.httpd = ThreadingHTTPServer(

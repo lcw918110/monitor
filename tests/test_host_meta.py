@@ -306,7 +306,7 @@ class HostMetaTests(unittest.TestCase):
         self.assertNotIn("host-10-1-0-11", blob)
         _, csv_text = api_mod.handle_export_csv(self.storage)
         self.assertNotIn("host-10-1-0-11", csv_text)
-        self.assertIn("owner", csv_text.splitlines()[0])
+        self.assertIn("负责人", csv_text.splitlines()[0])
 
         # 再上报也不会自动回到列表
         _post(self.storage, "host-10-1-0-11", self.now + 10, primary_ip="10.1.0.11")
@@ -473,8 +473,8 @@ class HostMetaTests(unittest.TestCase):
             self.storage, payload["report"]["id"]
         )
         header = csv_payload["csv"].splitlines()[0]
-        self.assertIn("owner", header)
-        self.assertIn("purpose", header)
+        self.assertIn("负责人", header)
+        self.assertIn("用途", header)
         self.assertIn("甲", csv_payload["csv"])
         self.assertNotIn("gone-box", csv_payload["csv"])
 

@@ -189,6 +189,33 @@ class IdleThresholdTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("样本不足", reason)
 
+    def test_disk_io_does_not_enter_idle_or_high_load(self) -> None:
+        host = _host(1.0, 0.0)
+        host["metrics"]["disk_percent"] = {
+            "avg": 99,
+            "p95": 99,
+            "max": 99,
+            "busy_ratio": 1,
+            "sample_count": 20,
+        }
+        host["metrics"]["disk_io_util_percent"] = {
+            "avg": 99,
+            "p95": 100,
+            "max": 100,
+            "busy_ratio": 1,
+            "sample_count": 20,
+        }
+        host["metrics"]["disk_read_mbps"] = {
+            "avg": 800,
+            "p95": 900,
+            "max": 1000,
+            "busy_ratio": None,
+            "sample_count": 20,
+        }
+        ok, _reason = idle_status(host)
+        self.assertTrue(ok)
+        self.assertFalse(high_load_reasons(host))
+
     def test_high_load_busy_or_p95(self) -> None:
         self.assertTrue(high_load_reasons(_host(50, 0.40, cpu_p95=70)))
         self.assertFalse(high_load_reasons(_host(50, 0.399, cpu_p95=84.9)))
@@ -354,7 +381,8 @@ class GenerateStoreReadTests(unittest.TestCase):
         code, csv_payload = reports_mod.handle_report_csv(self.storage, report["id"])
         self.assertEqual(code, 200)
         self.assertIn("idle-1", csv_payload["csv"])
-        self.assertIn("fullest_mount", csv_payload["csv"])
+        self.assertIn("最满挂载", csv_payload["csv"])
+        self.assertIn("/data", csv_payload["csv"])
 
     def test_month_does_not_stitch_saved_day_report(self) -> None:
         self.storage.save_diagnostic_report(
@@ -419,7 +447,8 @@ class HttpReportTests(unittest.TestCase):
             with urlopen(base + "/") as resp:
                 page = resp.read().decode("utf-8")
             self.assertIn("使用诊断", page)
-            self.assertIn("tabBtnReports", page)
+            self.assertIn('data-shell="reports"', page)
+            self.assertIn('id="viewReports"', page)
             self.assertIn("reportWindowDate", page)
             self.assertIn("reportScheduleNote", page)
         finally:

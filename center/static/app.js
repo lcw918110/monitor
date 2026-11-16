@@ -93,6 +93,7 @@
     periodUtilBody: document.getElementById("periodUtilBody"),
     periodDetailTitle: document.getElementById("periodDetailTitle"),
     periodDetailBody: document.getElementById("periodDetailBody"),
+    periodCharts: document.getElementById("periodCharts"),
     viewRealtime: document.getElementById("viewRealtime"),
     viewPeriod: document.getElementById("viewPeriod"),
     viewReports: document.getElementById("viewReports"),
@@ -615,7 +616,7 @@
     const map = { app: "cpu", npu: "gpu" };
     const nt = map[t] || t || "cpu";
     if (nt === "gpu") return '<span class="tag gpu">GPU</span>';
-    if (nt === "auto") return '<span class="tag auto">auto</span>';
+    if (nt === "auto") return '<span class="tag auto">自动</span>';
     return '<span class="tag cpu">CPU</span>';
   }
 
@@ -690,31 +691,198 @@
     return metricSpan(Number(v).toFixed(0) + "°C", levelHi(v, warn, crit));
   }
 
-  function sparkline(values, color) {
-    const nums = (values || [])
-      .map((v) => (v === null || v === undefined ? null : Number(v)))
-      .filter((v) => v !== null && !Number.isNaN(v));
-    if (nums.length < 2) {
-      return '<svg viewBox="0 0 100 40" preserveAspectRatio="none"><text x="8" y="24" fill="#8b9bb0" font-size="10">暂无足够历史点</text></svg>';
+  const trendCharts = {};
+  let trendSeq = 0;
+
+  function fmtShanghai(ts) {
+    if (ts === null || ts === undefined || Number.isNaN(Number(ts))) return "-";
+    try {
+      const parts = new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).formatToParts(new Date(Number(ts) * 1000));
+      const pick = (type) => {
+        const hit = parts.find((part) => part.type === type);
+        return hit ? hit.value : "";
+      };
+      return (
+        pick("year") +
+        "-" +
+        pick("month") +
+        "-" +
+        pick("day") +
+        " " +
+        pick("hour") +
+        ":" +
+        pick("minute") +
+        ":" +
+        pick("second")
+      );
+    } catch (e) {
+      return fmtTime(ts);
     }
-    const min = Math.min(...nums);
-    const max = Math.max(...nums);
-    const span = max - min || 1;
-    const pts = nums
-      .map((v, i) => {
-        const x = (i / (nums.length - 1)) * 100;
-        const y = 36 - ((v - min) / span) * 28;
-        return x.toFixed(2) + "," + y.toFixed(2);
-      })
-      .join(" ");
-    return (
-      '<svg viewBox="0 0 100 40" preserveAspectRatio="none">' +
-      '<polyline fill="none" stroke="' +
-      color +
-      '" stroke-width="1.8" points="' +
-      pts +
-      '" /></svg>'
+  }
+
+  function formatTrendValue(value, kind) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+    if (kind === "percent") return fmtPct(value);
+    if (kind === "mbps") return fmtMbps(value) + " Mbps";
+    if (kind === "temp") return Number(value).toFixed(0) + "°C";
+    return fmtStatNum(value, "");
+  }
+
+  function resetTrendCharts() {
+    Object.keys(trendCharts).forEach((key) => {
+      delete trendCharts[key];
+    });
+  }
+
+  function trendChart(title, points, color, kind) {
+    const id = "trend" + ++trendSeq;
+    const series = (points || []).map((point) => {
+      if (!point) return { ts: null, value: null };
+      const raw = point.value;
+      const num = raw === null || raw === undefined || raw === "" ? null : Number(raw);
+      return {
+        ts: point.ts == null ? null : Number(point.ts),
+        value: num === null || Number.isNaN(num) ? null : num,
+      };
+    });
+    trendCharts[id] = { title: title, points: series, kind: kind || "" };
+    const valued = series.filter(
+      (point) => point.ts != null && !Number.isNaN(point.ts) && point.value != null
     );
+    if (!valued.length) {
+      return (
+        '<div class="chart-plot" data-trend-id="' +
+        id +
+        '"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><text x="4" y="24" fill="#8b9bb0" font-size="8">暂无历史点</text></svg></div>'
+      );
+    }
+    let t0 = valued[0].ts;
+    let t1 = valued[0].ts;
+    valued.forEach((point) => {
+      if (point.ts < t0) t0 = point.ts;
+      if (point.ts > t1) t1 = point.ts;
+    });
+    const spanT = t1 - t0;
+    const nums = valued.map((point) => point.value);
+    const min = Math.min.apply(null, nums);
+    const max = Math.max.apply(null, nums);
+    const span = max - min || 1;
+    const timed = series.filter((point) => point.ts != null && !Number.isNaN(point.ts));
+    const segments = [];
+    let current = [];
+    timed.forEach((point, index) => {
+      if (point.value == null) {
+        if (current.length) segments.push(current);
+        current = [];
+        return;
+      }
+      const x = spanT > 0 ? ((point.ts - t0) / spanT) * 100 : timed.length <= 1 ? 50 : (index / (timed.length - 1)) * 100;
+      const y = 36 - ((point.value - min) / span) * 28;
+      current.push(x.toFixed(2) + "," + y.toFixed(2));
+    });
+    if (current.length) segments.push(current);
+    let marks = "";
+    segments.forEach((seg) => {
+      if (seg.length === 1) {
+        const xy = seg[0].split(",");
+        marks +=
+          '<circle cx="' +
+          xy[0] +
+          '" cy="' +
+          xy[1] +
+          '" r="1.3" fill="' +
+          color +
+          '" />';
+        return;
+      }
+      marks +=
+        '<polyline fill="none" stroke="' +
+        color +
+        '" stroke-width="1.6" points="' +
+        seg.join(" ") +
+        '" />';
+    });
+    return (
+      '<div class="chart-plot" data-trend-id="' +
+      id +
+      '"><svg viewBox="0 0 100 40" preserveAspectRatio="none">' +
+      marks +
+      "</svg></div>"
+    );
+  }
+
+  function ensureTrendTip() {
+    let tip = document.getElementById("trendTip");
+    if (tip) return tip;
+    tip = document.createElement("div");
+    tip.id = "trendTip";
+    tip.className = "chart-tip";
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    return tip;
+  }
+
+  function hideTrendTip() {
+    const tip = document.getElementById("trendTip");
+    if (tip) tip.hidden = true;
+  }
+
+  function showTrendTip(plot, ev) {
+    const spec = trendCharts[plot.getAttribute("data-trend-id")];
+    const tip = ensureTrendTip();
+    if (!spec || !UX.nearestTrendPoint) {
+      tip.hidden = true;
+      return;
+    }
+    const svg = plot.querySelector("svg");
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    let ratio = (ev.clientX - rect.left) / rect.width;
+    const hit = UX.nearestTrendPoint(spec.points, ratio);
+    if (!hit) {
+      tip.hidden = true;
+      return;
+    }
+    tip.innerHTML =
+      '<div class="chart-tip-time">' +
+      escapeHtml(fmtShanghai(hit.ts)) +
+      '</div><div class="chart-tip-value">' +
+      escapeHtml(spec.title) +
+      " " +
+      escapeHtml(formatTrendValue(hit.value, spec.kind)) +
+      "</div>";
+    tip.hidden = false;
+    const pad = 14;
+    let left = ev.clientX + pad;
+    let top = ev.clientY + pad;
+    const box = tip.getBoundingClientRect();
+    if (left + box.width > window.innerWidth - 8) left = ev.clientX - box.width - pad;
+    if (top + box.height > window.innerHeight - 8) top = ev.clientY - box.height - pad;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+
+  function bindTrendHover() {
+    if (bindTrendHover.bound) return;
+    bindTrendHover.bound = true;
+    document.addEventListener("mousemove", (ev) => {
+      const plot = ev.target && ev.target.closest && ev.target.closest(".chart-plot");
+      if (!plot) {
+        hideTrendTip();
+        return;
+      }
+      showTrendTip(plot, ev);
+    });
   }
 
   function periodQuery(extra) {
@@ -793,8 +961,10 @@
 
   function syncShellNav() {
     const parsed = locationState();
-    const key =
-      parsed.tab === "reports" ? "reports" : parsed.focus === "hosts" ? "hosts" : "overview";
+    let key = "realtime";
+    if (parsed.tab === "reports") key = "reports";
+    else if (parsed.tab === "period") key = "period";
+    else if (parsed.focus === "hosts") key = "hosts";
     Array.from(document.querySelectorAll(".shell-link")).forEach((link) => {
       const on = link.getAttribute("data-shell") === key;
       link.classList.toggle("active", on);
@@ -864,6 +1034,8 @@
     );
     const toVal = toDatetimeLocal(periodToTs || Math.floor(Date.now() / 1000));
     el.periodUtilControls.innerHTML =
+      '<div class="period-control-row">' +
+      '<div class="period-control-group"><span class="period-control-label">时间窗</span>' +
       renderPeriodButtons() +
       '<span class="period-custom">' +
       '<span class="muted">自定义</span>' +
@@ -875,17 +1047,20 @@
       toVal +
       '" />' +
       '<button type="button" class="period-btn" id="btnPeriodCustom">应用</button>' +
-      "</span>" +
-      '<span class="muted">繁忙阈值</span>' +
+      "</span></div>" +
+      '<div class="period-control-group"><span class="period-control-label">繁忙阈值</span>' +
       '<label class="muted">CPU <input id="busyCpu" type="number" min="0" max="100" step="1" value="' +
       busyCpu +
-      '" /></label>' +
+      '" />%</label>' +
       '<label class="muted">加速卡 <input id="busyAccel" type="number" min="0" max="100" step="1" value="' +
       busyAccel +
-      '" /></label>' +
+      '" />%</label></div>' +
+      '<div class="period-control-group"><span class="period-control-label">离线文件</span>' +
       '<a class="link" id="periodExport" href="/api/v1/export/period-stats.csv?' +
       periodQuery() +
-      '">导出 CSV</a>';
+      '">导出 CSV</a>' +
+      '<a class="link" href="/api/v1/export/period-stats-fields.csv">字段说明</a>' +
+      "</div></div>";
     bindPeriodControls();
   }
 
@@ -953,17 +1128,20 @@
   }
 
   const PERIOD_METRIC_ROWS = [
-    ["CPU 利用率", "cpu_percent", "%"],
-    ["内存利用率", "mem_percent", "%"],
-    ["磁盘利用率", "disk_percent", "%"],
-    ["负载 load1", "load1", ""],
-    ["加速卡利用率", "accel_util_avg", "%"],
-    ["加速卡最高温度", "accel_temp_max", "°C"],
-    ["网络入向", "net_rx_mbps", " Mbps"],
-    ["网络出向", "net_tx_mbps", " Mbps"],
-    ["入向占额定", "net_rx_percent", "%"],
-    ["出向占额定", "net_tx_percent", "%"],
-    ["额定带宽", "net_rated_mbps", " Mbps"],
+    ["CPU利用率（%）", "cpu_percent", "%"],
+    ["内存利用率（%）", "mem_percent", "%"],
+    ["磁盘占用率（%）", "disk_percent", "%"],
+    ["磁盘读取速率（Mbps）", "disk_read_mbps", " Mbps"],
+    ["磁盘写入速率（Mbps）", "disk_write_mbps", " Mbps"],
+    ["磁盘I/O利用率（%）", "disk_io_util_percent", "%"],
+    ["1分钟负载", "load1", ""],
+    ["加速卡利用率（%）", "accel_util_avg", "%"],
+    ["加速卡最高温度（°C）", "accel_temp_max", "°C"],
+    ["网络接收速率（Mbps）", "net_rx_mbps", " Mbps"],
+    ["网络发送速率（Mbps）", "net_tx_mbps", " Mbps"],
+    ["网络接收占额定（%）", "net_rx_percent", "%"],
+    ["网络发送占额定（%）", "net_tx_percent", "%"],
+    ["额定带宽（Mbps）", "net_rated_mbps", " Mbps"],
   ];
 
   function renderPeriodStatsTable(stats) {
@@ -1205,7 +1383,7 @@
       '<th class="sortable" data-sort="cpu_p95">CPU P95</th>' +
       '<th class="sortable" data-sort="cpu_busy">CPU 繁忙</th>' +
       '<th class="sortable" data-sort="mem_avg">内存均</th>' +
-      '<th class="sortable" data-sort="disk_avg">磁盘均</th>' +
+      '<th class="sortable" data-sort="disk_avg">磁盘占用均</th>' +
       '<th class="sortable" data-sort="accel_avg">加速卡均</th>' +
       '<th class="sortable" data-sort="accel_p95">加速卡 P95</th>' +
       '<th class="sortable" data-sort="accel_busy">加速卡繁忙</th>' +
@@ -1296,53 +1474,55 @@
     }
   }
 
+  function chartPoints(pts, pick) {
+    return (pts || []).map((point) => ({
+      ts: point && point.ts,
+      value: pick(point || {}),
+    }));
+  }
+
+  function chartCard(title, pts, color, kind, pick) {
+    return (
+      '<div class="chart-card"><div class="title">' +
+      escapeHtml(title) +
+      "</div>" +
+      trendChart(title, chartPoints(pts, pick), color, kind) +
+      "</div>"
+    );
+  }
+
   function renderPeriodCharts(pts) {
+    resetTrendCharts();
     pts = pts || [];
-    let html =
-      '<div class="section-title">' + currentWindowLabel() + " 趋势</div>";
-    html += '<div class="charts">';
-    html +=
-      '<div class="chart-card"><div class="title">CPU %</div>' +
-      sparkline(
-        pts.map((x) => x.cpu_percent),
-        "#3d9cfd"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">加速卡利用率 %</div>' +
-      sparkline(
-        pts.map((x) => x.accel_util_avg || x.npu_util_avg || x.gpu_util_avg),
-        "#c9a0ff"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">加速卡最高温度 °C</div>' +
-      sparkline(
-        pts.map((x) => x.accel_temp_max || x.npu_temp_max || x.gpu_temp_max),
-        "#e25c5c"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">内存 %</div>' +
-      sparkline(
-        pts.map((x) => x.mem_percent),
-        "#46c2b0"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">网络入向 Mbps</div>' +
-      sparkline(
-        pts.map((x) => x.net_rx_mbps),
-        "#7ec8e3"
-      ) +
-      "</div>";
-    html +=
-      '<div class="chart-card"><div class="title">网络出向 Mbps</div>' +
-      sparkline(
-        pts.map((x) => x.net_tx_mbps),
-        "#e3c07e"
-      ) +
-      "</div>";
+    const accelUtil = (point) =>
+      point.accel_util_avg != null
+        ? point.accel_util_avg
+        : point.npu_util_avg != null
+          ? point.npu_util_avg
+          : point.gpu_util_avg;
+    const accelTemp = (point) =>
+      point.accel_temp_max != null
+        ? point.accel_temp_max
+        : point.npu_temp_max != null
+          ? point.npu_temp_max
+          : point.gpu_temp_max;
+    let html = '<div class="charts">';
+    html += chartCard("CPU利用率（%）", pts, "#3d9cfd", "percent", (point) => point.cpu_percent);
+    html += chartCard("加速卡利用率（%）", pts, "#c9a0ff", "percent", accelUtil);
+    html += chartCard("加速卡最高温度（°C）", pts, "#e25c5c", "temp", accelTemp);
+    html += chartCard("内存利用率（%）", pts, "#46c2b0", "percent", (point) => point.mem_percent);
+    html += chartCard("磁盘占用率（%）", pts, "#8fd18a", "percent", (point) => point.disk_percent);
+    html += chartCard("磁盘读取速率（Mbps）", pts, "#7ec8e3", "mbps", (point) => point.disk_read_mbps);
+    html += chartCard("磁盘写入速率（Mbps）", pts, "#e3c07e", "mbps", (point) => point.disk_write_mbps);
+    html += chartCard(
+      "磁盘I/O利用率（%）",
+      pts,
+      "#d6a23a",
+      "percent",
+      (point) => point.disk_io_util_percent
+    );
+    html += chartCard("网络接收速率（Mbps）", pts, "#9ec7ff", "mbps", (point) => point.net_rx_mbps);
+    html += chartCard("网络发送速率（Mbps）", pts, "#f0b4a0", "mbps", (point) => point.net_tx_mbps);
     html += "</div>";
     return html;
   }
@@ -1359,6 +1539,10 @@
     const loadingCharts = flags && flags.loadingCharts;
     if (!stats && loadingCharts) {
       el.periodDetailBody.innerHTML = '<p class="muted">正在读取该机这一时段…</p>';
+      if (el.periodCharts) {
+        resetTrendCharts();
+        el.periodCharts.innerHTML = '<p class="muted">正在读取该机趋势…</p>';
+      }
       return;
     }
     const tableStats = {
@@ -1383,9 +1567,17 @@
         "</p>";
     }
     html += renderPeriodStatsTable(tableStats);
-    if (points) html += renderPeriodCharts(points);
-    else if (loadingCharts) html += '<p class="muted">正在读取该机趋势…</p>';
     el.periodDetailBody.innerHTML = html;
+    if (el.periodCharts) {
+      if (points) el.periodCharts.innerHTML = renderPeriodCharts(points);
+      else if (loadingCharts) {
+        resetTrendCharts();
+        el.periodCharts.innerHTML = '<p class="muted">正在读取该机趋势…</p>';
+      } else {
+        resetTrendCharts();
+        el.periodCharts.innerHTML = '<p class="empty">这一时段没有可画的趋势</p>';
+      }
+    }
   }
 
   async function loadPeriodHostDetail(hostId, opts) {
@@ -1397,7 +1589,11 @@
       periodDetailToken += 1;
       if (el.periodDetailTitle) el.periodDetailTitle.textContent = "请选择主机";
       el.periodDetailBody.innerHTML =
-        '<p class="empty">点选左侧主机，查看该机时段指标与趋势</p>';
+        '<p class="empty">点选左侧主机，查看该机时段指标</p>';
+      if (el.periodCharts) {
+        resetTrendCharts();
+        el.periodCharts.innerHTML = '<p class="empty">点选主机后，这里显示该机趋势</p>';
+      }
       return;
     }
     const key = hostId + "?" + periodQuery();
@@ -1435,6 +1631,10 @@
         '<p class="empty">这一台的时段详情没有读出来：' +
         escapeHtml(e.message) +
         "</p>";
+      if (el.periodCharts) {
+        resetTrendCharts();
+        el.periodCharts.innerHTML = '<p class="empty">趋势没有读出来</p>';
+      }
     }
   }
 
@@ -1474,6 +1674,19 @@
       bar(sys.disk_percent) +
       "</div>";
     html +=
+      '<div class="k">磁盘读取</div><div class="v">' +
+      fmtMbps(sys.disk_read_mbps) +
+      " Mbps</div>" +
+      '<div class="k">磁盘写入</div><div class="v">' +
+      fmtMbps(sys.disk_write_mbps) +
+      " Mbps</div>" +
+      '<div class="k">磁盘I/O利用率</div><div class="v">' +
+      (sys.disk_io_util_percent === null ||
+      sys.disk_io_util_percent === undefined ||
+      Number.isNaN(Number(sys.disk_io_util_percent))
+        ? metricSpan("-", "normal")
+        : metricPct(sys.disk_io_util_percent)) +
+      "</div>" +
       '<div class="k">磁盘容量</div><div class="v">' +
       '<span class="rt-tag">已用</span> ' +
       fmtNum(sys.disk_used_gb, 2) +
@@ -1481,10 +1694,11 @@
       '<span class="rt-tag">总量</span> ' +
       fmtNum(sys.disk_total_gb, 2) +
       " GB</div>";
-    if (!disks.length) return html;
+    const ioBlock = renderDiskIoBlock(sys);
+    if (!disks.length) return html + ioBlock;
     html += '<div class="spec-block"><div class="spec-label">挂载</div><div class="disk-list">';
     html +=
-      '<div class="disk-row disk-head"><span>挂载</span><span>容量</span><span>利用率</span></div>';
+      '<div class="disk-row disk-head"><span>挂载</span><span>容量</span><span>占用率</span></div>';
     disks.forEach((d) => {
       const sub = [d.device, d.fstype].filter(Boolean).join(" · ");
       html +=
@@ -1503,6 +1717,35 @@
         ) +
         " " +
         bar(d.percent) +
+        "</div></div>";
+    });
+    html += "</div></div>";
+    return html + ioBlock;
+  }
+
+  function renderDiskIoBlock(sys) {
+    const ios = (Array.isArray(sys.disk_io) ? sys.disk_io : []).filter(
+      (item) => item && item.name
+    );
+    if (!ios.length) return "";
+    let html =
+      '<div class="spec-block"><div class="spec-label">整盘读写</div><div class="disk-list">';
+    html +=
+      '<div class="disk-row disk-head"><span>磁盘</span><span>读 / 写</span><span>忙闲</span></div>';
+    ios.forEach((item) => {
+      html +=
+        '<div class="disk-row"><div class="disk-mount">' +
+        escapeHtml(item.name) +
+        '</div><div class="disk-cap">' +
+        fmtMbps(item.read_mbps) +
+        " / " +
+        fmtMbps(item.write_mbps) +
+        ' Mbps</div><div class="disk-usage">' +
+        (item.util_percent === null ||
+        item.util_percent === undefined ||
+        Number.isNaN(Number(item.util_percent))
+          ? "-"
+          : fmtPct(item.util_percent)) +
         "</div></div>";
     });
     html += "</div></div>";
@@ -2858,7 +3101,8 @@ function renderHosts(hosts) {
         '/markdown">下载 Markdown</a>' +
         '<a class="link" href="/api/v1/reports/' +
         id +
-        '/rankings.csv">下载排行 CSV</a>';
+        '/rankings.csv">下载排行 CSV</a>' +
+        '<a class="link" href="/api/v1/export/rankings-fields.csv">字段说明</a>';
       const regen = document.getElementById("btnRegenReport");
       if (regen) {
         regen.addEventListener("click", () => {
@@ -3207,6 +3451,7 @@ function renderHosts(hosts) {
       if (table && table.scrollIntoView) table.scrollIntoView({ block: "start" });
     }
   });
+  bindTrendHover();
   renderPeriodControls();
   applyTabVisibility(tabFromHash());
   syncShellNav();

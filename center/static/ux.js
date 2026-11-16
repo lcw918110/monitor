@@ -93,6 +93,52 @@
     return tags;
   }
 
+  /**
+   * 把图表横坐标比例（0～1）落到最近的历史上报点。
+   * 空值也算命中，这样空隙处可以显示时间并写成横线，而不是跳到旁边的数。
+   */
+  function nearestTrendPoint(points, ratio) {
+    var list = points || [];
+    var timed = [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var point = list[i];
+      if (!point || point.ts === null || point.ts === undefined) continue;
+      var ts = Number(point.ts);
+      if (isNaN(ts)) continue;
+      timed.push({ index: i, ts: ts, value: point.value });
+    }
+    if (!timed.length) return null;
+    var t0 = timed[0].ts;
+    var t1 = timed[0].ts;
+    for (i = 1; i < timed.length; i++) {
+      if (timed[i].ts < t0) t0 = timed[i].ts;
+      if (timed[i].ts > t1) t1 = timed[i].ts;
+    }
+    var span = t1 - t0;
+    var r = Number(ratio);
+    if (isNaN(r)) r = 0;
+    if (r < 0) r = 0;
+    if (r > 1) r = 1;
+    var target = t0 + r * span;
+    var best = timed[0];
+    var bestDist = Math.abs(best.ts - target);
+    for (i = 1; i < timed.length; i++) {
+      var dist = Math.abs(timed[i].ts - target);
+      if (dist < bestDist) {
+        best = timed[i];
+        bestDist = dist;
+      }
+    }
+    var value = best.value;
+    if (value === undefined || value === "") value = null;
+    else if (value !== null) {
+      var num = Number(value);
+      value = isNaN(num) ? null : num;
+    }
+    return { index: best.index, ts: best.ts, value: value };
+  }
+
   function parseLocationHash(hash) {
     var raw = String(hash || "");
     if (raw === "#period" || raw.indexOf("#period") === 0) {
@@ -200,6 +246,7 @@
   return {
     accelHealthLabel: accelHealthLabel,
     attentionTags: attentionTags,
+    nearestTrendPoint: nearestTrendPoint,
     parseLocationHash: parseLocationHash,
     loadPerCoreHigh: loadPerCoreHigh,
     applyHealthVersion: applyHealthVersion,

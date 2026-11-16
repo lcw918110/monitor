@@ -91,9 +91,10 @@ class HistoryExportTests(unittest.TestCase):
 
         code, csv_text = api_mod.handle_export_csv(self.storage)
         self.assertEqual(code, 200)
-        self.assertIn("host_id", csv_text)
-        self.assertIn("npu_count", csv_text)
-        self.assertIn("net_rated_mbps", csv_text)
+        self.assertIn("主机标识", csv_text.splitlines()[0])
+        self.assertIn("NPU数量", csv_text.splitlines()[0])
+        self.assertIn("额定带宽（Mbps）", csv_text.splitlines()[0])
+        self.assertNotIn("net_rated_mbps", csv_text.splitlines()[0])
 
 
 if __name__ == "__main__":

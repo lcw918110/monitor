@@ -344,7 +344,7 @@ class CenterIdentityApiTests(unittest.TestCase):
         self.assertGreater(data["hosts"][0]["sample_count"], 0)
         code, csv_body = api_mod.handle_export_period_csv(self.storage, "minutes=60")
         self.assertEqual(code, 200)
-        self.assertIn("accel_summary", csv_body.splitlines()[0])
+        self.assertIn("加速卡型号", csv_body.splitlines()[0])
         self.assertIn("AMD", csv_body)
 
     def test_manual_cpu_unchanged(self) -> None:

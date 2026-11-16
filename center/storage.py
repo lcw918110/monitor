@@ -31,6 +31,9 @@ PERIOD_METRIC_KEYS = (
     "cpu_percent",
     "mem_percent",
     "disk_percent",
+    "disk_read_mbps",
+    "disk_write_mbps",
+    "disk_io_util_percent",
     "load1",
     "net_rx_mbps",
     "net_tx_mbps",
@@ -79,6 +82,28 @@ def classify_util_percent(value: Any) -> Tuple[Optional[float], bool]:
     ):
         return None, True
     return num, False
+
+
+def _slim_disk_io_history(system: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """历史里留每块整盘的读写和忙闲。没有 disk_io 时返回 None（旧 Agent）。"""
+    raw = system.get("disk_io")
+    if not isinstance(raw, list):
+        return None
+    slim: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        slim.append(
+            {
+                "name": item.get("name") or "",
+                "read_mbps": _to_float(item.get("read_mbps")),
+                "write_mbps": _to_float(item.get("write_mbps")),
+                "util_percent": _to_float(item.get("util_percent")),
+            }
+        )
+        if len(slim) >= 16:
+            break
+    return slim
 
 
 def _slim_disk_history(system: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
@@ -463,6 +488,9 @@ class Storage:
             "disk_percent": system.get("disk_percent"),
             "disk_used_gb": system.get("disk_used_gb"),
             "disk_total_gb": system.get("disk_total_gb"),
+            "disk_read_mbps": system.get("disk_read_mbps"),
+            "disk_write_mbps": system.get("disk_write_mbps"),
+            "disk_io_util_percent": system.get("disk_io_util_percent"),
             "load1": system.get("load1"),
             "load5": system.get("load5"),
             "load15": system.get("load15"),
@@ -476,6 +504,9 @@ class Storage:
         slim_disks = _slim_disk_history(system)
         if slim_disks is not None:
             system_out["disks"] = slim_disks
+        slim_io = _slim_disk_io_history(system)
+        if slim_io is not None:
+            system_out["disk_io"] = slim_io
         return {
             "host_id": payload.get("host_id"),
             "timestamp": payload.get("timestamp"),
@@ -762,6 +793,9 @@ class Storage:
             "disk_used_gb": system.get("disk_used_gb"),
             "disk_total_gb": system.get("disk_total_gb"),
             "disk_count": disk_count,
+            "disk_read_mbps": _to_float(system.get("disk_read_mbps")),
+            "disk_write_mbps": _to_float(system.get("disk_write_mbps")),
+            "disk_io_util_percent": classify_util_percent(system.get("disk_io_util_percent"))[0],
             "load1": system.get("load1"),
             "load5": system.get("load5"),
             "net_rx_mbps": system.get("net_rx_mbps"),
@@ -1226,6 +1260,12 @@ class Storage:
             "cpu_percent": _take_percent("cpu_percent", system.get("cpu_percent")),
             "mem_percent": _take_percent("mem_percent", system.get("mem_percent")),
             "disk_percent": _take_percent("disk_percent", system.get("disk_percent")),
+            "disk_read_mbps": _to_float(system.get("disk_read_mbps")),
+            "disk_write_mbps": _to_float(system.get("disk_write_mbps")),
+            "disk_io_util_percent": _take_percent(
+                "disk_io_util_percent", system.get("disk_io_util_percent")
+            ),
+            "disk_io": _slim_disk_io_history(system),
             "excluded_utils": excluded,
             "load1": system.get("load1"),
             "net_rx_mbps": system.get("net_rx_mbps"),
@@ -1523,6 +1563,9 @@ class Storage:
                 "cpu_percent": pt.get("cpu_percent"),
                 "mem_percent": pt.get("mem_percent"),
                 "disk_percent": pt.get("disk_percent"),
+                "disk_read_mbps": pt.get("disk_read_mbps"),
+                "disk_write_mbps": pt.get("disk_write_mbps"),
+                "disk_io_util_percent": pt.get("disk_io_util_percent"),
                 "load1": pt.get("load1"),
                 "net_rx_mbps": pt.get("net_rx_mbps"),
                 "net_tx_mbps": pt.get("net_tx_mbps"),
