@@ -8,10 +8,26 @@
 
 **响应**：
 
-- `200`：`{"ok": true}`
+- `200`：`{"ok": true, "duplicate": false, "timestamp": <采集Unix秒>, "spool_retention_hours": 24}`
 - `400`：字段缺失或 JSON 非法
-- `401`：Agent 上报 Token 不匹配（只这一条接口）。与设置页的管理 Token 不是同一把钥匙
+- `401`：Agent 上报 Token 不匹配。补报接口 `/api/v1/metrics/batch` 用同一把上报 Token。与设置页的管理 Token 不是同一把钥匙
 - `405`：方法不允许
+
+`timestamp` 是 Agent 采集时间。缺省时中心才用到达时间，补报不允许缺。`duplicate` 表示这个 `(host_id, timestamp)` 已经有一行，本次不覆盖。`spool_retention_hours` 告诉 Agent 本地暂存留多少小时。成功的实时上报不会把更早的 `last_seen` 改回去；更早的补报也不会把最近快照换成旧样本。
+
+### 1.1b POST `/api/v1/metrics/batch`
+
+Agent 在一次实时上报成功之后，用这个接口补一小批。不要求管理 Token。
+
+```json
+{
+  "token": "optional-agent-token",
+  "samples": [{ "host_id": "gpu-01", "timestamp": 1722096000, "backfill": true, "system": {} }],
+  "overflows": [{ "host_id": "gpu-01", "from_ts": 1722000000, "to_ts": 1722000900, "dropped": 12 }]
+}
+```
+
+单次最多 100 条样本、50 条溢出。先全部校验，有一条不合法就整批拒绝，队列留在 Agent。`200` 返回 `accepted`、`duplicate`、`overflows` 和 `spool_retention_hours`。样本按采集时间写入 `metrics_history`，并记下 `received_at` 与 `backfill`。溢出写入 `spool_overflows`，同一 `(host_id, from_ts, to_ts, dropped)` 不重复记。
 
 ### 1.2 GET `/api/v1/hosts`
 
@@ -100,11 +116,15 @@ loop:
   collect_system()
   collect_accelerators()   # host_type=cpu 时跳过；否则含厂商工具与 PCI 回退
   resolve_host_type()
-  send()
+  send()                   # 短重试两次
+  on success: flush spool  # 最多 80 条，标 backfill，剩下的等下一周期
+  on network/5xx: enqueue  # data/spool，保留原 timestamp；超 24h 丢最早并记溢出
   sleep(interval)
 ```
 
-异常隔离：单次采集或发送异常 catch 后打日志，继续下一轮。
+异常隔离：单次采集或发送异常 catch 后打日志，继续下一轮。暂存写入失败只打日志，不退出进程。4xx 不入队。
+
+暂存目录默认 `data/spool`（生产安装工作目录是 `/opt/monitor-agent`）。`queue.jsonl` 是待发样本，`overflows.jsonl` 是尚未告知中心的丢弃记录，`retention.json` 是中心下发的保留小时。升级时 `data/` 被排除，队列还在。
 
 ---
 
@@ -112,9 +132,9 @@ loop:
 
 1. **顶部**：产品名 + 刷新 + 一条顶栏（实时监控 / 主机 / 时段统计 / 使用诊断 / 运维 / 设置）。运维仍打开 `/deploy.html`
 2. **实时监控**：异常汇总、集群卡片、主机表（可排序、按资源组 / 负责人筛选，搜索含用途）。列把规格和实时利用率分开：加速卡型号数量 | 加速卡使用率；磁盘% | 磁盘数；另有负责人、用途。离线行不填实时数字。详情可改手工资产，旁边只读展示采集规格；可隐藏或彻底删除。工具条可打开已隐藏列表和资产表导入预览
-3. **时段统计**：先看离线台数和离线时段，再看集群与各主机的平均 / P95 / 繁忙占比，可导出 CSV。点左侧主机只换右侧详情
-4. **使用诊断**：选择已结束的窗口生成或覆盖报告，看定时/手动与成功/失败/无数据，下载 Markdown 与排行 CSV。没有上报时报告仍留在列表里，右侧是空状态说明
-5. **主机详情**：在线时展示实时用量与分盘；离线时标明末次快照不是实时。手工资产可编辑，采集规格只读，并提供隐藏与彻底删除
+3. **时段统计**：先看离线概览，把「离线（无数据）」和「断网（已补报）」分开计数，再看集群与各主机的平均 / P95 / 繁忙占比，可导出中文 CSV 和字段说明。点左侧主机只换右侧详情。趋势悬停是上海时间和数值；补上的点带「断网（已补报）」；空隙是 `-` 和「离线（无数据）」
+4. **使用诊断**：选择已结束的窗口生成或覆盖报告，看定时/手动与成功/失败/无数据，下载 Markdown 与排行 CSV。没有上报时报告仍留在列表里，右侧是空状态说明。正文里的历史中断用上面两个名字；闲忙里的「离线」仍是生成时刻的实时状态
+5. **主机详情**：在线时展示实时用量与分盘；离线时标明当前只记为离线，末次快照不是实时，指标用 `-`。手工资产可编辑，采集规格只读，并提供隐藏与彻底删除。磁盘占用是容量，磁盘读写是 Mbps 和 %util，不进入闲忙
 
 风格：清晰运维控制台，中文标签，数字突出。磁盘汇总口径见 `docs/12-disk-mounts.md`。地址口径见 `center/hostaddr.py`。
 
@@ -131,7 +151,12 @@ loop:
 | TC-AGT-04 | 无 nvidia-smi 主机 | gpus 空数组，仍在线 |
 | TC-UI-01 | 打开统计 API | 字段齐全且与列表可对账 |
 | TC-UI-02 | 点击主机 | 详情切换正确 |
-| TC-ONLINE-01 | 停止上报 > offline_seconds | online=false |
+| TC-ONLINE-01 | 停止上报 > offline_seconds | online=false，实时仍只称「离线」 |
+| TC-SPOOL-01 | 上报失败后重启 Agent 进程 | `data/spool` 里仍有原 timestamp |
+| TC-SPOOL-02 | 队列超过保留小时 | 丢掉最早样本，并留下溢出记录 |
+| TC-SPOOL-03 | 成功后补报 | 中心按采集时间入库；同一 `(host_id, timestamp)` 不重复 |
+| TC-SPOOL-04 | 先有新样本再补旧样本 | `last_seen` 不回退；历史拆成「离线（无数据）」与「断网（已补报）」 |
+| TC-SPOOL-05 | 生成诊断报告 | 正文同时出现这两个历史名称，闲忙仍只看 CPU 和加速卡 |
 | TC-RET-01 | 写入超期历史后触发清理 | 旧记录删除 |
 | TC-REPORT-01 | 生成日报后删除原始历史再 GET | 正文与入库时一致，不重算 |
 | TC-REPORT-02 | CPU 平均 14% 或加速卡平均 9% | 不算基本不用（阈值 5%） |

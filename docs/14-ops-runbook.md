@@ -10,6 +10,8 @@
 
 中心换代码只走 `scripts/push_upgrade.sh` → 新包里的 `scripts/upgrade_center.sh`。Agent 只走中心「客户端部署」或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`。不要另写 rsync、手写备份或 `systemctl restart` 来升级，也不要从笔记本用 `sshpass` + `scp` 装 Agent。`scripts/backup_center.sh` 和 `scripts/restore_center.sh` 不是第二条升级路径，也不是第二条 Agent 部署路径。
 
+采集端在 `/opt/monitor-agent/data/spool` 留着送不出去的样本（默认 24 小时，设置页「本地暂存保留」可改）。升级同步排除 `data/`，换代码不会清掉这个队列。实时页在中断期间只显示「离线」。恢复后，补上的历史叫「断网（已补报）」；没有样本的历史叫「离线（无数据）」。不要到机器上为了看这两种状态而重启服务。本篇不包含把新版本推进生产的操作；那仍是上面的升级命令，由人在准备好之后执行。
+
 **双中心 / 双活 / SQLite 多写 / 自动故障切换：不做。** 这里的「弱高可用」只是：升级前和单独备份都能留下一份可恢复的副本，由人决定恢复代码还是连数据库一起恢复。
 
 容量数字不写在这里。怎么测、结果表留空，见 `docs/15-capacity-lab.md`。

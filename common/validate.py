@@ -27,6 +27,20 @@ def validate_center_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
     except (TypeError, ValueError):
         errors.append("retention_days 必须是整数")
 
+    spool_hours = cfg.get("spool_retention_hours", 24)
+    if isinstance(spool_hours, bool):
+        errors.append("spool_retention_hours 必须是整数")
+    else:
+        try:
+            hours = int(spool_hours)
+        except (TypeError, ValueError):
+            errors.append("spool_retention_hours 必须是整数")
+        else:
+            if isinstance(spool_hours, float) and abs(spool_hours - hours) > 1e-9:
+                errors.append("spool_retention_hours 必须是整数")
+            elif not (1 <= hours <= 168):
+                errors.append("spool_retention_hours 必须在 1-168")
+
     anomaly = cfg.get("anomaly")
     if anomaly is not None and not isinstance(anomaly, dict):
         errors.append("anomaly 必须是对象")
@@ -115,6 +129,30 @@ def validate_agent_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
             errors.append("interval_seconds 不能小于 5")
     except (TypeError, ValueError):
         errors.append("interval_seconds 必须是整数")
+
+    spool_hours = cfg.get("spool_retention_hours", 24)
+    if isinstance(spool_hours, bool):
+        errors.append("spool_retention_hours 必须是整数")
+    else:
+        try:
+            hours = int(spool_hours)
+        except (TypeError, ValueError):
+            errors.append("spool_retention_hours 必须是整数")
+        else:
+            if not (1 <= hours <= 168):
+                errors.append("spool_retention_hours 必须在 1-168")
+
+    batch_size = cfg.get("spool_batch_size", 80)
+    if isinstance(batch_size, bool):
+        errors.append("spool_batch_size 必须是整数")
+    else:
+        try:
+            size = int(batch_size)
+        except (TypeError, ValueError):
+            errors.append("spool_batch_size 必须是整数")
+        else:
+            if not (1 <= size <= 100):
+                errors.append("spool_batch_size 必须在 1-100")
 
     from common.host_type import normalize_host_type
 

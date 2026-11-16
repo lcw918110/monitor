@@ -519,7 +519,10 @@ def make_handler(
             path = unquote(parsed.path)
             body = self._read_body()
             # Agent 上报仍只校验 center.json 的 token，不要求管理 Token。
-            if path.startswith("/api/") and path != "/api/v1/metrics":
+            if path.startswith("/api/") and path not in (
+                "/api/v1/metrics",
+                "/api/v1/metrics/batch",
+            ):
                 if not self._allow_management_write():
                     return
 
@@ -547,13 +550,18 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
-            if path == "/api/v1/metrics":
+            if path in ("/api/v1/metrics", "/api/v1/metrics/batch"):
                 remote_ip = ""
                 try:
                     remote_ip = (self.client_address or ("", 0))[0]
                 except (TypeError, IndexError):
                     remote_ip = ""
-                code, payload = api_mod.handle_metrics_post(
+                handler = (
+                    api_mod.handle_metrics_batch
+                    if path == "/api/v1/metrics/batch"
+                    else api_mod.handle_metrics_post
+                )
+                code, payload = handler(
                     storage, body, expected_token=current_token(), remote_ip=remote_ip
                 )
                 self._send_json(code, payload)
@@ -814,6 +822,7 @@ def run_server(
         db_path=db_path,
         offline_seconds=_cfg_int(config.get("offline_seconds"), 90),
         retention_days=_cfg_int(config.get("retention_days"), 7),
+        spool_retention_hours=_cfg_int(config.get("spool_retention_hours"), 24),
     )
 
     cleanup_interval = _cfg_int(config.get("cleanup_interval_seconds"), 3600)

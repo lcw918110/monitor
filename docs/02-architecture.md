@@ -10,7 +10,7 @@
 
 1. **自研轻量**：不依赖外部监控产品；Python 3 标准库实现。
 2. **中心汇聚**：所有展示与统计只读中心端数据。
-3. **推送模型**：Agent 主动上报，便于穿透 NAT/防火墙（出站即可）。
+3. **推送模型**：Agent 主动上报，便于穿透 NAT/防火墙（出站即可）。送不出去时先写本机 `data/spool`，恢复后按采集时间分批补报。实时页只有「离线」；历史再分成「离线（无数据）」和「断网（已补报）」。
 4. **加速卡可选**：多厂商探测，失败不影响主机指标。
 5. **单库单进程**：中心端单进程 HTTP + SQLite，降低统一部署成本。
 
@@ -30,6 +30,7 @@
 │  Static Web：实时监控 / 时段统计 / 使用诊断 · 部署页        │
 └────────────────────────────▲─────────────────────────────┘
                              │ POST /api/v1/metrics
+                             │ POST /api/v1/metrics/batch（补报）
         ┌────────────────────┼────────────────────┐
         │                    │                    │
 ┌───────┴──────┐     ┌───────┴──────┐     ┌───────┴──────┐
@@ -45,8 +46,8 @@
 | 模块 | 路径 | 职责 |
 | --- | --- | --- |
 | 中心服务入口 | `center/server.py` | HTTP 服务、路由、静态资源 |
-| 存储层 | `center/storage.py` | SQLite：主机快照、历史、时段聚合、清理 |
-| 监测 API | `center/api.py` | 上报校验、列表/详情/history/period-stats/集群时段利用 |
+| 存储层 | `center/storage.py` | SQLite：主机快照、按采集时间入库的历史、`(host_id, ts)` 去重、时段聚合、两种历史中断、清理 |
+| 监测 API | `center/api.py` | 上报与批量补报、列表/详情/history/period-stats/集群时段利用、中文导出 |
 | 诊断报告 | `center/reports.py` | 日/周/月窗口、闲忙口径、Markdown；结果表 `diagnostic_reports` |
 | 报告调度 | `center/report_schedule.py` | 进程内定时生成；错过不补；成功后 `deliver_report`（已配置 Webhook 才发送） |
 | 展示地址 | `center/hostaddr.py` | 列表/详情/时段统计/诊断报告的完整 IP：手工 `address` → 未停用的部署清单 → host_id 内嵌 IP → RFC1918；跳过 `198.18/15` 隧道假 IP。历史 IP 在 `asset_meta.previous_ips` |
@@ -60,7 +61,7 @@
 | 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）与报告推送配置，表 `admin_settings`。与中心参数同页，不进 `center.json` |
 | 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书 Webhook；未配置不发请求 |
 | Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html`、设置页 `/settings.html` |
-| Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
+| Agent 入口 | `agent/main.py`、`agent/spool.py` | 配置加载、循环调度、本地暂存与分批补报 |
 | 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘容量见 `disk.py`，磁盘读写见 `disk_io.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
 | 加速卡采集 | `agent/metrics/accelerators.py` | 编排 NVIDIA / AMD / 昇腾 / 寒武纪 / RKNN；没有厂商工具时从 PCI 识别已知卡 |

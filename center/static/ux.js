@@ -106,7 +106,13 @@
       if (!point || point.ts === null || point.ts === undefined) continue;
       var ts = Number(point.ts);
       if (isNaN(ts)) continue;
-      timed.push({ index: i, ts: ts, value: point.value });
+      timed.push({
+        index: i,
+        ts: ts,
+        value: point.value,
+        backfill: !!point.backfill,
+        gap: point.gap || "",
+      });
     }
     if (!timed.length) return null;
     var t0 = timed[0].ts;
@@ -136,7 +142,13 @@
       var num = Number(value);
       value = isNaN(num) ? null : num;
     }
-    return { index: best.index, ts: best.ts, value: value };
+    return {
+      index: best.index,
+      ts: best.ts,
+      value: value,
+      backfill: !!best.backfill,
+      gap: best.gap || "",
+    };
   }
 
   function parseLocationHash(hash) {

@@ -1,8 +1,8 @@
 # 简易多机监控系统 — 软件需求规格说明书（SRS）
 
-| 文档版本 | 2.0 |
-| 对应产品 | v1.11.0 |
-| 最近修订 | 2026-10-28 |
+| 文档版本 | 2.1 |
+| 对应产品 | v1.12.0 |
+| 最近修订 | 2026-11-16 |
 | 状态 | 现行规格。本文可单独阅读，与代码、`docs/13-diagnostic-reports.md`、`docs/14-ops-runbook.md` 一致 |
 
 本文描述已经交付的产品行为。采集、存储、页面和脚本若以后变更，应同时改本文。指标框架化（路线图 N2 / NH-04，[Issue #35](https://github.com/lcw918110/monitor/issues/35)）不在本文的已交付范围，本轮也不实现。诊断报告空闲线和高负荷线在 `report` 配置里，设置页可改。
@@ -47,6 +47,10 @@
 | 指标 | 某一时刻的数值或结构化监控数据 |
 | 基本不用 | 使用诊断里的空闲判定，见 3.6。不是实时页「今日关注」里的一类 |
 | 高负荷 | 使用诊断里的忙判定，见 3.6。与实时页「高负载」不是同一条规则 |
+| 离线 | 实时页唯一的中断状态：超过 `offline_seconds` 没有上报。中心当时不能判断机器是否还活着。指标列是 `-`，可看末次上报时间 |
+| 离线（无数据） | 历史里的一种中断：那段没有样本，以后也不会有。机器或 Agent 停了，磁盘上的暂存丢了，或本地暂存超出保留时间 |
+| 断网（已补报） | 历史里的另一种中断：机器和 Agent 当时仍在采集，恢复后按原来的采集时间把样本补上。图表和时段统计按这些样本计算，不堆在重连的那一刻 |
+| 本地暂存 | Agent 数据目录里的 `data/spool`。上报失败后先留在本机，默认 24 小时。生产安装在 `/opt/monitor-agent/data/spool` |
 | 管理 Token | 设置页可选口令，保护写接口。与 Agent 上报 Token 不是同一把 |
 
 ### 1.5 约束
@@ -120,12 +124,15 @@
 | FR-01-03 | 生产安装目录固定 `/opt/monitor`。升级与便携包脚本不加 `--dir` | P0 |
 | FR-01-04 | 已安装中心只经 `push_upgrade.sh` → 新包里的 `upgrade_center.sh` 换代码。先 `--check-only`，测试或磁盘预检失败则不改安装目录 | P0 |
 | FR-01-05 | `retention_days` 可配（示例 7，现场可设为 40）。清理只删除过期 `metrics_history`，不删除已生成的诊断报告 | P0 |
-| FR-01-06 | 离线阈值 `offline_seconds` 可配，默认 90 秒无上报视为离线 | P0 |
+| FR-01-06 | 离线阈值 `offline_seconds` 可配，默认 90 秒无上报，实时页显示「离线」 | P0 |
 | FR-01-07 | 本机试用走 `local_up.sh`，不进入产品升级路径 | P1 |
+| FR-01-08 | 本地暂存保留 `spool_retention_hours` 可配，默认 24 小时。设置页有业务说明。Agent 还没连上中心时用采集端同名配置；上报成功后采用中心的值 | P0 |
 
 ### 3.2 采集与回传（FR-02）
 
-Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败记日志，进程不退出，下一周期再试。上报体含 `host_id`、`hostname`、解析后的 `host_type`、`timestamp`、`system`、加速卡字段和 `agent_version`。配置了上报 Token 时带 `token`。
+Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST `/api/v1/metrics`。短重试两次仍失败（网络错误、超时或 5xx）时，把这一笔按原来的 `timestamp` 写入本地暂存，进程不退出，下一周期再采。4xx 不入队。下一次发送成功后，再以最多 80 条为一批 POST `/api/v1/metrics/batch`，每条标 `backfill`，采集时间不改。队列没发完就等下一个周期，不在恢复的瞬间把中心打满。上报体含 `host_id`、`hostname`、解析后的 `host_type`、`timestamp`、`system`、加速卡字段和 `agent_version`。配置了上报 Token 时带 `token`。暂存文件不写 token。
+
+本地暂存放在 Agent 数据目录的 `spool/`（工作目录是安装目录时即 `data/spool`；生产为 `/opt/monitor-agent/data/spool`）。进程重启后队列还在。升级同步排除 `data/`，换代码不会清掉未发出的样本。默认保留 24 小时。超过后丢掉最早的样本，并记一条溢出；恢复后把溢出发给中心，这段在历史里算「离线（无数据）」，不是悄悄少一块。机器整台没了、磁盘也没了，就没有队列可补，那段同样是「离线（无数据）」。中心成功响应里的 `spool_retention_hours` 会写回本机，下次断网仍用这个小时数。
 
 `host_id` 默认主机名，可配置。`host_type` 为 `cpu` 时只采系统指标。`gpu` 与 `auto` 再采加速卡；`auto` 有卡则为 `gpu`，否则为 `cpu`。
 
@@ -156,7 +163,9 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 
 ### 3.3 实时展示、资产、隐藏与改址（FR-03）
 
-监测台只有一条顶栏：实时监控、主机、时段统计、使用诊断、运维、设置。实时监控是今日关注和主机表；主机仍打开同一页并定位到主机表；时段统计和趋势、使用诊断是另外两页。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。离线主机不把最后一次快照的数字显示成当前利用率。读不到的数显示 `-`。时段趋势悬停显示 Asia/Shanghai 时间和该点数值。
+监测台只有一条顶栏：实时监控、主机、时段统计、使用诊断、运维、设置。实时监控是今日关注和主机表；主机仍打开同一页并定位到主机表；时段统计和趋势、使用诊断是另外两页。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。实时页在中断期间只有「离线」这一个状态，不另标「断网」。离线主机的指标列是 `-`，末次快照不当成当前利用率。读不到的数显示 `-`，不写成 0。时段趋势悬停显示 Asia/Shanghai 时间和该点数值；补上的点标「断网（已补报）」；没有样本的空隙是 `-`，并标「离线（无数据）」。
+
+给人看的导出是中文表头，另附字段说明（含义和单位）。`hosts.json` 给程序用，键名保持英文。磁盘占用率只表示容量。磁盘读取、写入是 Mbps，磁盘 I/O 利用率是整盘里最忙一块的 %util。这三项不进入闲忙。
 
 | ID | 需求 | 优先级 |
 | --- | --- | --- |
@@ -173,7 +182,7 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 
 ### 3.4 在线判定与页面着色（FR-04）
 
-超过 `offline_seconds`（默认 90）未上报为离线。离线主机的资源判定为 unknown，不把末次快照说成当前高低。
+超过 `offline_seconds`（默认 90）未上报，实时页为「离线」。中心在这段时间里不能区分「网络不通但机器还在」和「机器或 Agent 已经停了」，所以不发明第二种实时徽章。离线主机的资源判定为 unknown，不把末次快照说成当前高低。恢复之后才在历史里分开：补上了的是「断网（已补报）」，始终没有样本的是「离线（无数据）」。
 
 在线主机按 `config/center.json` 的 `anomaly` 着色：偏高为黄，异常为红。未写的键用下表。旧键 `npu_*` 与 `accel_*` 并存；新键缺省时沿用旧键，不删除别名。
 
@@ -201,7 +210,11 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 
 详情趋势 `GET /api/v1/hosts/{id}/history` 可带同一时间窗；不带时默认 60 分钟。时段结果可导出 CSV。
 
-时段页先是时间窗和导出，下面左侧是主机表（表头先写离线概览：这一窗口里有几台离线、共几段、累计多久，以及每段起止），右侧是选中主机的汇总，趋势图铺在下方。悬停趋势图显示上海时间和数值。点一台主机，右侧先写该机的离线时段，再写利用率。判定用已有历史上报和 `offline_seconds`（默认 90 秒内有上报仍算在线），不新增传感器，也不改变闲忙两极。主机第一次上报之前不算离线。点选主机只更新右侧汇总和下方趋势，不重绘整页；连点时忽略过期响应。
+中心按采集 `timestamp` 入库，不按到达时间。同一 `(host_id, timestamp)` 只留一条，重复补报不另插一行。补报不把主机的最近上报时间往回拨。补上的点和平常样本一样进入平均、P95、繁忙占比、导出和诊断报告。闲忙仍只看 CPU 和加速卡。
+
+时段页先是时间窗和导出，下面左侧是主机表。表头是离线概览，分两列计数和时长：「离线（无数据）」与「断网（已补报）」。右侧是选中主机的汇总，趋势图铺在下方。悬停显示上海时间和数值。点一台主机，右侧先写这两类时段，再写利用率。判定用已有历史上报和 `offline_seconds`（一条上报覆盖其后这么多秒，含本秒）。不新增传感器。主机第一次上报之前不算离线。窗口末尾若因读取上限被截断，不把截断之后猜成离线。点选主机只更新右侧汇总和下方趋势，不重绘整页；连点时忽略过期响应。
+
+历史点带 `backfill`。趋势在相邻两点相距超过离线阈值时断开，空隙处悬停为 `-` 和「离线（无数据）」。`backfill` 为真的点悬停为「断网（已补报）」，数值仍是该采集时刻的读数。读失败的指标在有样本的点上仍是 `-`，不改叫离线。
 
 ### 3.6 使用诊断报告（FR-DIAG）
 
@@ -230,11 +243,11 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 | 高负荷 | 该指标样本数达到 `report.min_samples`（默认 10），且繁忙占比 ≥ `high_busy_gte`（默认 0.40）或 P95 ≥ `high_p95_gte`（默认 85%）。CPU 满足即算；有加速卡且加速卡样本也够时，加速卡同样可以单独算高负荷 |
 | 基本不用 | **生成时刻在线**，且 CPU 样本达到最少样本数，CPU 平均 < `idle_avg_lt`（默认 5%）**并且** CPU 繁忙占比 < `idle_busy_lt`（默认 0.05）。有加速卡时，加速卡样本也须达到最少样本数，加速卡平均和繁忙占比同样低于这两条。无加速卡则只看 CPU |
 | 样本不足 | 在线但样本不够，或有卡却没有足够的加速卡样本。不判成基本不用，也不编数 |
-| 离线 | 生成时刻已离线。只写末次上报时间，不把末次快照当成实时用量 |
+| 离线 | 生成时刻的实时状态。只写末次上报时间，不把末次快照当成实时用量。这不是历史里的「离线（无数据）」 |
 
 已落入高负荷的主机不再计入基本不用。更早模板用过的「CPU 平均 <15%、加速卡平均 <10%」不是现行规则。
 
-窗口在线率 = 该窗口内至少有一条历史上报的主机数 / 当前未隐藏主机数。已隐藏主机不进入分子、分母、排行和闲忙。没有单独的在线心跳表，采样中断算未上报。闲忙里的「离线」和「基本不用」看生成时刻是否在线，不回溯窗口内状态。
+窗口在线率 = 该窗口内至少有一条历史上报的主机数 / 当前未隐藏主机数。已隐藏主机不进入分子、分母、排行和闲忙。没有单独的在线心跳表。闲忙里的「离线」和「基本不用」看生成时刻是否在线，不回溯窗口内状态。总览另写历史拆分：「离线（无数据）」多少段、累计多久；「断网（已补报）」多少段、累计多久。补上的样本已经在利用率里。本地暂存溢出丢掉的条数写明，并归入「离线（无数据）」。
 
 窗口内上报条数为 0 时，日/周/月报告仍然生成并入库（`empty=true`，`status=ok`）。列表和预览都保留报告壳，并写明没有可汇总的上报、不编造利用率。这不是失败。失败仍是窗口不合法或整段超出保留期。
 
@@ -302,7 +315,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
   "host_type": "gpu",
   "timestamp": 1722096000,
   "token": "optional-agent-token",
-  "agent_version": "1.11.0",
+  "agent_version": "1.12.0",
   "system": {
     "cpu_percent": 23.5,
     "cpu_count": 64,
@@ -415,6 +428,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 - 给 `push_upgrade.sh`、`push_python_bundles.sh` 增加 `--dir`，或把 `~/monitor` 当成生产升级目标
 - 指标框架化（N2 / NH-04）。单独跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)，不在本轮实现
 - 总览里的长期空闲名单、把部署页收进同一页、在浏览器里执行中心升级。长期空闲仍只看使用诊断
+- 重点数据守护（外传监测）。不在本版范围
 
 ---
 
@@ -422,11 +436,11 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 
 1. 在 `/opt/monitor` 启动生产中心后，浏览器可打开监测台、部署页和设置页。`push_upgrade.sh` 只针对该目录，试用目录不走这条命令。
 2. 至少一台 `cpu` 主机和一台带加速卡（或 PCI 回退 / 模拟卡）的主机完成上报。无卡主机仍能上报系统指标。
-3. 列表显示在线状态和完整地址。离线主机不把末次快照当成当前利用率。详情能看到 CPU、内存、磁盘和加速卡（有则显示），手工资产不被上报覆盖。
+3. 列表显示在线状态和完整地址。实时中断只显示「离线」，指标列为 `-`。详情能看到 CPU、内存、磁盘和加速卡（有则显示），手工资产不被上报覆盖。磁盘占用率是容量；磁盘读写是 Mbps 和 %util，不进入闲忙。
 4. 隐藏后该机退出列表和在线统计；恢复后重新出现。没有 `confirm=delete` 时硬删除不发生。
-5. 时段统计能按相对分钟和绝对起止返回 avg / min / max / p95 / busy_ratio，集群为样本加权。
+5. 时段统计能按相对分钟和绝对起止返回 avg / min / max / p95 / busy_ratio，集群为样本加权。概览把「离线（无数据）」和「断网（已补报）」分开计数。补报按采集时间入库，不堆在重连时刻。同一主机、同一采集时间不重复入库。
 6. 使用诊断能生成并再次打开日/周/月报告。窗口里没有上报时，三份报告都留在列表里，页面标明无数据，不消失。基本不用必须同时满足平均 <5% 和繁忙 <5%（有卡时加速卡同样）。平均 14% 或加速卡平均 9% 不是基本不用。高负荷为样本足够且繁忙占比 ≥40% 或 P95 ≥85%。
-7. 停止 Agent 超过离线阈值后状态变为离线，今日关注把它算进离线。
+7. 停止 Agent 超过离线阈值后，实时状态变为「离线」，今日关注把它算进离线。若只是网络不通而 Agent 仍在写本地暂存，恢复后那段历史是「断网（已补报）」；Agent 停了或暂存超出 24 小时被丢掉，那段是「离线（无数据）」。
 8. 未设置管理 Token 时写接口可用；设置后，不带 `X-Management-Token` 的写操作被拒绝，读报告仍可用。未配置 Webhook 时生成报告只入库。
 9. 全程无外部监控软件依赖。自测 `PYTHONPATH=. python3 -m unittest discover -s tests` 通过。
 
@@ -437,9 +451,9 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 | 需求 | 实现 | 主要测试 |
 | --- | --- | --- |
 | FR-01 | `scripts/deploy_center.sh`、`push_upgrade.sh`、`upgrade_center.sh`、`center/storage.py` | `tests/test_upgrade_center.py`、`tests/test_center_backup.py` |
-| FR-02 | `agent/main.py`、`agent/metrics/` | `tests/test_basic.py`、`tests/test_gpu.py`、`tests/test_amd.py`、`tests/test_npu.py`、`tests/test_cnmon.py`、`tests/test_rknn.py`、`tests/test_pci_accel.py`、`tests/test_disk.py`、`tests/test_network.py`、`tests/test_load.py` |
+| FR-02 | `agent/main.py`、`agent/spool.py`、`agent/metrics/` | `tests/test_basic.py`、`tests/test_spool_catchup.py`、`tests/test_gpu.py`、`tests/test_disk.py`、`tests/test_disk_io.py` |
 | FR-03、FR-04 | `center/api.py`、`center/hostmeta.py`、`center/readdress.py`、`center/anomaly.py`、`center/static/` | `tests/test_host_meta.py`、`tests/test_host_list.py`、`tests/test_readdress.py`、`tests/test_ux.py` |
-| FR-UTIL | `center/storage.py` 时段聚合 | `tests/test_period_util.py` |
+| FR-UTIL | `center/storage.py` 时段聚合、`center/api.py` 批量入库 | `tests/test_period_util.py`、`tests/test_spool_catchup.py`、`tests/test_export_zh.py` |
 | FR-DIAG | `center/reports.py`、`center/report_schedule.py` | `tests/test_reports.py` |
 | FR-ADMIN | `center/admin_settings.py`、`center/report_push.py` | `tests/test_admin_settings.py` |
 | FR-DEPLOY | `center/deploy_*.py`、`scripts/deploy_agent.sh`、`scripts/deploy_fleet.sh` | `tests/test_deploy.py`、`tests/test_python_bundle.py` |

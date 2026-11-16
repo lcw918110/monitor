@@ -50,7 +50,12 @@ HOST_COLUMNS: List[ExportColumn] = [
     ExportColumn("address", "展示地址", "页面上的地址：手工地址、未停用的部署清单或 host_id 中的 IP", "无"),
     ExportColumn("group_name", "资源组", "中心侧资源组名称，未分组为空", "无"),
     ExportColumn("host_type", "主机类型", "cpu 或 gpu。gpu 表示带加速卡", "无"),
-    ExportColumn("online", "是否在线", "True 为在线，False 为离线。判定与页面相同", "无"),
+    ExportColumn(
+        "online",
+        "是否在线",
+        "True 为在线，False 为当前「离线」。中断期间不区分机器是否还在采集，指标列是「-」",
+        "无",
+    ),
     ExportColumn("last_seen", "最近上报（Unix秒）", "最后一次上报的 Unix 时间戳", "Unix秒"),
     ExportColumn("cpu_percent", "CPU利用率（%）", "当前 CPU 利用率", "%"),
     ExportColumn("cpu_count", "CPU核数", "逻辑核数", "核"),
@@ -145,9 +150,33 @@ def period_columns() -> List[ExportColumn]:
         ExportColumn("host_type", "主机类型", "cpu 或 gpu。集群汇总行空着", "无"),
         ExportColumn("accel_count", "加速卡数量", "加速卡张数", "张"),
         ExportColumn("accel_summary", "加速卡型号", "加速卡摘要", "无"),
-        ExportColumn("sample_count", "样本数", "这一窗口里纳入统计的历史上报条数", "条"),
+        ExportColumn("sample_count", "样本数", "这一窗口里纳入统计的历史上报条数。补报样本按采集时间计入，不按到达时间", "条"),
         ExportColumn("from_ts", "起始时间（Unix秒）", "实际有样本的起点，Unix 秒", "Unix秒"),
         ExportColumn("to_ts", "结束时间（Unix秒）", "实际有样本的终点，Unix 秒", "Unix秒"),
+        ExportColumn(
+            "nodata_intervals",
+            "离线（无数据）段数",
+            "窗口内没有样本、以后也不会补上的段数。机器或 Agent 停了，或本地暂存已丢弃。实时页在中断期间只写「离线」",
+            "段",
+        ),
+        ExportColumn(
+            "nodata_seconds",
+            "离线（无数据）累计（秒）",
+            "上述各段的秒数合计。不是实时状态的名字",
+            "秒",
+        ),
+        ExportColumn(
+            "backfill_intervals",
+            "断网（已补报）段数",
+            "当时中心看不到上报，恢复后 Agent 按原来的采集时间补上的段数。这些样本已经进入利用率",
+            "段",
+        ),
+        ExportColumn(
+            "backfill_seconds",
+            "断网（已补报）累计（秒）",
+            "上述各段的秒数合计。图表在对应采集时间上有点，不是断线后的一条尖峰",
+            "秒",
+        ),
     ]
     for key in PERIOD_METRIC_KEYS:
         label, unit, meaning = _PERIOD_METRIC_TEXT.get(key, (key, "", key))
@@ -175,7 +204,7 @@ RANKING_COLUMNS: List[ExportColumn] = [
     ExportColumn(
         "pole",
         "闲忙归类",
-        "idle 基本不用，high_load 高负荷，normal 中间，offline 离线，insufficient 样本不足。只看 CPU 和加速卡",
+        "idle 基本不用，high_load 高负荷，normal 中间，offline 是生成时刻的「离线」，insufficient 样本不足。只看 CPU 和加速卡。这里的 offline 不是历史里的「离线（无数据）」或「断网（已补报）」",
         "无",
     ),
     ExportColumn("pole_reason", "归类说明", "闲忙归类的中文原因", "无"),
@@ -223,6 +252,10 @@ def field_guide_text() -> str:
         "磁盘I/O利用率是设备忙着做 I/O 的时间百分比，类似 iostat 的 %util，取整盘中的最大值，限制在 0～100。磁盘没有稳定的额定带宽，所以不算「速率 / 额定」。",
         "采集端刚启动、还没有上一笔计数时，这三项为空。旧的历史上报没有这三项时，时段统计里也是空的，不影响原来的 CPU、内存和磁盘占用。",
         "闲忙（基本不用 / 高负荷）只看 CPU 和加速卡。内存、磁盘占用、磁盘读写都不进入闲忙。没有配置繁忙阈值的列，繁忙占比留空。",
+        "实时页在中断期间只有一个状态：「离线」。末次快照仍可看时间，指标列是「-」。",
+        "历史里再分成两个名字，不要换成别的说法：「离线（无数据）」是这段没有样本、以后也不会有；「断网（已补报）」是机器和 Agent 当时仍在采集，恢复后按原来的采集时间补上，时段统计、图表、导出和诊断报告都按这些样本计算利用率。",
+        "补不上的原因包括机器或 Agent 停了，或者磁盘上的暂存没了。本地暂存默认留 24 小时（设置页「本地暂存保留」）。超出后丢掉最早的样本，并记一笔溢出，这段归入「离线（无数据）」，不是悄悄少一块。",
+        "趋势图悬停用 Asia/Shanghai 时间和该点的数值。补上的点标「断网（已补报）」。没有样本的空隙保持「-」，并标「离线（无数据）」。读失败的指标也是「-」，不编造 0。",
         "",
     ]
     lines.extend(_section_lines("一、主机快照 hosts.csv", HOST_COLUMNS))

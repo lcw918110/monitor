@@ -5,6 +5,7 @@
   "token": "",
   "offline_seconds": 90,
   "retention_days": 7,
+  "spool_retention_hours": 24,
   "cleanup_interval_seconds": 3600,
   "anomaly": {
     "cpu_warn_percent": 80,

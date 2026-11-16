@@ -5,7 +5,7 @@ import json
 import os
 import socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent import __version__ as AGENT_VERSION
 from agent.metrics.accelerators import (
@@ -15,6 +15,15 @@ from agent.metrics.accelerators import (
 )
 from agent.metrics.system import collect_system
 from agent.sender import send_metrics
+from agent.spool import (
+    Spool,
+    apply_flush_result,
+    batch_url,
+    build_batch,
+    parse_response,
+    resolve_spool_dir,
+    should_spool,
+)
 from common.host_type import normalize_host_type, resolve_auto_host_type
 from common.validate import validate_agent_config
 
@@ -28,6 +37,10 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
         "token": "",
         "interval_seconds": 15,
         "disk_path": "/",
+        "spool_retention_hours": 24,
+        "spool_batch_size": 80,
+        "data_dir": "",
+        "spool_dir": "",
     }
     if path and os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -83,19 +96,98 @@ def build_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def open_spool(cfg: Dict[str, Any]) -> Spool:
+    return Spool(
+        resolve_spool_dir(cfg),
+        retention_hours=cfg.get("spool_retention_hours") or 24,
+        batch_size=cfg.get("spool_batch_size") or 80,
+    )
+
+
+def remember_retention(spool: Spool, body: str) -> None:
+    response = parse_response(body)
+    if response.get("spool_retention_hours") is not None:
+        spool.note_retention_hint(response.get("spool_retention_hours"))
+
+
+def flush_spool(cfg: Dict[str, Any], spool: Spool) -> None:
+    """成功上报之后只补一小批，避免恢复瞬间把中心打满。剩下的等下个周期。"""
+    body = build_batch(spool, token=str(cfg.get("token") or ""))
+    samples = body.get("samples") or []
+    overflows = body.get("overflows") or []
+    if not samples and not overflows:
+        return
+    code, text = send_metrics(
+        batch_url(cfg.get("center_url")),
+        body,
+        retries=1,
+        retry_delay=0.5,
+    )
+    ok = apply_flush_result(spool, len(samples), len(overflows), code, parse_response(text))
+    if ok:
+        print(
+            "[%s] 补报 %s 条，溢出记录 %s 条，队列剩余 %s"
+            % (time.strftime("%H:%M:%S"), len(samples), len(overflows), spool.pending_count())
+        )
+    else:
+        print(
+            "[%s] 补报未成功 code=%s，本地仍保留 %s 条"
+            % (time.strftime("%H:%M:%S"), code, spool.pending_count())
+        )
+
+
+def deliver_payload(cfg: Dict[str, Any], spool: Spool, payload: Dict[str, Any]) -> Tuple[int, str]:
+    url = cfg.get("center_url") or "http://127.0.0.1:8080/api/v1/metrics"
+    code, body = send_metrics(url, payload)
+    if 200 <= code < 300:
+        remember_retention(spool, body)
+        try:
+            flush_spool(cfg, spool)
+        except Exception as exc:  # noqa: BLE001
+            print("[%s] 补报异常: %s" % (time.strftime("%H:%M:%S"), exc))
+        return code, body
+    if should_spool(code):
+        try:
+            spool.enqueue(payload)
+            print(
+                "[%s] 上报失败 code=%s，已按采集时间 %s 写入本地暂存（待发 %s）"
+                % (
+                    time.strftime("%H:%M:%S"),
+                    code,
+                    payload.get("timestamp"),
+                    spool.pending_count(),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            print("[%s] 上报失败且暂存写入失败: %s" % (time.strftime("%H:%M:%S"), exc))
+    else:
+        print(
+            "[%s] 上报失败 code=%s body=%s"
+            % (time.strftime("%H:%M:%S"), code, (body or "")[:200])
+        )
+    return code, body
+
+
 def run_loop(cfg: Dict[str, Any]) -> None:
     url = cfg.get("center_url") or "http://127.0.0.1:8080/api/v1/metrics"
     interval = max(5, int(cfg.get("interval_seconds") or 15))
     ident = resolve_identity(cfg)
+    spool = open_spool(cfg)
     print(
-        "Agent 启动: host_id=%s → %s (间隔 %ss)"
-        % (ident["host_id"], url, interval)
+        "Agent 启动: host_id=%s → %s (间隔 %ss，暂存 %s，保留 %sh)"
+        % (
+            ident["host_id"],
+            url,
+            interval,
+            spool.directory,
+            spool.effective_retention_hours(),
+        )
     )
     while True:
         started = time.time()
         try:
             payload = build_payload(cfg)
-            code, body = send_metrics(url, payload)
+            code, _body = deliver_payload(cfg, spool, payload)
             sysinfo = payload.get("system") or {}
             acc = payload.get("accelerators") or []
             if 200 <= code < 300:
@@ -109,11 +201,6 @@ def run_loop(cfg: Dict[str, Any]) -> None:
                         sysinfo.get("cpu_count"),
                         len(acc),
                     )
-                )
-            else:
-                print(
-                    "[%s] 上报失败 code=%s body=%s"
-                    % (time.strftime("%H:%M:%S"), code, body[:200])
                 )
         except Exception as exc:  # noqa: BLE001
             print("[%s] 采集/上报异常: %s" % (time.strftime("%H:%M:%S"), exc))
@@ -153,7 +240,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.once:
         payload = build_payload(cfg)
-        code, body = send_metrics(cfg["center_url"], payload)
+        code, body = deliver_payload(cfg, open_spool(cfg), payload)
         print("once code=%s body=%s" % (code, body))
         if not (200 <= code < 300):
             raise SystemExit(1)

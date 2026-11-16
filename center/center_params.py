@@ -108,11 +108,20 @@ GROUPS: List[Dict[str, Any]] = [
             _num(
                 "offline_seconds",
                 "离线判定",
-                "用途：多久没有上报就把主机当成离线。单位：秒。影响：监测台在线/离线、诊断报告里离线主机不计入基本不用，以及时段统计的离线次数和离线时段（两次上报相隔超过这条线才记一段）。建议大于采样间隔，且至少 15 秒。",
+                "用途：多久没有上报，实时页就显示「离线」。单位：秒。影响：监测台只使用这一个实时状态，指标列显示「-」；诊断报告里当前离线的主机不计入基本不用。历史里同一条线把「离线（无数据）」和后来补上的「断网（已补报）」分开，不另造实时徽章。建议大于采样间隔，且至少 15 秒。不改变闲忙。",
                 90,
                 "秒",
                 15,
                 86400,
+            ),
+            _num(
+                "spool_retention_hours",
+                "本地暂存保留",
+                "用途：Agent 暂时送不出去的样本，在本机最多留多久，恢复后按原来的采集时间补报。单位：小时。默认 24。影响：超过后丢掉最早的样本，并向中心记一笔溢出，这段历史算「离线（无数据）」，不会悄悄缺一块。实时页在中断期间仍只显示「离线」。Agent 下次上报成功后采用这里的值；还没连上中心时，用采集端配置里的同名项。不改变闲忙，磁盘读写也不进入闲忙。",
+                24,
+                "小时",
+                1,
+                168,
             ),
             _num(
                 "cleanup_interval_seconds",
@@ -448,7 +457,7 @@ GROUPS: List[Dict[str, Any]] = [
             _field(
                 "token",
                 "Agent 上报 Token",
-                "用途：Agent 上报口令。影响：只校验 POST /api/v1/metrics，不能用来改设置，也不是网页登录。留空的输入框表示不修改；要清空请点恢复默认，清空后上报不再校验。单位：无。保存后接口不回显明文。写在 center.json。",
+                "用途：Agent 上报口令。影响：只校验 POST /api/v1/metrics 和补报用的 POST /api/v1/metrics/batch，不能用来改设置，也不是网页登录。留空的输入框表示不修改；要清空请点恢复默认，清空后上报不再校验。单位：无。保存后接口不回显明文。写在 center.json。",
                 "secret",
                 "",
                 placeholder="留空表示不修改",
@@ -555,6 +564,7 @@ def default_center_config() -> Dict[str, Any]:
         "token": "",
         "offline_seconds": 90,
         "retention_days": 7,
+        "spool_retention_hours": 24,
         "cleanup_interval_seconds": 3600,
         "anomaly": anomaly,
         "period_util": {
@@ -744,6 +754,7 @@ def _is_integral_field(field: Dict[str, Any]) -> bool:
     return key in (
         "retention_days",
         "offline_seconds",
+        "spool_retention_hours",
         "cleanup_interval_seconds",
         "port",
         "report.min_samples",
@@ -1117,6 +1128,9 @@ class CenterRuntime:
         if self.storage is not None:
             self.storage.retention_days = _cfg_int(cfg.get("retention_days"), 7)
             self.storage.offline_seconds = _cfg_int(cfg.get("offline_seconds"), 90)
+            self.storage.spool_retention_hours = _cfg_int(
+                cfg.get("spool_retention_hours"), 24
+            )
         if self.cleanup is not None:
             self.cleanup.interval = _cfg_int(cfg.get("cleanup_interval_seconds"), 3600)
         if self.scheduler is not None:

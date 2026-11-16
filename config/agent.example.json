@@ -5,5 +5,7 @@
   "host_type": "auto",
   "token": "",
   "interval_seconds": 15,
-  "disk_path": "/"
+  "disk_path": "/",
+  "spool_retention_hours": 24,
+  "spool_batch_size": 80
 }

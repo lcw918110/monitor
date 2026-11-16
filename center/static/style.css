@@ -951,6 +951,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .chart-tip-time { color: #3d4d60; }
 .chart-tip-value { font-weight: 600; }
+.chart-tip-note { color: #3d4d60; }
 
 .gpu-table, .proc-table {
   width: 100%;

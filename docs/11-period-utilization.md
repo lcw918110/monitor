@@ -36,13 +36,18 @@ GET /api/v1/period-stats?minutes=1440&host_ids=gpu-01,app-01
 
 `host_ids` 为可选逗号分隔过滤。响应包含：
 
-- `hosts[]`：每台主机的聚合（含最新快照的 `accel_summary` / `accel_count` / `accel_inventory`，型号+数量，不参与 idle/busy）。每台另有 `offline`：`intervals[]`（`from_ts` / `to_ts` / `seconds` / `until_window_end`）、`interval_count`、`total_seconds`、`complete`
-- `offline`：这一窗口的离线概览。`host_count` 是至少有一段离线的主机数，`interval_count` / `total_seconds` 是合计。`hosts[]` 按累计时长从长到短。`incomplete` 为真表示有主机触达读取上限，末尾未判断
+- `hosts[]`：每台主机的聚合（含最新快照的 `accel_summary` / `accel_count` / `accel_inventory`，型号+数量，不参与 idle/busy）。每台另有 `offline`
+- `offline`：这一窗口的离线概览。实时页在中断期间只写「离线」。历史拆成两桶，名字不要换：
+  - `nodata`：「离线（无数据）」。`interval_count` / `total_seconds` 是没有样本、以后也不会有的段。顶层的 `interval_count` / `total_seconds` 与这一桶相同
+  - `backfill`：「断网（已补报）」。当时看不到上报，后来按采集时间补上的段。这些样本已经在 avg / P95 里
+  - `overflow_dropped`：本地暂存超出保留时间丢掉的条数，归在「离线（无数据）」里说明，不是第三种状态
+  - `hosts[]` 按两类时长之和从长到短。`incomplete` 为真表示有主机触达读取上限，末尾未判断
+  - 每段含 `from_ts` / `to_ts` / `seconds` / `until_window_end` / `label`。溢出叠上的「离线（无数据）」段带 `note`
 - `cluster.metrics`：集群汇总
 - 顶层与 `cluster` 亦含集群盘点 `accel_summary` / `accel_inventory`
 - `rollup`: `"sample_weighted"`
 
-离线时段不进入 avg / P95 / 繁忙占比，也不改变闲忙两极。一条上报覆盖其后 `offline_seconds` 秒（含）。两次上报的间隔没有超过这条线，就不记离线。
+「离线（无数据）」不进入 avg / P95 / 繁忙占比。「断网（已补报）」的样本按采集时间进入这些统计，不按到达时间堆成重连尖峰。两者都不改变闲忙两极。一条上报覆盖其后 `offline_seconds` 秒（含）。间隔没有超过这条线，就不记成中断。主机第一次上报之前不算。入库按 `(host_id, timestamp)` 去重。
 
 ### 导出 CSV
 
@@ -50,7 +55,7 @@ GET /api/v1/period-stats?minutes=1440&host_ids=gpu-01,app-01
 GET /api/v1/export/period-stats.csv?minutes=120
 ```
 
-行为与集群接口同一套查询参数。首行 `__cluster__` 为汇总，其后每台主机一行。表头是中文（例如 `CPU利用率平均（%）`、`磁盘读取速率平均（Mbps）`），格子里的数字不改。没有繁忙阈值的指标，繁忙占比列为空。字段含义见 `GET /api/v1/export/field-guide.txt`，或 `GET /api/v1/export/period-stats-fields.csv`（列是字段、含义、单位）。说明不插在数据表头下面，以免 Excel / pandas 把说明当成一行数据。文件仍是 UTF-8 带 BOM。
+行为与集群接口同一套查询参数。首行 `__cluster__` 为汇总，其后每台主机一行。表头是中文（例如 `CPU利用率平均（%）`、`磁盘读取速率平均（Mbps）`、`离线（无数据）段数`、`断网（已补报）累计（秒）`），格子里的数字不改。没有繁忙阈值的指标，繁忙占比列为空。字段含义见 `GET /api/v1/export/field-guide.txt`，或 `GET /api/v1/export/period-stats-fields.csv`（列是字段、含义、单位）。说明不插在数据表头下面，以免 Excel / pandas 把说明当成一行数据。文件仍是 UTF-8 带 BOM。JSON 键名保持英文。
 
 历史趋势（详情折线）也可带同一时间窗：
 
@@ -59,7 +64,7 @@ GET /api/v1/hosts/{id}/history?minutes=120&limit=240
 GET /api/v1/hosts/{id}/history?from_ts=...&to_ts=...&limit=240
 ```
 
-无 `minutes`/`from_ts` 时 history 仍默认 60 分钟。
+无 `minutes`/`from_ts` 时 history 仍默认 60 分钟。每个点的 `ts` 是采集时间。`backfill` 为真表示这是后来补上的点。趋势悬停用这个时间和数值；空隙保持 `-`。
 
 ## 指标与聚合
 
@@ -105,8 +110,8 @@ GET /api/v1/hosts/{id}/history?from_ts=...&to_ts=...&limit=240
 2. 可调 CPU / 加速卡繁忙阈值
 3. 集群汇总表 + 各主机表（平均 / P95 / 繁忙占比等）
 4. 「导出 CSV」下载当前窗口报表，旁边的「字段说明」是中文列名、含义和单位
-5. 点选左侧主机查看该机时段指标；趋势在下方，悬停显示 Asia/Shanghai 时间和数值（用历史上报的 `ts`，空点显示横线）。点选只换右侧汇总和下方趋势：左侧列表保持滚动位置和当前选中行；快速连点时，过期的请求不会把上一台的内容写回来。定时刷新在时间窗没变时不重拉趋势
-6. 左侧最上面是**离线概览**：离线台数、离线段数、累计时长，以及每台的离线时段。单机详情同样先写这段，再写利用率。超过 `offline_seconds`（默认 90 秒）没有上报记为离线，和监测台在线判定是同一条线，不另加传感器。主机第一次上报之前不算离线。窗口末尾若因单机读取上限被截断，不把截断之后猜成离线
+5. 点选左侧主机查看该机时段指标；趋势在下方，悬停显示 Asia/Shanghai 时间和数值（用历史上报的 `ts`）。补上的点标「断网（已补报）」。没有样本的空隙是 `-`，并标「离线（无数据）」。读失败的指标在有点的位置仍是 `-`。点选只换右侧汇总和下方趋势：左侧列表保持滚动位置和当前选中行；快速连点时，过期的请求不会把上一台的内容写回来。定时刷新在时间窗没变时不重拉趋势
+6. 左侧最上面是**离线概览**，分「离线（无数据）」和「断网（已补报）」两列段数与累计时长。单机详情同样先写这两段，再写利用率。实时页在中断期间只写「离线」，和这里用同一条 `offline_seconds`（默认 90 秒），不另加传感器，也不在实时页发明「断网」徽章。主机第一次上报之前不算。窗口末尾若因单机读取上限被截断，不把截断之后猜成离线。本地暂存默认 24 小时，超出后丢掉的最早样本记入「离线（无数据）」
 
 ## 在运行中的中心上核对
 

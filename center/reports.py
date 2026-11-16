@@ -126,6 +126,50 @@ def _fmt_ts(ts: Optional[int]) -> str:
     return datetime.fromtimestamp(int(ts), SHANGHAI).strftime("%Y-%m-%d %H:%M")
 
 
+def _fmt_duration(seconds: Any) -> str:
+    try:
+        total = int(seconds or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total < 0:
+        total = 0
+    if total < 60:
+        return "%d 秒" % total
+    minutes, sec = divmod(total, 60)
+    if minutes < 60:
+        if sec:
+            return "%d 分 %d 秒" % (minutes, sec)
+        return "%d 分" % minutes
+    hours, minutes = divmod(minutes, 60)
+    if minutes:
+        return "%d 小时 %d 分" % (hours, minutes)
+    return "%d 小时" % hours
+
+
+def _history_gap_sentence(offline: Dict[str, Any]) -> str:
+    """诊断正文只用这两个历史名称，不另起说法。"""
+    nodata = (offline or {}).get("nodata") or {}
+    caught = (offline or {}).get("backfill") or {}
+    text = (
+        "历史里分开计：「离线（无数据）」%d 段、累计 %s；「断网（已补报）」%d 段、累计 %s。"
+        "断网（已补报）的样本按采集时间进入本窗口的利用率，闲忙仍只看 CPU 和加速卡。"
+        "机器或 Agent 停了、或磁盘上的暂存没了，那段保持「离线（无数据）」，以后也不会补上。"
+        % (
+            int(nodata.get("interval_count") or 0),
+            _fmt_duration(nodata.get("total_seconds")),
+            int(caught.get("interval_count") or 0),
+            _fmt_duration(caught.get("total_seconds")),
+        )
+    )
+    dropped = int((offline or {}).get("overflow_dropped") or 0)
+    if dropped:
+        text += (
+            "另有本地暂存超出保留时间，丢弃 %d 条，对应区间记在「离线（无数据）」，不是没人知道的空洞。"
+            % dropped
+        )
+    return text
+
+
 def _range_text(from_ts: int, to_ts: int) -> str:
     return "%s～%s" % (_fmt_ts(from_ts), _fmt_ts(to_ts))
 
@@ -982,8 +1026,9 @@ def build_report(
             total,
             ("%.1f%%" % seen_rate) if seen_rate is not None else "样本不足",
         ),
-        "生成时刻在线 %d、离线 %d。闲忙里的「离线」和「基本不用」仍按生成时刻是否在线，不回溯窗口内状态。离线主机不把末次快照当成实时用量。"
+        "生成时刻在线 %d、离线 %d。闲忙里的「离线」和「基本不用」仍按生成时刻是否在线，不回溯窗口内状态。实时页在中断期间只写「离线」，指标列为「-」，不把末次快照当成实时用量。"
         % (online_n, len(offline_hosts)),
+        _history_gap_sentence(current.get("offline") or {}),
         _delta_sentence(current, previous),
         "Top 风险：" + _top_risk(
             len(offline_hosts),
@@ -1245,7 +1290,7 @@ def build_report(
             disk_warn,
             disk_critical,
         ),
-        "磁盘满不等于算力忙。多挂载只在历史点保存了 disks[] 时给出最满挂载；没有则写挂载样本不足，不用当前快照回填过去的窗口。",
+        "磁盘满不等于算力忙。磁盘占用率只表示容量。磁盘读取、写入（Mbps）和磁盘 I/O 利用率（%util）不进入闲忙；读不到就空着，不写成 0。多挂载只在历史点保存了 disks[] 时给出最满挂载；没有则写挂载样本不足，不用当前快照回填过去的窗口。",
     ]
     def _disk_table(title: str, rows_hosts: List[Dict[str, Any]]) -> None:
         if not rows_hosts:
@@ -1336,7 +1381,7 @@ def build_report(
             _idle_cut_text(rules),
             _legacy_idle_note(rules),
         ),
-        "可用性：当前离线 %d 台。离线期间不要把最后一次上报当成仍在运行的利用率。"
+        "可用性：生成时刻「离线」%d 台。中断期间不要把最后一次上报当成仍在运行的利用率。窗口内没有样本的时段是「离线（无数据）」；按原采集时间补上的时段是「断网（已补报）」。"
         % len(offline_hosts),
         "部署：本报告不读取部署任务日志，不判断是否存在部署残留。Agent 安装只走 /deploy.html 与中心机部署脚本。",
     ]
