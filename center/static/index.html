@@ -12,31 +12,27 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.10.0</p>
+        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.11.0</p>
       </div>
     </div>
     <nav class="shell-nav" aria-label="主导航">
-      <a class="shell-link active" href="#realtime" data-shell="overview">总览</a>
+      <a class="shell-link active" href="#realtime" data-shell="realtime">实时监控</a>
       <a class="shell-link" href="#hosts" data-shell="hosts">主机</a>
-      <a class="shell-link" href="#reports" data-shell="reports">诊断</a>
+      <a class="shell-link" href="#period" data-shell="period">时段统计</a>
+      <a class="shell-link" href="#reports" data-shell="reports">使用诊断</a>
       <a class="shell-link" href="/deploy.html" data-shell="ops">运维</a>
       <a class="shell-link" href="/settings.html" data-shell="settings">设置</a>
     </nav>
     <div class="top-meta">
       <a class="link" href="/api/v1/export/hosts.csv">导出 CSV</a>
       <a class="link" href="/api/v1/export/hosts.json">导出 JSON</a>
+      <a class="link" href="/api/v1/export/field-guide.txt">字段说明</a>
       <span id="refreshHint">自动刷新 15s</span>
       <button type="button" id="btnRefresh" class="btn">立即刷新</button>
     </div>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="监测台页签">
-    <button type="button" class="tab-btn active" role="tab" id="tabBtnRealtime" data-tab="realtime" aria-selected="true" aria-controls="viewRealtime">实时监控</button>
-    <button type="button" class="tab-btn" role="tab" id="tabBtnPeriod" data-tab="period" aria-selected="false" aria-controls="viewPeriod">时段统计</button>
-    <button type="button" class="tab-btn" role="tab" id="tabBtnReports" data-tab="reports" aria-selected="false" aria-controls="viewReports">使用诊断</button>
-  </nav>
-
-  <div id="viewRealtime" class="tab-view" role="tabpanel" aria-labelledby="tabBtnRealtime">
+  <div id="viewRealtime" class="tab-view">
     <section class="attention" id="attention" aria-label="今日关注">
       <div class="attention-head">
         <h2>今日关注</h2>
@@ -58,7 +54,7 @@
               <option value="">全部类型</option>
               <option value="cpu">CPU</option>
               <option value="gpu">GPU（加速卡）</option>
-              <option value="auto">auto</option>
+              <option value="auto">自动</option>
             </select>
             <select id="filterStatus">
               <option value="">全部判定</option>
@@ -113,9 +109,9 @@
                 <th class="sortable" data-sort="owner">负责人</th>
                 <th class="sortable" data-sort="purpose">用途</th>
                 <th class="sortable" data-sort="type">类型</th>
-                <th class="sortable" data-sort="cpu_percent">CPU%</th>
-                <th class="sortable" data-sort="mem_percent">内存%</th>
-                <th class="sortable" data-sort="disk_percent">磁盘%</th>
+                <th class="sortable" data-sort="cpu_percent">CPU利用率</th>
+                <th class="sortable" data-sort="mem_percent">内存利用率</th>
+                <th class="sortable" data-sort="disk_percent">磁盘占用</th>
                 <th class="sortable" data-sort="disk_count">磁盘数</th>
                 <th class="sortable" data-sort="accel">加速卡</th>
                 <th class="sortable" data-sort="accel_util">加速卡使用率</th>
@@ -140,7 +136,7 @@
     </main>
   </div>
 
-  <div id="viewPeriod" class="tab-view" role="tabpanel" aria-labelledby="tabBtnPeriod" hidden>
+  <div id="viewPeriod" class="tab-view" hidden>
     <section class="period-toolbar" aria-label="时段统计筛选">
       <h2>时段统计</h2>
       <div class="filters period-util-controls" id="periodUtilControls"></div>
@@ -160,13 +156,22 @@
           <span class="muted" id="periodDetailTitle">请选择主机</span>
         </div>
         <div id="periodDetailBody" class="detail-body">
-          <p class="empty">点选左侧主机，查看该机时段指标与趋势</p>
+          <p class="empty">点选左侧主机，查看该机时段指标</p>
+        </div>
+      </section>
+      <section class="panel period-charts-panel" aria-label="趋势">
+        <div class="panel-head">
+          <h2>趋势</h2>
+          <span class="muted">悬停查看上海时间与数值</span>
+        </div>
+        <div id="periodCharts" class="period-charts">
+          <p class="empty">点选主机后，这里显示该机趋势</p>
         </div>
       </section>
     </div>
   </div>
 
-  <div id="viewReports" class="tab-view" role="tabpanel" aria-labelledby="tabBtnReports" hidden>
+  <div id="viewReports" class="tab-view" hidden>
     <section class="period-toolbar" aria-label="使用诊断">
       <h2>使用诊断</h2>
       <div class="filters" id="reportControls">

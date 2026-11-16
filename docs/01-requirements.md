@@ -1,7 +1,7 @@
 # 简易多机监控系统 — 软件需求规格说明书（SRS）
 
 | 文档版本 | 2.0 |
-| 对应产品 | v1.10.0 |
+| 对应产品 | v1.11.0 |
 | 最近修订 | 2026-10-28 |
 | 状态 | 现行规格。本文可单独阅读，与代码、`docs/13-diagnostic-reports.md`、`docs/14-ops-runbook.md` 一致 |
 
@@ -136,7 +136,8 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 | CPU | 利用率、核数、架构、型号、频率、开机时长 |
 | 负载 | `load1` / `load5` / `load15`。读不到的那一档为 null，页面显示 `-`，不当成 0。操作系统报出的 0 仍是 0 |
 | 内存 | 总量、已用、百分比 |
-| 磁盘 | 多挂载 `disks[]`（挂载、设备、文件系统、容量、已用、百分比）。`disk_total_gb` / `disk_used_gb` 为纳入挂载的容量之和；`disk_percent` 为各挂载利用率的最大值；`disk_count` 为条数。过滤虚拟盘、网络盘、容器/快照路径、小于 1 GiB 的非主路径等，规则见 `docs/12-disk-mounts.md`。`disk_path`（默认 `/`）始终计入。旧 Agent 没有 `disks[]` 时按单盘 |
+| 磁盘容量 | 多挂载 `disks[]`（挂载、设备、文件系统、容量、已用、百分比）。`disk_total_gb` / `disk_used_gb` 为纳入挂载的容量之和；`disk_percent` 为各挂载利用率的最大值；`disk_count` 为条数。过滤虚拟盘、网络盘、容器/快照路径、小于 1 GiB 的非主路径等，规则见 `docs/12-disk-mounts.md`。`disk_path`（默认 `/`）始终计入。旧 Agent 没有 `disks[]` 时按单盘。容量和读写分开，互不换算 |
+| 磁盘读写 | 整盘 `disk_read_mbps` / `disk_write_mbps`（纳入磁盘之和，Mbps，与网络同一单位：扇区 512 字节再 ×8÷10^6）和 `disk_io_util_percent`（纳入磁盘中设备忙闲百分比的最大值，类似 iostat %util，限制 0～100，没有额定磁盘带宽）。可选 `disk_io[]`（name、read_mbps、write_mbps、util_percent）。只计 sda、nvme0n1 这类整盘，不计分区，跳过 loop、ram、zram、sr 等。用上一笔 `/proc/diskstats` 做差；刚启动还没有上一笔时这三项为 null。旧历史上报没有这些字段时按缺失处理，不补 0 |
 | 网络 | 非虚拟网卡汇总的入/出向 Mbps、累计字节、链路额定 Mbps，以及相对额定的入/出向百分比。没有计数时这些字段为 null |
 | 地址 | 本机主要 IPv4。跳过回环、链路本地和 `198.18.0.0/15` 隧道假 IP |
 
@@ -155,7 +156,7 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 
 ### 3.3 实时展示、资产、隐藏与改址（FR-03）
 
-监测台三个页签：实时监控、时段统计、使用诊断。顶栏入口为总览、主机、诊断、运维、设置。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。离线主机不把最后一次快照的数字显示成当前利用率。
+监测台只有一条顶栏：实时监控、主机、时段统计、使用诊断、运维、设置。实时监控是今日关注和主机表；主机仍打开同一页并定位到主机表；时段统计和趋势、使用诊断是另外两页。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。离线主机不把最后一次快照的数字显示成当前利用率。读不到的数显示 `-`。时段趋势悬停显示 Asia/Shanghai 时间和该点数值。
 
 | ID | 需求 | 优先级 |
 | --- | --- | --- |
@@ -194,13 +195,13 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 
 单机 `GET /api/v1/hosts/{id}/period-stats` 与集群 `GET /api/v1/period-stats`。相对窗口用 `minutes`（预设 60 / 120 / 360 / 1440 / 10080；省略时时段接口默认 120）。绝对窗口用成对的 `from_ts` / `to_ts`；两者都给时以绝对窗口为准。窗口裁剪到 `retention_days` 与当前时刻；整段都在保留期之外则 400，不编造利用率。
 
-每个指标给出 avg、min、max、p95、busy_ratio、sample_count。统计 CPU、内存、磁盘利用率、load1、网络入/出向 Mbps、加速卡平均利用率与时段内最高温度，以及相对额定的网络百分比。集群汇总是**样本加权**（`sample_weighted`）：把未隐藏主机在窗口内的原始样本合在一起再算 avg / p95 / busy_ratio，min/max 取全局最值。已隐藏主机不进入集群时段接口；按 id 仍可看单机，包括已隐藏的。
+每个指标给出 avg、min、max、p95、busy_ratio、sample_count。统计 CPU、内存、磁盘占用率、磁盘读取/写入 Mbps、磁盘 I/O 利用率、load1、网络接收/发送 Mbps、加速卡平均利用率与时段内最高温度，以及相对额定的网络百分比。没有该字段的旧点不进入对应指标的样本。磁盘读写和磁盘 I/O 利用率默认没有繁忙阈值，busy_ratio 为空。集群汇总是**样本加权**（`sample_weighted`）：把未隐藏主机在窗口内的原始样本合在一起再算 avg / p95 / busy_ratio，min/max 取全局最值。已隐藏主机不进入集群时段接口；按 id 仍可看单机，包括已隐藏的。
 
 繁忙占比默认 CPU ≥80%、加速卡 ≥80%，来自 `period_util.busy_cpu_percent` / `busy_accel_percent`，查询参数 `busy_cpu` / `busy_accel` 可覆盖。可选内存、磁盘繁忙线。负的查询值表示该指标不算繁忙占比。改这组 80% **不会**改诊断报告里的空闲线或高负荷线；那两条在 `report`，未改时默认是 5% 与 40% / 85%。
 
 详情趋势 `GET /api/v1/hosts/{id}/history` 可带同一时间窗；不带时默认 60 分钟。时段结果可导出 CSV。
 
-时段页左侧先给**离线概览**：这一窗口里有几台离线、共几段、累计多久，以及每段起止。点一台主机，右侧先写该机的离线时段，再写利用率。判定用已有历史上报和 `offline_seconds`（默认 90 秒内有上报仍算在线），不新增传感器，也不改变闲忙两极。主机第一次上报之前不算离线。点选主机只更新右侧详情，不重绘整页；连点时忽略过期响应。
+时段页先是时间窗和导出，下面左侧是主机表（表头先写离线概览：这一窗口里有几台离线、共几段、累计多久，以及每段起止），右侧是选中主机的汇总，趋势图铺在下方。悬停趋势图显示上海时间和数值。点一台主机，右侧先写该机的离线时段，再写利用率。判定用已有历史上报和 `offline_seconds`（默认 90 秒内有上报仍算在线），不新增传感器，也不改变闲忙两极。主机第一次上报之前不算离线。点选主机只更新右侧汇总和下方趋势，不重绘整页；连点时忽略过期响应。
 
 ### 3.6 使用诊断报告（FR-DIAG）
 
@@ -222,7 +223,7 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 
 报告直接聚合原始样本。繁忙占比沿用 3.5 的样本加权和繁忙阈值（默认 ≥80%，`period_util` 可改）。下面两极的默认是平均 <5%、繁忙占比 <5%（`idle_busy_lt` 默认 0.05）、高负荷繁忙占比 ≥0.40 或 P95 ≥85%、最少样本 10。这些数在 `config/center.json` 的 `report` 段（`idle_avg_lt`、`idle_busy_lt`、`high_busy_gte`、`high_p95_gte`、`min_samples`），设置页可改；不写就用代码里的同一套默认。已入库的旧报告不自动重算。
 
-闲忙两极**只看 CPU 和加速卡**。磁盘、内存不进闲忙。
+闲忙两极**只看 CPU 和加速卡**。磁盘占用、磁盘读写、磁盘 I/O 利用率和内存都不进闲忙。
 
 | 判定 | 条件 |
 | --- | --- |
@@ -301,7 +302,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
   "host_type": "gpu",
   "timestamp": 1722096000,
   "token": "optional-agent-token",
-  "agent_version": "1.10.0",
+  "agent_version": "1.11.0",
   "system": {
     "cpu_percent": 23.5,
     "cpu_count": 64,
@@ -313,6 +314,9 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
     "disk_total_gb": 1800,
     "disk_used_gb": 900,
     "disk_percent": 50.0,
+    "disk_read_mbps": 8.192,
+    "disk_write_mbps": 1.024,
+    "disk_io_util_percent": 12.5,
     "disk_count": 2,
     "disks": [
       {"mount": "/data", "device": "/dev/sdb1", "fstype": "xfs", "total_gb": 1600, "used_gb": 800, "percent": 50.0}
@@ -379,15 +383,16 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 | GET | `/api/v1/hosts/{host_id}/history` | 趋势 |
 | GET | `/api/v1/hosts/{host_id}/period-stats` | 单机时段统计 |
 | GET | `/api/v1/period-stats` | 集群时段统计 |
-| GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表 |
+| GET | `/api/v1/export/period-stats.csv` | 导出当前时间窗时段报表。表头为中文，数值不变 |
 | GET | `/api/v1/stats` | 集群即时统计 |
 | GET | `/api/v1/anomaly` | 异常判定汇总 |
-| GET | `/api/v1/export/hosts.csv` 与 `.json` | 导出当前主机快照 |
+| GET | `/api/v1/export/hosts.csv` 与 `.json` | 导出当前主机快照。CSV 表头为中文；JSON 保持英文键给程序用 |
 | GET/POST/DELETE | `/api/v1/groups` 与 `/api/v1/hosts/{id}/group` | 资源组 |
 | GET | `/api/v1/reports/preview` | 只返回将使用的时间窗，不计算、不入库 |
 | POST | `/api/v1/reports/generate` | 生成并保存。同一窗口覆盖。HTTP 生成一律 `manual` |
 | GET | `/api/v1/reports` 与 `/api/v1/reports/{id}` | 列表与详情（含 Markdown） |
-| GET | `/api/v1/reports/{id}/markdown` 与 `.../rankings.csv` | 下载 |
+| GET | `/api/v1/reports/{id}/markdown` 与 `.../rankings.csv` | 下载。排行 CSV 表头为中文 |
+| GET | `/api/v1/export/field-guide.txt` 与 `hosts-fields.csv`、`period-stats-fields.csv`、`rankings-fields.csv` | 汉字字段说明（含义和单位）。不要把说明行塞进数据 CSV 的表头下面 |
 | GET/POST | `/api/v1/settings` | 管理 Token 与报告推送。GET 不回显明文 |
 | * | `/api/v1/deploy/*` | 部署清单、设置、任务、安装脚本、模板 |
 | GET | `/`、`/deploy.html`、`/settings.html` | 监测台、部署、设置 |

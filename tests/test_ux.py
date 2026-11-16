@@ -61,7 +61,7 @@ class AgentVersionTests(unittest.TestCase):
         payload = build_payload({"host_id": "h", "host_type": "cpu"})
         self.assertEqual(payload["agent_version"], agent_version)
         self.assertEqual(agent_version, center_version)
-        self.assertEqual(agent_version, "1.10.0")
+        self.assertEqual(agent_version, "1.11.0")
         self.assertNotEqual(payload["agent_version"], "1.4.0")
         pages = {
             "center/static/index.html": "中心控制台 · CPU / 加速卡监测 · v" + center_version,
@@ -177,6 +177,19 @@ const full = ux.reportPresentation({ id: 4, title: "月报", status: "ok", paylo
 assert.strictEqual(full.mode, "full");
 assert.strictEqual(ux.reportListItemVisible({}), false);
 assert.strictEqual(ux.parseLocationHash("#hosts").focus, "hosts");
+assert.strictEqual(ux.parseLocationHash("#period").tab, "period");
+var trend = [
+  { ts: 100, value: 1 },
+  { ts: 200, value: null },
+  { ts: 300, value: 9 },
+];
+assert.strictEqual(ux.nearestTrendPoint(trend, 0).ts, 100);
+assert.strictEqual(ux.nearestTrendPoint(trend, 0).value, 1);
+assert.strictEqual(ux.nearestTrendPoint(trend, 0.5).value, null);
+assert.strictEqual(ux.nearestTrendPoint(trend, 1).ts, 300);
+assert.strictEqual(ux.nearestTrendPoint(trend, 1).value, 9);
+assert.strictEqual(ux.nearestTrendPoint([], 0.2), null);
+assert.strictEqual(ux.nearestTrendPoint([{ ts: 5, value: 0 }], 0).value, 0);
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").hostId, "gpu/1");
 assert.strictEqual(ux.parseLocationHash("#host=gpu%2F1").tab, "realtime");
 assert.strictEqual(ux.loadPerCoreHigh(null, 8, 2), false);

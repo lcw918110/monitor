@@ -117,7 +117,7 @@ CPU、内存、磁盘、加速卡利用率只接受 **0～100%**（含两端）�
 | GET | `/api/v1/reports` | 已保存列表（每个窗口一行，按 `generated_at` 新的在前）。含 `source` / `status` / `error` / `generated_at` |
 | GET | `/api/v1/reports/{id}` | JSON：`markdown` 与 `payload.sections` / `rankings` |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
-| GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
+| GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV。表头为中文，数值不变。列含义见 `/api/v1/export/rankings-fields.csv` 或 `/api/v1/export/field-guide.txt` |
 
 再次 GET 不会重算。窗口已知但算失败（例如整段超出保留期）时 HTTP 400，响应里仍带 `report`（`status=failed`，`error` 为原因）。
 

@@ -290,7 +290,7 @@ class HostListAddressGroupTests(unittest.TestCase):
         )
         code, text = api_mod.handle_export_csv(self.storage)
         self.assertEqual(code, 200)
-        self.assertIn("address", text.splitlines()[0])
+        self.assertIn("展示地址", text.splitlines()[0])
         self.assertIn("192.168.1.8", text)
         self.assertIn("机房", text)
 

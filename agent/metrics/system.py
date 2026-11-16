@@ -321,6 +321,7 @@ def sample_primary_ip() -> Optional[str]:
 
 def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[str, Any]:
     from agent.metrics.disk import collect_disks
+    from agent.metrics.disk_io import collect_disk_io
     from agent.metrics.network import collect_network
 
     data: Dict[str, Any] = {
@@ -333,6 +334,7 @@ def collect_system(disk_path: str = "/", cpu_sample_sec: float = 0.2) -> Dict[st
     data.update(sample_load())
     data.update(sample_memory())
     data.update(collect_disks(disk_path))
+    data.update(collect_disk_io())
     data.update(collect_network())
     primary_ip = sample_primary_ip()
     if primary_ip:

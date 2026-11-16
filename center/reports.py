@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import re
 import time
@@ -121,37 +119,6 @@ def _anomaly_number(anomaly: Dict[str, Any], key: str, default: float) -> float:
         return float(default)
 # 月报在 retention_days=40、15s 采样时会超过时段接口默认 6 万行上限。
 REPORT_MAX_ROWS = 250000
-
-RANKING_CSV_FIELDS = [
-    "host_id",
-    "address",
-    "hostname",
-    "group_name",
-    "owner",
-    "purpose",
-    "online",
-    "pole",
-    "pole_reason",
-    "cpu_avg",
-    "cpu_p95",
-    "cpu_busy_ratio",
-    "cpu_samples",
-    "accel_count",
-    "accel_summary",
-    "accel_avg",
-    "accel_p95",
-    "accel_busy_ratio",
-    "accel_samples",
-    "mem_avg",
-    "mem_p95",
-    "disk_avg",
-    "disk_p95",
-    "disk_max",
-    "disk_samples",
-    "fullest_mount",
-    "fullest_mount_percent",
-]
-
 
 def _fmt_ts(ts: Optional[int]) -> str:
     if ts is None:
@@ -1530,12 +1497,9 @@ def build_report(
 
 
 def rankings_csv(rankings: List[Dict[str, Any]]) -> str:
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=RANKING_CSV_FIELDS, extrasaction="ignore")
-    writer.writeheader()
-    for row in rankings:
-        writer.writerow(row)
-    return buf.getvalue()
+    from center.export_labels import RANKING_COLUMNS, write_labeled_csv
+
+    return write_labeled_csv(rankings or [], RANKING_COLUMNS)
 
 
 def _parse_as_of(raw: Any) -> Tuple[Optional[int], Optional[str]]:

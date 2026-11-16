@@ -61,7 +61,7 @@
 | 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书 Webhook；未配置不发请求 |
 | Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html`、设置页 `/settings.html` |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度 |
-| 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘见 `disk.py` |
+| 系统采集 | `agent/metrics/system.py` | CPU/内存/负载/uptime/网络；磁盘容量见 `disk.py`，磁盘读写见 `disk_io.py` |
 | 磁盘采集 | `agent/metrics/disk.py` | 多挂载点过滤 + 汇总 `disk_*` / `disks[]`（口径见 `docs/12-disk-mounts.md`） |
 | 加速卡采集 | `agent/metrics/accelerators.py` | 编排 NVIDIA / AMD / 昇腾 / 寒武纪 / RKNN；没有厂商工具时从 PCI 识别已知卡 |
 | 厂商采集 | `agent/metrics/gpu.py`、`amd.py`、`npu.py` | 英伟达、AMD、昇腾与寒武纪。由 `accelerators.py` 调用，不是第二条入口 |

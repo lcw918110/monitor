@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
 from center.anomaly import evaluate_cluster, judge_host_payload
+from center.export_labels import (
+    HOST_COLUMNS,
+    RANKING_COLUMNS,
+    field_guide_csv,
+    field_guide_text,
+    period_columns,
+    write_labeled_csv,
+)
 from center.storage import DEFAULT_BUSY_THRESHOLDS, PERIOD_METRIC_KEYS, Storage
 
 
@@ -20,29 +26,6 @@ BUSY_QUERY_KEYS = {
     "busy_mem": "mem_percent",
     "busy_disk": "disk_percent",
 }
-
-PERIOD_CSV_FIELDS = [
-    "scope",
-    "host_id",
-    "hostname",
-    "host_type",
-    "accel_count",
-    "accel_summary",
-    "sample_count",
-    "from_ts",
-    "to_ts",
-]
-for _metric in PERIOD_METRIC_KEYS:
-    PERIOD_CSV_FIELDS.extend(
-        [
-            "%s_avg" % _metric,
-            "%s_min" % _metric,
-            "%s_max" % _metric,
-            "%s_p95" % _metric,
-            "%s_busy_ratio" % _metric,
-        ]
-    )
-
 
 def _bad_request(msg: str) -> Tuple[int, Dict[str, Any]]:
     return 400, {"ok": False, "error": msg}
@@ -352,12 +335,9 @@ def handle_export_period_csv(
     )
     if code != 200:
         return code, payload
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=PERIOD_CSV_FIELDS, extrasaction="ignore")
-    writer.writeheader()
     cluster = payload.get("cluster") or {}
     window = payload.get("window") or {}
-    writer.writerow(
+    rows = [
         _flatten_period_row(
             "cluster",
             "__cluster__",
@@ -370,9 +350,9 @@ def handle_export_period_csv(
             cluster.get("accel_count") or payload.get("accel_count"),
             cluster.get("accel_summary") or payload.get("accel_summary"),
         )
-    )
+    ]
     for host in payload.get("hosts") or []:
-        writer.writerow(
+        rows.append(
             _flatten_period_row(
                 "host",
                 host.get("host_id") or "",
@@ -386,7 +366,7 @@ def handle_export_period_csv(
                 host.get("accel_summary"),
             )
         )
-    return 200, buf.getvalue()
+    return 200, write_labeled_csv(rows, period_columns())
 
 
 def handle_stats(storage: Storage) -> Tuple[int, Dict[str, Any]]:
@@ -405,46 +385,8 @@ def handle_export_json(storage: Storage) -> Tuple[int, Dict[str, Any]]:
 
 
 def handle_export_csv(storage: Storage) -> Tuple[int, str]:
-    rows = storage.export_hosts_rows()
-    buf = io.StringIO()
-    fields = [
-        "host_id",
-        "hostname",
-        "address",
-        "group_name",
-        "host_type",
-        "online",
-        "last_seen",
-        "cpu_percent",
-        "cpu_count",
-        "mem_percent",
-        "disk_percent",
-        "disk_used_gb",
-        "disk_total_gb",
-        "disk_count",
-        "load1",
-        "npu_count",
-        "npu_util_avg",
-        "gpu_count",
-        "gpu_util_avg",
-        "accel_count",
-        "accel_summary",
-        "net_rx_mbps",
-        "net_tx_mbps",
-        "net_rated_mbps",
-        "owner",
-        "purpose",
-        "asset_name",
-        "asset_cpu",
-        "asset_memory",
-        "asset_disk",
-        "asset_gpu",
-        "asset_model",
-        "asset_notes",
-    ]
-    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
+    rows = []
+    for row in storage.export_hosts_rows():
         asset = row.get("asset") or {}
         flat = dict(row)
         flat["asset_name"] = asset.get("name") or ""
@@ -454,8 +396,24 @@ def handle_export_csv(storage: Storage) -> Tuple[int, str]:
         flat["asset_gpu"] = asset.get("gpu") or ""
         flat["asset_model"] = asset.get("model") or ""
         flat["asset_notes"] = asset.get("notes") or ""
-        writer.writerow(flat)
-    return 200, buf.getvalue()
+        rows.append(flat)
+    return 200, write_labeled_csv(rows, HOST_COLUMNS)
+
+
+def handle_export_field_guide_text() -> Tuple[int, str]:
+    return 200, field_guide_text()
+
+
+def handle_export_hosts_fields_csv() -> Tuple[int, str]:
+    return 200, field_guide_csv(HOST_COLUMNS)
+
+
+def handle_export_period_fields_csv() -> Tuple[int, str]:
+    return 200, field_guide_csv(period_columns())
+
+
+def handle_export_rankings_fields_csv() -> Tuple[int, str]:
+    return 200, field_guide_csv(RANKING_COLUMNS)
 
 
 def handle_groups_list(storage: Storage) -> Tuple[int, Dict[str, Any]]:

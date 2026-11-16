@@ -163,6 +163,23 @@ def make_handler(
             self.end_headers()
             self.wfile.write(data)
 
+        def _send_download(
+            self,
+            text: str,
+            content_type: str,
+            filename: str,
+            bom: bool = False,
+        ) -> None:
+            data = text.encode("utf-8-sig" if bom else "utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header(
+                "Content-Disposition", 'attachment; filename="%s"' % filename
+            )
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def _read_body(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0:
@@ -251,6 +268,37 @@ def make_handler(
             if path == "/api/v1/anomaly":
                 code, payload = api_mod.handle_anomaly(storage, thresholds=current_anomaly())
                 self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/export/field-guide.txt":
+                _code, text = api_mod.handle_export_field_guide_text()
+                self._send_download(
+                    text, "text/plain; charset=utf-8", "field-guide.txt", bom=True
+                )
+                return
+
+            if path == "/api/v1/export/hosts-fields.csv":
+                _code, text = api_mod.handle_export_hosts_fields_csv()
+                self._send_download(
+                    text, "text/csv; charset=utf-8", "hosts-fields.csv", bom=True
+                )
+                return
+
+            if path == "/api/v1/export/period-stats-fields.csv":
+                _code, text = api_mod.handle_export_period_fields_csv()
+                self._send_download(
+                    text,
+                    "text/csv; charset=utf-8",
+                    "period-stats-fields.csv",
+                    bom=True,
+                )
+                return
+
+            if path == "/api/v1/export/rankings-fields.csv":
+                _code, text = api_mod.handle_export_rankings_fields_csv()
+                self._send_download(
+                    text, "text/csv; charset=utf-8", "rankings-fields.csv", bom=True
+                )
                 return
 
             if path == "/api/v1/export/period-stats.csv":
