@@ -25,6 +25,7 @@ from common.accel_identity import (
     merge_inventories,
     summarize_accelerators,
 )
+from common.data_guard import KINDS, add_counts, empty_counts, summarize_timestamps
 
 
 PERIOD_METRIC_KEYS = (
@@ -575,6 +576,29 @@ class Storage:
                         ON diagnostic_reports(period_type, requested_from_ts, requested_to_ts)
                     """
                 )
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS data_guard_policies (
+                        scope TEXT NOT NULL,
+                        scope_id TEXT NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        body TEXT NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY (scope, scope_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS data_guard_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        host_id TEXT NOT NULL,
+                        ts INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        event_id TEXT NOT NULL,
+                        detail TEXT NOT NULL,
+                        UNIQUE(host_id, event_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_data_guard_events_host_ts
+                        ON data_guard_events(host_id, ts);
+                    """
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -1015,6 +1039,10 @@ class Storage:
                 cur = conn.execute(
                     "DELETE FROM resource_groups WHERE id=?", (int(group_id),)
                 )
+                conn.execute(
+                    "DELETE FROM data_guard_policies WHERE scope='group' AND scope_id=?",
+                    (str(int(group_id)),),
+                )
                 conn.commit()
                 return cur.rowcount > 0
             finally:
@@ -1201,6 +1229,7 @@ class Storage:
                 ).fetchall()
                 deploy_map = self._deploy_ip_map(conn)
                 group_map = self._host_group_map(conn)
+                guard_index = self._read_data_guard_index(conn)
             finally:
                 conn.close()
 
@@ -1229,6 +1258,7 @@ class Storage:
                 remote_ip=row["last_remote_ip"],
             )
             self._decorate_host_item(item, row, payload)
+            self._attach_data_guard_view(item, payload, guard_index)
             result.append(item)
         return result
 
@@ -1246,6 +1276,7 @@ class Storage:
                 ).fetchone()
                 deploy_map = self._deploy_ip_map(conn)
                 group_map = self._host_group_map(conn)
+                guard_index = self._read_data_guard_index(conn)
             finally:
                 conn.close()
         if not row:
@@ -1273,6 +1304,7 @@ class Storage:
             remote_ip=row["last_remote_ip"],
         )
         self._decorate_host_item(item, row, payload)
+        self._attach_data_guard_view(item, payload, guard_index)
         return item
 
     def update_host_asset(
@@ -1441,6 +1473,13 @@ class Storage:
                 )
                 conn.execute(
                     "DELETE FROM host_group_members WHERE host_id=?", (hid,)
+                )
+                conn.execute(
+                    "DELETE FROM data_guard_events WHERE host_id=?", (hid,)
+                )
+                conn.execute(
+                    "DELETE FROM data_guard_policies WHERE scope='host' AND scope_id=?",
+                    (hid,),
                 )
                 conn.execute("DELETE FROM hosts WHERE host_id=?", (hid,))
                 conn.commit()
@@ -2041,6 +2080,12 @@ class Storage:
             "history_truncated": truncated,
             "excluded_samples": excluded,
             "offline": offline,
+            "data_guard": self.data_guard_period(
+                host_id,
+                int(window["from_ts"]),
+                int(window["to_ts"]),
+                _timestamps,
+            ),
         }
         if include_series:
             result["_series"] = series
@@ -2074,6 +2119,7 @@ class Storage:
 
         pooled: Dict[str, List[float]] = {key: [] for key in PERIOD_METRIC_KEYS}
         host_rows: List[Dict[str, Any]] = []
+        cluster_guard = empty_counts(False)
         total_samples = 0
         hosts_with_samples = 0
         history_truncated = False
@@ -2144,8 +2190,10 @@ class Storage:
                     "history_truncated": bool(stats.get("history_truncated")),
                     "excluded_samples": host_excluded,
                     "offline": stats.get("offline") or {},
+                    "data_guard": stats.get("data_guard") or {},
                 }
             )
+            cluster_guard = add_counts(cluster_guard, stats.get("data_guard") or {})
 
         cluster_identity = merge_inventories(
             h.get("accel_inventory") for h in host_rows
@@ -2236,6 +2284,7 @@ class Storage:
                 "accel_count": cluster_identity.get("count") or 0,
                 "accel_summary": cluster_identity.get("summary") or None,
                 "accel_inventory": cluster_identity.get("inventory") or [],
+                "data_guard": cluster_guard,
             },
             "hosts": host_rows,
             "offline": {
@@ -2500,6 +2549,207 @@ class Storage:
     def export_hosts_rows(self) -> List[Dict[str, Any]]:
         return self.list_hosts()
 
+    def _read_data_guard_index(
+        self, conn: sqlite3.Connection
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        index: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        try:
+            rows = conn.execute(
+                "SELECT scope, scope_id, enabled, body FROM data_guard_policies"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return index
+        for row in rows:
+            try:
+                body = json.loads(row["body"] or "{}")
+            except (TypeError, ValueError):
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            body["enabled"] = bool(row["enabled"])
+            body["source"] = row["scope"]
+            index[(str(row["scope"]), str(row["scope_id"]))] = body
+        return index
+
+    @staticmethod
+    def _policy_for(index, host_id, group_id):
+        # type: (Dict[Tuple[str, str], Dict[str, Any]], Any, Any) -> Optional[Dict[str, Any]]
+        host_policy = index.get(("host", str(host_id or "")))
+        if host_policy is not None:
+            return host_policy
+        if group_id is None or group_id == "":
+            return None
+        return index.get(("group", str(group_id)))
+
+    def _attach_data_guard_view(self, item, payload, index):
+        # type: (Dict[str, Any], Dict[str, Any], Dict[Tuple[str, str], Dict[str, Any]]) -> None
+        policy = self._policy_for(index, item.get("host_id"), item.get("group_id"))
+        marked = bool(policy and policy.get("enabled"))
+        block = payload.get("data_guard") if isinstance(payload, dict) else None
+        events: List[Dict[str, Any]] = []
+        inventory: List[Any] = []
+        if marked and isinstance(block, dict):
+            events = [row for row in (block.get("events") or []) if isinstance(row, dict)]
+            inventory = block.get("inventory") if isinstance(block.get("inventory"), list) else []
+        kinds: List[str] = []
+        for event in events:
+            kind = str(event.get("kind") or "")
+            if kind and kind not in kinds:
+                kinds.append(kind)
+        item["data_guard"] = {
+            "marked": marked,
+            "source": (policy or {}).get("source") or "",
+            "attention": bool(marked and item.get("online") and kinds),
+            "kinds": kinds,
+            "events": events,
+            "inventory": inventory,
+        }
+
+    def effective_data_guard(self, host_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                index = self._read_data_guard_index(conn)
+                group = self._host_group_map(conn).get(str(host_id))
+            finally:
+                conn.close()
+        group_id = (group or {}).get("group_id")
+        return self._policy_for(index, host_id, group_id)
+
+    def list_data_guard_policies(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                index = self._read_data_guard_index(conn)
+            finally:
+                conn.close()
+        rows = []
+        for (scope, scope_id), body in sorted(index.items()):
+            item = dict(body)
+            item["scope"] = scope
+            item["scope_id"] = scope_id
+            rows.append(item)
+        return rows
+
+    def save_data_guard_policy(
+        self, scope: str, scope_id: str, policy: Dict[str, Any]
+    ) -> None:
+        body = dict(policy)
+        body.pop("source", None)
+        body.pop("scope", None)
+        body.pop("scope_id", None)
+        enabled = 1 if body.get("enabled") else 0
+        now = int(time.time())
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO data_guard_policies (scope, scope_id, enabled, body, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(scope, scope_id) DO UPDATE SET
+                        enabled=excluded.enabled,
+                        body=excluded.body,
+                        updated_at=excluded.updated_at
+                    """,
+                    (scope, str(scope_id), enabled, json.dumps(body, ensure_ascii=False), now),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def delete_data_guard_policy(self, scope: str, scope_id: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM data_guard_policies WHERE scope=? AND scope_id=?",
+                    (scope, str(scope_id)),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def store_data_guard_events(
+        self,
+        host_id: str,
+        events: List[Dict[str, Any]],
+        replace_ts: Optional[int] = None,
+    ) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                if replace_ts is not None:
+                    conn.execute(
+                        "DELETE FROM data_guard_events WHERE host_id=? AND ts=?",
+                        (host_id, int(replace_ts)),
+                    )
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    kind = str(event.get("kind") or "")
+                    if kind not in KINDS:
+                        continue
+                    event_id = str(event.get("id") or "")
+                    ts = event.get("ts")
+                    if not event_id or ts is None:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO data_guard_events
+                            (host_id, ts, kind, event_id, detail)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            host_id,
+                            int(ts),
+                            kind,
+                            event_id,
+                            json.dumps(event, ensure_ascii=False),
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def data_guard_period(
+        self,
+        host_id: str,
+        from_ts: int,
+        to_ts: int,
+        sample_ts: List[int],
+    ) -> Dict[str, Any]:
+        policy = self.effective_data_guard(host_id)
+        marked = bool(policy and policy.get("enabled"))
+        if not marked:
+            return empty_counts(False)
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT ts, kind FROM data_guard_events
+                    WHERE host_id=? AND ts>=? AND ts<=?
+                    """,
+                    (host_id, int(from_ts), int(to_ts)),
+                ).fetchall()
+            finally:
+                conn.close()
+        active: Dict[str, List[int]] = {kind: [] for kind in KINDS}
+        for row in rows:
+            kind = str(row["kind"] or "")
+            if kind in active:
+                active[kind].append(int(row["ts"]))
+        out = empty_counts(True)
+        for kind in KINDS:
+            count, seconds = summarize_timestamps(
+                sample_ts, active[kind], int(self.offline_seconds)
+            )
+            out["%s_count" % kind] = count
+            out["%s_seconds" % kind] = seconds
+        return out
+
     def cleanup_old_metrics(self) -> int:
         """只删除 metrics_history 中超期的原始点。
 
@@ -2512,6 +2762,7 @@ class Storage:
             conn = self._connect()
             try:
                 cur = conn.execute("DELETE FROM metrics_history WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM data_guard_events WHERE ts < ?", (cutoff,))
                 conn.commit()
                 return cur.rowcount
             finally:

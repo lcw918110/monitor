@@ -396,7 +396,11 @@
     if (name && name !== primary) extras.push(name);
     if (assetName && assetName !== primary && assetName !== name) extras.push(assetName);
     if (hid && hid !== primary && hid !== name && hid !== assetName) extras.push(hid);
-    let html = '<div class="host-addr">' + escapeHtml(primary) + "</div>";
+    const guardMark =
+      h.data_guard && h.data_guard.marked
+        ? '<span class="guard-badge">重点数据机</span>'
+        : "";
+    let html = '<div class="host-addr">' + escapeHtml(primary) + guardMark + "</div>";
     if (extras.length) {
       html += '<div class="muted">' + escapeHtml(extras.join(" · ")) + "</div>";
     }
@@ -1385,6 +1389,94 @@
     });
   }
 
+  function guardNum(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    const n = Number(value);
+    if (Number.isNaN(n)) return "-";
+    return String(n);
+  }
+
+  function guardEventText(event) {
+    if (!event) return "数据外传异常";
+    if (event.kind === "path_integrity" && event.reason === "shrink") {
+      return (
+        "路径完整性变化：" +
+        (event.path || "-") +
+        " 从 " +
+        guardNum(event.previous_file_count) +
+        " 个减到 " +
+        guardNum(event.file_count) +
+        " 个"
+      );
+    }
+    if (event.kind === "path_integrity" && event.reason === "archive") {
+      const where = event.where === "beside" ? "路径旁" : "路径下";
+      return "路径完整性变化：" + where + "出现大归档 " + (event.archive_name || "-");
+    }
+    if (event.kind === "egress_anomaly") {
+      return "外传异常：发送 " + guardNum(event.net_tx_mbps) + " Mbps";
+    }
+    if (event.kind === "unallowed_cidr") {
+      return "未允许网段外连：" + guardNum(event.connection_count) + " 条";
+    }
+    if (event.kind === "removable_mount") {
+      const mounts = event.mounts || [];
+      const names = mounts
+        .map((item) => (item && item.mount) || "")
+        .filter(Boolean)
+        .join("、");
+      return "可移动磁盘挂载：" + (names || "-");
+    }
+    return "数据外传异常";
+  }
+
+  function renderDataGuardPeriod(data) {
+    const hosts = ((data && data.hosts) || []).filter(
+      (host) => host && host.data_guard && host.data_guard.marked
+    );
+    let html = '<div class="section-title">重点数据守护</div>';
+    html +=
+      '<p class="guard-note">只统计重点数据机。下面是外传异常、路径完整性变化、未允许网段外连、可移动磁盘挂载的次数和时长。这只是迹象，不能保证数据出不去，也看不出究竟是哪一个文件离开了。</p>';
+    if (!hosts.length) {
+      html += '<p class="muted">当前没有重点数据机。到设置里勾选之后，这里才会计数。</p>';
+      return html;
+    }
+    html +=
+      '<div class="table-wrap"><table><thead><tr>' +
+      "<th>主机</th><th>外传异常</th><th>路径完整性变化</th><th>未允许网段外连</th><th>可移动磁盘挂载</th>" +
+      "</tr></thead><tbody>";
+    hosts.forEach((host) => {
+      const guard = host.data_guard || {};
+      function cell(kind) {
+        return (
+          guardNum(guard[kind + "_count"]) +
+          " 次 / " +
+          guardNum(guard[kind + "_seconds"]) +
+          " 秒"
+        );
+      }
+      const live = hostById(host.host_id) || {};
+      const row = Object.assign({}, host, {
+        address: host.address || live.address,
+        hostname: host.hostname || live.hostname,
+      });
+      html +=
+        "<tr><td>" +
+        hostAddressCell(row) +
+        "</td><td>" +
+        cell("egress_anomaly") +
+        "</td><td>" +
+        cell("path_integrity") +
+        "</td><td>" +
+        cell("unallowed_cidr") +
+        "</td><td>" +
+        cell("removable_mount") +
+        "</td></tr>";
+    });
+    html += "</tbody></table></div>";
+    return html;
+  }
+
   function renderPeriodUtil(data) {
     periodUtilData = data;
     if (!el.periodUtilBody) return;
@@ -1400,6 +1492,7 @@
     const hosts = data.hosts || [];
     const scrollTop = el.periodUtilBody.scrollTop;
     let html = renderOfflineOverview(data);
+    html += renderDataGuardPeriod(data);
     const clusterSummary =
       cluster.accel_summary || data.accel_summary || "";
     html +=
@@ -1863,8 +1956,9 @@
       ["disk", "磁盘快满"],
       ["accel", "卡异常"],
       ["load", "高负载"],
+      ["data_exfil", "数据外传异常"],
     ];
-    const buckets = { offline: [], disk: [], accel: [], load: [] };
+    const buckets = { offline: [], disk: [], accel: [], load: [], data_exfil: [] };
     (hosts || []).forEach((h) => {
       hostAttention(h).forEach((tag) => {
         if (buckets[tag]) buckets[tag].push(h);
@@ -2160,6 +2254,42 @@ function renderHosts(hosts) {
     });
   }
 
+  function renderDataGuardDetail(data) {
+    const guard = (data && data.data_guard) || {};
+    if (!guard.marked) return "";
+    let html = '<div class="section-title">重点数据守护</div>';
+    html +=
+      '<p class="guard-note">重点数据守护只发现并提示重点数据可能正在离开的迹象，不能保证数据出不去。拦截属于防火墙和权限。它看不到加密隧道里的内容，也不能指出究竟是哪一个文件离开了。备份和同步必须写进白名单。</p>';
+    const events = guard.events || [];
+    if (!events.length) {
+      html += "<p>当前没有数据外传异常。</p>";
+    } else {
+      html += '<ul class="finding-list">';
+      events.forEach((event) => {
+        html += "<li>" + escapeHtml(guardEventText(event)) + "</li>";
+      });
+      html += "</ul>";
+    }
+    const inventory = guard.inventory || [];
+    if (inventory.length) {
+      html +=
+        '<div class="disk-list"><div class="disk-row disk-head"><span>受保护路径</span><span>文件数</span><span>大小</span></div>';
+      inventory.forEach((item) => {
+        const failed = item && item.error;
+        html +=
+          '<div class="disk-row"><div class="disk-mount">' +
+          escapeHtml((item && item.path) || "-") +
+          '</div><div class="disk-cap">' +
+          (failed ? "-" : guardNum(item.file_count)) +
+          '</div><div class="disk-usage">' +
+          (failed ? "-" : guardNum(item.total_bytes) + " 字节") +
+          "</div></div>";
+      });
+      html += "</div>";
+    }
+    return html;
+  }
+
   function renderDetail(data) {
     if (!data) {
       el.detailTitle.textContent = "请选择左侧主机";
@@ -2185,7 +2315,7 @@ function renderHosts(hosts) {
 
     const accelStatus = (anomaly.accel || anomaly.npu || {}).status;
 
-    let html = "";
+    let html = renderDataGuardDetail(data);
     html += '<div class="section-title">资源异常判定（黄=偏高 / 红=异常）</div>';
     html +=
       "<div class=\"kv\"><div class=\"k\">总体</div><div class=\"v\">" +

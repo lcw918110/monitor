@@ -260,6 +260,25 @@ button.attention-name:hover { text-decoration: underline; }
 .status-badge.critical { color: #ffb4b4; }
 .status-badge.unknown { color: var(--muted); }
 
+.guard-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ok);
+  border: 1px solid rgba(47, 191, 113, 0.45);
+  vertical-align: 1px;
+}
+
+.guard-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .finding-list {
   margin: 0 0 14px;
   padding-left: 18px;
@@ -1060,6 +1079,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .pad textarea {
   background: var(--bg-soft);
   color: var(--text);

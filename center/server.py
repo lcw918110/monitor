@@ -222,6 +222,13 @@ def make_handler(
                 self._send_json(code, payload)
                 return
 
+            if path == "/api/v1/data-guard":
+                from center.data_guard import handle_data_guard_get
+
+                code, payload = handle_data_guard_get(storage)
+                self._send_json(code, payload)
+                return
+
             if path.startswith("/api/v1/hosts/"):
                 rest = path[len("/api/v1/hosts/") :].strip("/")
                 parts = rest.split("/") if rest else []
@@ -528,6 +535,13 @@ def make_handler(
 
             if path == "/api/v1/settings":
                 code, payload = handle_settings_write(admin_store, body, runtime)
+                self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/data-guard":
+                from center.data_guard import handle_data_guard_write
+
+                code, payload = handle_data_guard_write(storage, body)
                 self._send_json(code, payload)
                 return
 

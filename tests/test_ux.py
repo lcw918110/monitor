@@ -61,7 +61,7 @@ class AgentVersionTests(unittest.TestCase):
         payload = build_payload({"host_id": "h", "host_type": "cpu"})
         self.assertEqual(payload["agent_version"], agent_version)
         self.assertEqual(agent_version, center_version)
-        self.assertEqual(agent_version, "1.12.0")
+        self.assertEqual(agent_version, "1.13.0")
         self.assertNotEqual(payload["agent_version"], "1.4.0")
         pages = {
             "center/static/index.html": "中心控制台 · CPU / 加速卡监测 · v" + center_version,
@@ -162,6 +162,19 @@ const load = ux.attentionTags({
   anomaly: { findings: [{ code: "cpu_util_critical" }] },
 }, { cpu_critical_percent: 95 });
 assert.deepStrictEqual(load, ["load"]);
+const guard = ux.attentionTags({
+  online: true,
+  cpu_percent: 10,
+  data_guard: { attention: true, marked: true },
+  anomaly: { findings: [] },
+}, {});
+assert.deepStrictEqual(guard, ["data_exfil"]);
+const guardOffline = ux.attentionTags({
+  online: false,
+  data_guard: { attention: true, marked: true },
+  anomaly: { findings: [] },
+}, {});
+assert.deepStrictEqual(guardOffline, ["offline"]);
 assert.strictEqual(ux.parseLocationHash("#reports").tab, "reports");
 const emptyDay = ux.reportPresentation({
   id: 1, title: "使用诊断日报", status: "ok", empty: true, source: "manual",

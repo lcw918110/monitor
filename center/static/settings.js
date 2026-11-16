@@ -410,6 +410,199 @@
     say("pushHint", "Webhook 已清空，推送已关闭。");
   }
 
+  var guardState = { hosts: [], groups: [], policies: [] };
+
+  function linesOf(id) {
+    var node = $(id);
+    return String((node && node.value) || "")
+      .split(/\n|,/)
+      .map(function (item) {
+        return item.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function fillLines(id, values) {
+    var node = $(id);
+    if (node) node.value = (values || []).join("\n");
+  }
+
+  function numOrEmpty(value) {
+    if (value === null || value === undefined || value === "") return "";
+    return String(value);
+  }
+
+  function optionalNumber(id) {
+    var node = $(id);
+    var text = String((node && node.value) || "").trim();
+    if (!text) return null;
+    var number = Number(text);
+    return isNaN(number) ? text : number;
+  }
+
+  function guardPolicyMap() {
+    var map = {};
+    (guardState.policies || []).forEach(function (item) {
+      map[item.scope + ":" + item.scope_id] = item;
+    });
+    return map;
+  }
+
+  function fillGuardTargets() {
+    var scope = ($("guardScope") && $("guardScope").value) || "host";
+    var select = $("guardTarget");
+    if (!select) return;
+    var current = select.value;
+    var options = [];
+    if (scope === "group") {
+      (guardState.groups || []).forEach(function (group) {
+        options.push(
+          '<option value="' +
+            esc(group.id) +
+            '">' +
+            esc(group.name || "资源组") +
+            (group.marked ? " · 重点数据机" : "") +
+            "</option>"
+        );
+      });
+    } else {
+      (guardState.hosts || []).forEach(function (host) {
+        if (host.hidden) return;
+        var label = host.address || host.hostname || host.host_id;
+        options.push(
+          '<option value="' +
+            esc(host.host_id) +
+            '">' +
+            esc(label) +
+            (host.marked ? " · 重点数据机" : "") +
+            "</option>"
+        );
+      });
+    }
+    select.innerHTML = options.join("");
+    if (current) select.value = current;
+    if (!select.value && select.options.length) select.selectedIndex = 0;
+    applyGuardForm();
+  }
+
+  function applyGuardForm() {
+    var scope = ($("guardScope") && $("guardScope").value) || "host";
+    var id = ($("guardTarget") && $("guardTarget").value) || "";
+    var policy = guardPolicyMap()[scope + ":" + id];
+    var enabled = $("guardEnabled");
+    if (!policy) {
+      if (enabled) enabled.checked = false;
+      fillLines("guardPaths", []);
+      fillLines("guardCidrs", []);
+      fillLines("guardAllowDest", []);
+      fillLines("guardAllowProc", []);
+      if ($("guardMbps")) $("guardMbps").value = "";
+      if ($("guardVolume")) $("guardVolume").value = "";
+      if ($("guardBaseline")) $("guardBaseline").value = "";
+      if ($("guardSustain")) $("guardSustain").value = "60";
+      if ($("guardVolumeWindow")) $("guardVolumeWindow").value = "3600";
+      say(
+        "guardSource",
+        scope === "host"
+          ? "这台主机还没有单独的设置。若它所在的资源组已标为重点数据机，会跟随资源组。"
+          : "这个资源组还没有设置。保存后，组里没有单独设置的主机会成为重点数据机。"
+      );
+      return;
+    }
+    if (enabled) enabled.checked = !!policy.enabled;
+    fillLines("guardPaths", policy.paths);
+    fillLines("guardCidrs", policy.allowed_cidrs);
+    fillLines("guardAllowDest", policy.allow_destinations);
+    fillLines("guardAllowProc", policy.allow_processes);
+    if ($("guardMbps")) $("guardMbps").value = numOrEmpty(policy.egress_mbps);
+    if ($("guardVolume")) $("guardVolume").value = numOrEmpty(policy.egress_volume_mb);
+    if ($("guardBaseline")) $("guardBaseline").value = numOrEmpty(policy.baseline_multiplier);
+    if ($("guardSustain")) $("guardSustain").value = numOrEmpty(policy.egress_sustain_seconds || 60);
+    if ($("guardVolumeWindow")) {
+      $("guardVolumeWindow").value = numOrEmpty(policy.egress_volume_window_seconds || 3600);
+    }
+    say(
+      "guardSource",
+      policy.enabled ? "已标为重点数据机。" : "这条设置存在，但没有标为重点数据机。"
+    );
+  }
+
+  async function loadDataGuard() {
+    var res = await fetch("/api/v1/data-guard");
+    var data = await readJson(res);
+    if (!res.ok || !data.ok) {
+      say("guardStatus", "加载失败");
+      say("guardHint", (data && data.error) || "重点数据守护没有加载出来");
+      return;
+    }
+    guardState = data;
+    var marked = (data.hosts || []).filter(function (host) {
+      return host.marked && !host.hidden;
+    }).length;
+    say("guardStatus", marked ? "重点数据机 " + marked + " 台" : "还没有重点数据机");
+    fillGuardTargets();
+  }
+
+  async function saveDataGuard() {
+    var scope = ($("guardScope") && $("guardScope").value) || "host";
+    var scopeId = ($("guardTarget") && $("guardTarget").value) || "";
+    if (!scopeId) {
+      say("guardHint", scope === "group" ? "还没有资源组" : "还没有主机");
+      return;
+    }
+    var body = {
+      action: "save",
+      scope: scope,
+      scope_id: scopeId,
+      enabled: !!($("guardEnabled") && $("guardEnabled").checked),
+      paths: linesOf("guardPaths"),
+      allowed_cidrs: linesOf("guardCidrs"),
+      allow_destinations: linesOf("guardAllowDest"),
+      allow_processes: linesOf("guardAllowProc"),
+      egress_sustain_seconds: optionalNumber("guardSustain"),
+      egress_volume_window_seconds: optionalNumber("guardVolumeWindow"),
+    };
+    var mbps = optionalNumber("guardMbps");
+    var volume = optionalNumber("guardVolume");
+    var baseline = optionalNumber("guardBaseline");
+    if (mbps !== null) body.egress_mbps = mbps;
+    if (volume !== null) body.egress_volume_mb = volume;
+    if (baseline !== null) body.baseline_multiplier = baseline;
+    var res = await fetch("/api/v1/data-guard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    var data = await readJson(res);
+    if (!res.ok || !data.ok) {
+      say("guardHint", (data && data.error) || "保存失败");
+      return;
+    }
+    say("guardHint", "已保存。采集端下一轮上报会按这份设置工作。");
+    await loadDataGuard();
+  }
+
+  async function clearDataGuard() {
+    var scope = ($("guardScope") && $("guardScope").value) || "host";
+    var scopeId = ($("guardTarget") && $("guardTarget").value) || "";
+    if (!scopeId) return;
+    if (!window.confirm("清除后，这一条不再单独生效。主机将改回跟随资源组，或不再是重点数据机。")) {
+      return;
+    }
+    var res = await fetch("/api/v1/data-guard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "clear", scope: scope, scope_id: scopeId }),
+    });
+    var data = await readJson(res);
+    if (!res.ok || !data.ok) {
+      say("guardHint", (data && data.error) || "清除失败");
+      return;
+    }
+    say("guardHint", "已清除本条。");
+    await loadDataGuard();
+  }
+
   ["centerLead", "centerSecurity", "centerTail"].forEach(function (id) {
     var node = $(id);
     if (node) node.addEventListener("click", onCenterClick);
@@ -433,5 +626,10 @@
     }
     postCenter({ restore_all: true });
   });
+  $("guardScope").addEventListener("change", fillGuardTargets);
+  $("guardTarget").addEventListener("change", applyGuardForm);
+  $("btnSaveGuard").addEventListener("click", saveDataGuard);
+  $("btnClearGuard").addEventListener("click", clearDataGuard);
   load();
+  loadDataGuard();
 })();
