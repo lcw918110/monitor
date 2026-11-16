@@ -116,6 +116,14 @@ def validate_agent_config(cfg: Dict[str, Any]) -> Tuple[bool, List[str]]:
     except (TypeError, ValueError):
         errors.append("interval_seconds 必须是整数")
 
+    if "spool_retention_hours" in cfg and cfg.get("spool_retention_hours") not in (None, ""):
+        try:
+            hours = int(cfg.get("spool_retention_hours"))
+            if hours < 1:
+                errors.append("spool_retention_hours 不能小于 1")
+        except (TypeError, ValueError):
+            errors.append("spool_retention_hours 必须是整数")
+
     from common.host_type import normalize_host_type
 
     raw = cfg.get("host_type") or "auto"

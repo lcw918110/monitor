@@ -5,7 +5,7 @@
 
 不引入外部监控软件，用 **Python 3 标准库** 实现多机 **CPU / 加速卡** 资源监测、时间段统计、异常判定与客户端批量部署。
 
-当前版本：**v1.11.0**
+当前版本：**v1.12.0**
 
 运行环境：
 
@@ -20,14 +20,14 @@
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本。寒武纪 `cnmon info` 只按整行 `Card N` 分卡：利用率取 `MLU Average`，温度优先 Chip、其次 Board、否则取 Cluster 最大值，显存只认 Physical Memory Usage，功耗取 Power 的 Usage，健康取 Health State 下面的 Device（`Good` 视为正常；没有这一段就留空）。各厂商先读结构化输出（`nvidia-smi` CSV、`rocm-smi` / `amd-smi` JSON；`cnmon info -j` 只在临时目录里跑，避免在工作目录留下 `cnmon_info.json`），再退回文本。工具失败的 stderr / 退出码写进卡的 note。`nvidia-smi` 版本看 `-h` 抬头，不用会在 535/470 上失败的 `--version`。同一块卡按 PCI 总线号合并
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）。CPU 负载看 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。读不到负载时上报 null，页面显示 `-`，不写成 0
-- **详情统计**：顶栏一项一项进去：**实时监控**、**主机**、**时段统计**、**使用诊断**，再加上运维和设置。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总，包含磁盘读取、写入和磁盘 I/O 利用率（容量占用仍是原来的磁盘占用率）。选定时间范围后，主机表上方给出离线台数和离线时段（按已有上报和离线阈值，不另加传感器）；点主机只换右侧汇总和下方趋势，悬停趋势可看上海时间和数值。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
+- **详情统计**：顶栏只有一排：**实时监控、主机、时段统计、使用诊断、运维、设置**。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。磁盘占用率是容量；磁盘读取、写入（Mbps）和磁盘 I/O 利用率（%util）另计，不进入闲忙。实时中断只显示「离线」。事后时段概览分开「离线（无数据）」和「断网（已补报）」：前者没有样本也不会再补上，后者是采集端把样本留在 `data/spool`（默认 24 小时，设置页可改），恢复后按原来的采集时间补上。点主机只换右侧汇总和下方趋势。悬停显示上海时间和数值，没补上的空档是横线。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
 - **隐藏与删除**：详情「从列表隐藏」后，该机退出列表、在线/离线统计、集群时段汇总和之后的诊断报告，历史上报仍在，可从「已隐藏」恢复。彻底删除要输入 `delete`（`DELETE /api/v1/hosts/{id}?confirm=delete`），连同该机历史一起去掉。可选同时删掉部署清单里 host_id 或 IP 对得上的目标。已隐藏的主机再上报也不会自动出现
 - **同机更换 IP**：详情「更换 IP」先预览再确认。展示地址改为新 IP，旧 IP 记在「历史 IP」（资产 JSON 的 `previous_ips`，可带日期和备注）。监控 `host_id` 和历史上报都不改。新 IP 上已有的部署目标会把 `host_id` 改成这台主机（密码不动）；旧 IP 上属于这台主机的目标标为停用，不删除，不再驱动展示地址，也不再进入部署。按旧 IP 或新 IP 导入资产表都能对上这台主机
 - **资产表导入**：实时页「导入资产」，CSV 或 xlsx，按 IP 匹配已有主机，先预览再写入。空单元格不覆盖。列名含用户名、密码、口令、password、token 的整列丢弃，不入库。示例（虚构）：`config/hosts-meta.example.csv`
 - **资源组**：在实时监控页创建分组、给主机分配、按组筛选；数据在中心 SQLite，重启保留，**不必升级 Agent**
-- **实时与规格分栏**：主机列表把加速卡型号数量和加速卡使用率、磁盘汇总百分比和磁盘数分成不同列。离线主机不把最后一次快照的数字当成当前利用率
+- **实时与规格分栏**：主机列表把加速卡型号数量和加速卡使用率、磁盘汇总百分比和磁盘数分成不同列。磁盘占用率只看容量。磁盘读取 / 写入是整盘 Mbps 之和，磁盘 I/O 利用率是最忙整盘的 %util，都不进入闲忙。离线主机不把最后一次快照的数字当成当前利用率。读不到的数显示 `-`。给人看的 CSV 用中文表头，并另附字段说明；`hosts.json` 仍用英文键
 - **历史保留**：`retention_days`（示例默认 7，可按环境改成更长，例如 40）。超期样本由中心清理；**已生成的诊断报告不删**。诊断报告若被保留期裁短，会在抬头标明
 - **部署**：中心「客户端部署」页 `/deploy.html` 或中心机上的 `deploy_fleet.sh` / `deploy_agent.sh`（唯一产品路径）。笔记本上用 sshpass/scp 装 Agent 的做法已废弃，不要再写进操作步骤
 
@@ -71,7 +71,7 @@ chmod +x scripts/*.sh
 
 中心安装树（`/opt/monitor`）**必须保留 `agent/` 包**：网页 SSH / `deploy_fleet.sh` 从该目录打 **Agent 包**（`agent/`、`common/`、`scripts/` 与配置模板），**不会**把 `center/` 当主内容整树拷到 `/opt/monitor-agent`。源树缺 `agent/` 禁止打包；安装后、`--once` 前校验 `agent/__init__.py`，缺包短码 `package_incomplete`。
 
-**覆盖安装清理**：先停 `monitor-agent` 与已知目录里的旧进程（`/opt/monitor-agent`、`~/monitor-agent`、`~/monitor` 的 pidfile，以及 `python -m agent` 残留），再把采集端同步进安装目录（rsync `--delete` 或等价删除后拷贝，包先解到 `/tmp/monitor-agent-src`，避免 inplace 留旧文件）。随后删除 AppleDouble `._*`、`.DS_Store`、`__pycache__`，以及安装目录里多出来的顶层项（如误拷的 `center/`）。**不删除** `config/agent.json` 与 `data/`；本轮仍按中心下发参数写入 `agent.json`。家目录旧副本只停进程，不整目录删掉。
+**覆盖安装清理**：先停 `monitor-agent` 与已知目录里的旧进程（`/opt/monitor-agent`、`~/monitor-agent`、`~/monitor` 的 pidfile，以及 `python -m agent` 残留），再把采集端同步进安装目录（rsync `--delete` 或等价删除后拷贝，包先解到 `/tmp/monitor-agent-src`，避免 inplace 留旧文件）。随后删除 AppleDouble `._*`、`.DS_Store`、`__pycache__`，以及安装目录里多出来的顶层项（如误拷的 `center/`）。**不删除** `config/agent.json` 与 `data/`（含断网补报队列 `data/spool`）；本轮仍按中心下发参数写入 `agent.json`。家目录旧副本只停进程，不整目录删掉。
 
 **SSH 端口**：清单、Excel 的 `ssh_port`、网页「SSH 端口」、`deploy_fleet.sh --ssh-port` / `--port`，缺省 **22**。**不扫描端口。**
 
@@ -339,7 +339,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 文档
 
-给客户机房交接时，用下面三份对外手册。它们按现行 v1.11.0 编写，步骤与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致：部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册写了现行页面：时段统计的离线概览和只换右侧详情、无上报诊断仍入库并标「无数据」、部署清单的确认与删除范围、设置页首的三处入口。
+给客户机房交接时，用下面三份对外手册。它们按现行 v1.12.0 编写，步骤与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致：部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册与需求、设计用同一套说法：顶栏六个入口、实时「离线」、事后「离线（无数据）」与「断网（已补报）」、磁盘容量和磁盘读写分开、趋势悬停为上海时间。
 
 | 文档 | 说明 |
 | --- | --- |

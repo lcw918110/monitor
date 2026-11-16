@@ -120,6 +120,29 @@ def _anomaly_number(anomaly: Dict[str, Any], key: str, default: float) -> float:
 # 月报在 retention_days=40、15s 采样时会超过时段接口默认 6 万行上限。
 REPORT_MAX_ROWS = 250000
 
+def _offline_split_sentence(offline: Dict[str, Any]) -> str:
+    nodata = (offline or {}).get("no_data") or {}
+    filled = (offline or {}).get("backfill") or {}
+    text = (
+        "窗口内「离线（无数据）」%d 段、累计 %d 秒；「断网（已补报）」%d 段、累计 %d 秒。"
+        "断网补报按采集端原来的采集时间入库，参与本报告的平均、P95 和繁忙占比，不会在恢复连接时挤成一个尖峰。"
+        "实时页在中断期间只显示「离线」。"
+        % (
+            int(nodata.get("interval_count") or 0),
+            int(nodata.get("total_seconds") or 0),
+            int(filled.get("interval_count") or 0),
+            int(filled.get("total_seconds") or 0),
+        )
+    )
+    dropped = int(((offline or {}).get("overflows") or {}).get("dropped") or 0)
+    if dropped:
+        text += (
+            "本地队列溢出丢掉 %d 条样本，这段没有数据，记在「离线（无数据）」，不是静默空档。"
+            % dropped
+        )
+    return text
+
+
 def _fmt_ts(ts: Optional[int]) -> str:
     if ts is None:
         return "-"
@@ -984,6 +1007,7 @@ def build_report(
         ),
         "生成时刻在线 %d、离线 %d。闲忙里的「离线」和「基本不用」仍按生成时刻是否在线，不回溯窗口内状态。离线主机不把末次快照当成实时用量。"
         % (online_n, len(offline_hosts)),
+        _offline_split_sentence(current.get("offline") or {}),
         _delta_sentence(current, previous),
         "Top 风险：" + _top_risk(
             len(offline_hosts),
@@ -1336,7 +1360,7 @@ def build_report(
             _idle_cut_text(rules),
             _legacy_idle_note(rules),
         ),
-        "可用性：当前离线 %d 台。离线期间不要把最后一次上报当成仍在运行的利用率。"
+        "可用性：当前离线 %d 台。离线期间不要把最后一次上报当成仍在运行的利用率。窗口里的「离线（无数据）」是没有样本的空档；「断网（已补报）」是本机留存后按原采集时间补上的样本，已计入利用率。"
         % len(offline_hosts),
         "部署：本报告不读取部署任务日志，不判断是否存在部署残留。Agent 安装只走 /deploy.html 与中心机部署脚本。",
     ]

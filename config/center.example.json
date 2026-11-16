@@ -4,6 +4,7 @@
   "data_dir": "data",
   "token": "",
   "offline_seconds": 90,
+  "spool_retention_hours": 24,
   "retention_days": 7,
   "cleanup_interval_seconds": 3600,
   "anomaly": {

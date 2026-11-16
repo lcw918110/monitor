@@ -61,7 +61,7 @@ class AgentVersionTests(unittest.TestCase):
         payload = build_payload({"host_id": "h", "host_type": "cpu"})
         self.assertEqual(payload["agent_version"], agent_version)
         self.assertEqual(agent_version, center_version)
-        self.assertEqual(agent_version, "1.11.0")
+        self.assertEqual(agent_version, "1.12.0")
         self.assertNotEqual(payload["agent_version"], "1.4.0")
         pages = {
             "center/static/index.html": "中心控制台 · CPU / 加速卡监测 · v" + center_version,

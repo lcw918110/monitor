@@ -97,7 +97,7 @@
    * 把图表横坐标比例（0～1）落到最近的历史上报点。
    * 空值也算命中，这样空隙处可以显示时间并写成横线，而不是跳到旁边的数。
    */
-  function nearestTrendPoint(points, ratio) {
+  function nearestTrendPoint(points, ratio, gapSeconds) {
     var list = points || [];
     var timed = [];
     var i;
@@ -106,7 +106,7 @@
       if (!point || point.ts === null || point.ts === undefined) continue;
       var ts = Number(point.ts);
       if (isNaN(ts)) continue;
-      timed.push({ index: i, ts: ts, value: point.value });
+      timed.push({ index: i, ts: ts, value: point.value, backfill: !!point.backfill });
     }
     if (!timed.length) return null;
     var t0 = timed[0].ts;
@@ -130,13 +130,18 @@
         bestDist = dist;
       }
     }
+    var gap = Number(gapSeconds);
+    if (isNaN(gap) || gap <= 0) gap = 90;
+    if (bestDist > gap) {
+      return { index: -1, ts: Math.round(target), value: null, gap: "no_data", backfill: false };
+    }
     var value = best.value;
     if (value === undefined || value === "") value = null;
     else if (value !== null) {
       var num = Number(value);
       value = isNaN(num) ? null : num;
     }
-    return { index: best.index, ts: best.ts, value: value };
+    return { index: best.index, ts: best.ts, value: value, backfill: !!best.backfill, gap: "" };
   }
 
   function parseLocationHash(hash) {

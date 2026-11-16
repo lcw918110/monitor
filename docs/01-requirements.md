@@ -1,8 +1,8 @@
 # 简易多机监控系统 — 软件需求规格说明书（SRS）
 
 | 文档版本 | 2.0 |
-| 对应产品 | v1.11.0 |
-| 最近修订 | 2026-10-28 |
+| 对应产品 | v1.12.0 |
+| 最近修订 | 2026-11-16 |
 | 状态 | 现行规格。本文可单独阅读，与代码、`docs/13-diagnostic-reports.md`、`docs/14-ops-runbook.md` 一致 |
 
 本文描述已经交付的产品行为。采集、存储、页面和脚本若以后变更，应同时改本文。指标框架化（路线图 N2 / NH-04，[Issue #35](https://github.com/lcw918110/monitor/issues/35)）不在本文的已交付范围，本轮也不实现。诊断报告空闲线和高负荷线在 `report` 配置里，设置页可改。
@@ -29,7 +29,7 @@
 | 主机指标 | node_exporter / Zabbix agent | `/proc`、sysfs 与只读命令解析：CPU、内存、负载、多挂载磁盘、网络吞吐 |
 | 加速卡 | 各厂商 exporter | 英伟达、AMD、华为昇腾、寒武纪、瑞芯微 RKNN。有厂商工具就采；没有工具时，已知 PCI 设备仍上报，健康为 abnormal，利用率不当成 0% 样本 |
 | 存储 | TSDB / MySQL | 中心单进程 **SQLite** |
-| 展示 | Grafana | 自研中文监测台：实时监控、时段统计、使用诊断；另有部署页和设置页 |
+| 展示 | Grafana | 自研中文监测台。顶栏一排：实时监控、主机、时段统计、使用诊断、运维、设置 |
 | 异常 | 规则引擎 + 通知通道 | 页面按阈值黄/红着色。没有邮件、短信、电话等即时告警通道 |
 | 诊断报告 | 自建报表 | 中心本地生成日/周/月报告并入库；可下载 Markdown 与排行 CSV。设置了 Webhook 时，成功生成后发到企业微信、钉钉或飞书 |
 | 鉴权 | LDAP / SSO / 多用户 | Agent 上报可选共享 Token。另有可选的一把管理 Token（SHA-256），不是按用户分的登录 |
@@ -45,8 +45,12 @@
 | 主机类型 | `auto`、`cpu`、`gpu`。`gpu` 表示各类加速卡，不是只指英伟达。旧值 `app` 归一为 `cpu`，`npu` 归一为 `gpu` |
 | 加速卡 | 英伟达 GPU、AMD GPU、华为昇腾、寒武纪 MLU、瑞芯微 RKNN，以及 PCI 回退认出的已知卡 |
 | 指标 | 某一时刻的数值或结构化监控数据 |
-| 基本不用 | 使用诊断里的空闲判定，见 3.6。不是实时页「今日关注」里的一类 |
+| 基本不用 | 使用诊断里的空闲判定，见 3.6。不是实时页「今日关注」里的一类。只看 CPU 和加速卡平均 <5% 且繁忙 <5% |
 | 高负荷 | 使用诊断里的忙判定，见 3.6。与实时页「高负载」不是同一条规则 |
+| 离线 | 实时状态。超过 `offline_seconds`（默认 90 秒）没有上报。中心看不出是机器停了还是网络断了。指标显示 `-`，保留末次快照时间 |
+| 离线（无数据） | 事后历史里的空档。机器或采集端停了，或本地队列把样本丢掉了。这段没有样本，也不会再补上 |
+| 断网（已补报） | 事后历史里被补上的时段。机器和采集端当时还在采样，样本先留在本机，恢复后按原来的采集时间入库 |
+| 本地队列 | 采集端 `data/spool`。生产安装在 `/opt/monitor-agent/data/spool`。默认保留 24 小时 |
 | 管理 Token | 设置页可选口令，保护写接口。与 Agent 上报 Token 不是同一把 |
 
 ### 1.5 约束
@@ -64,7 +68,7 @@
 
 ### 2.1 产品行为
 
-打开中心页面即可看到未隐藏主机的在线状态、CPU / 内存 / 磁盘 / 网络 / 加速卡、手工资产，以及时段利用和日/周/月使用诊断。实时页用「今日关注」指出当前该看的离线、磁盘快满、卡异常和高负载。长期空闲只在使用诊断的「基本不用」里。
+打开中心页面即可看到未隐藏主机的在线状态、CPU / 内存 / 磁盘 / 网络 / 加速卡、手工资产，以及时段利用和日/周/月使用诊断。顶栏是实时监控、主机、时段统计、使用诊断、运维、设置。实时页用「今日关注」指出当前该看的离线、磁盘快满、卡异常和高负载。长期空闲只在使用诊断的「基本不用」里。磁盘占用看容量，磁盘读写看 Mbps 和 %util，两者都不进入闲忙。中断期间只说「离线」；恢复后历史才区分「离线（无数据）」和「断网（已补报）」。
 
 ### 2.2 角色
 
@@ -125,7 +129,7 @@
 
 ### 3.2 采集与回传（FR-02）
 
-Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败记日志，进程不退出，下一周期再试。上报体含 `host_id`、`hostname`、解析后的 `host_type`、`timestamp`、`system`、加速卡字段和 `agent_version`。配置了上报 Token 时带 `token`。
+Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。短重试仍失败时，把这一笔按原来的 `timestamp` 写入安装目录 `data/spool`，进程不退出，下一周期再试。发送成功后，再向 `POST /api/v1/metrics/batch` 补发一小批（默认 80 条，不超过 100），样本带 `backfill: true`，时间戳仍是采集时刻。队列默认保留 24 小时（`spool_retention_hours`，设置页「断网补报保留」；成功上报后中心把小时数下发给采集端）。超期或条数到达上限时丢掉最旧样本，并记下溢出，随下一次补报告诉中心。进程重启和覆盖安装保留 `data/`，所以队列还在。机器停机或磁盘没了，这段补不回来。上报体含 `host_id`、`hostname`、解析后的 `host_type`、`timestamp`、`system`、加速卡字段和 `agent_version`。配置了上报 Token 时带 `token`。
 
 `host_id` 默认主机名，可配置。`host_type` 为 `cpu` 时只采系统指标。`gpu` 与 `auto` 再采加速卡；`auto` 有卡则为 `gpu`，否则为 `cpu`。
 
@@ -156,7 +160,7 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 
 ### 3.3 实时展示、资产、隐藏与改址（FR-03）
 
-监测台只有一条顶栏：实时监控、主机、时段统计、使用诊断、运维、设置。实时监控是今日关注和主机表；主机仍打开同一页并定位到主机表；时段统计和趋势、使用诊断是另外两页。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。离线主机不把最后一次快照的数字显示成当前利用率。读不到的数显示 `-`。时段趋势悬停显示 Asia/Shanghai 时间和该点数值。
+监测台只有一条顶栏：实时监控、主机、时段统计、使用诊断、运维、设置。实时监控是今日关注和主机表；主机仍打开同一页并定位到主机表；时段统计和趋势、使用诊断是另外两页。部署页仍是 `/deploy.html`，设置页是 `/settings.html`。页面约 15 秒自动刷新。离线主机不把最后一次快照的数字显示成当前利用率。读不到的数显示 `-`。时段趋势悬停显示 Asia/Shanghai 时间和该点数值；没有补上的空档数值是横线，并写「离线（无数据）」；补上的点写「断网（已补报）」。给人看的 CSV 用中文表头并另附字段说明，`hosts.json` 的键保持英文。
 
 | ID | 需求 | 优先级 |
 | --- | --- | --- |
@@ -173,7 +177,7 @@ Agent 按 `interval_seconds` 采集（默认 15，下限 5）并 POST。失败�
 
 ### 3.4 在线判定与页面着色（FR-04）
 
-超过 `offline_seconds`（默认 90）未上报为离线。离线主机的资源判定为 unknown，不把末次快照说成当前高低。
+超过 `offline_seconds`（默认 90）未上报为离线。这是唯一的实时状态，不另做「网络中断」徽章。离线主机的资源判定为 unknown，不把末次快照说成当前高低。历史上报按采集时间排列：补报不会把过去的点画到恢复连接的那一刻。同一 `(host_id, timestamp)` 只留第一笔。
 
 在线主机按 `config/center.json` 的 `anomaly` 着色：偏高为黄，异常为红。未写的键用下表。旧键 `npu_*` 与 `accel_*` 并存；新键缺省时沿用旧键，不删除别名。
 
@@ -201,7 +205,7 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 
 详情趋势 `GET /api/v1/hosts/{id}/history` 可带同一时间窗；不带时默认 60 分钟。时段结果可导出 CSV。
 
-时段页先是时间窗和导出，下面左侧是主机表（表头先写离线概览：这一窗口里有几台离线、共几段、累计多久，以及每段起止），右侧是选中主机的汇总，趋势图铺在下方。悬停趋势图显示上海时间和数值。点一台主机，右侧先写该机的离线时段，再写利用率。判定用已有历史上报和 `offline_seconds`（默认 90 秒内有上报仍算在线），不新增传感器，也不改变闲忙两极。主机第一次上报之前不算离线。点选主机只更新右侧汇总和下方趋势，不重绘整页；连点时忽略过期响应。
+时段页先是时间窗和导出，下面左侧是主机表。表头是离线概览，分开「离线（无数据）」和「断网（已补报）」的段数、累计时长和起止。右侧是选中主机的汇总，趋势图铺在下方。悬停趋势图显示上海时间和数值。点一台主机，右侧先写这两种时段，再写利用率。判定用已有历史上报和 `offline_seconds`（一条上报覆盖其后这段时间，含端点），不新增传感器，也不改变闲忙两极。补上的点和平时一样进入平均、P95 和繁忙占比。主机第一次上报之前不算离线。点选主机只更新右侧汇总和下方趋势，不重绘整页；连点时忽略过期响应。
 
 ### 3.6 使用诊断报告（FR-DIAG）
 
@@ -230,11 +234,11 @@ null 负载不参与比较。这组阈值只驱动实时着色和「今日关注
 | 高负荷 | 该指标样本数达到 `report.min_samples`（默认 10），且繁忙占比 ≥ `high_busy_gte`（默认 0.40）或 P95 ≥ `high_p95_gte`（默认 85%）。CPU 满足即算；有加速卡且加速卡样本也够时，加速卡同样可以单独算高负荷 |
 | 基本不用 | **生成时刻在线**，且 CPU 样本达到最少样本数，CPU 平均 < `idle_avg_lt`（默认 5%）**并且** CPU 繁忙占比 < `idle_busy_lt`（默认 0.05）。有加速卡时，加速卡样本也须达到最少样本数，加速卡平均和繁忙占比同样低于这两条。无加速卡则只看 CPU |
 | 样本不足 | 在线但样本不够，或有卡却没有足够的加速卡样本。不判成基本不用，也不编数 |
-| 离线 | 生成时刻已离线。只写末次上报时间，不把末次快照当成实时用量 |
+| 离线 | 生成时刻已离线。只写末次上报时间，不把末次快照当成实时用量。这是实时状态，不是「离线（无数据）」 |
 
 已落入高负荷的主机不再计入基本不用。更早模板用过的「CPU 平均 <15%、加速卡平均 <10%」不是现行规则。
 
-窗口在线率 = 该窗口内至少有一条历史上报的主机数 / 当前未隐藏主机数。已隐藏主机不进入分子、分母、排行和闲忙。没有单独的在线心跳表，采样中断算未上报。闲忙里的「离线」和「基本不用」看生成时刻是否在线，不回溯窗口内状态。
+窗口在线率 = 该窗口内至少有一条历史上报的主机数 / 当前未隐藏主机数。已隐藏主机不进入分子、分母、排行和闲忙。没有单独的在线心跳表。闲忙里的「离线」和「基本不用」看生成时刻是否在线，不回溯窗口内状态。报告另写窗口内「离线（无数据）」和「断网（已补报）」的段数与秒数。补报按采集时间计入利用率。本地队列溢出丢掉的样本记在「离线（无数据）」，并在正文点明，不是静默空档。
 
 窗口内上报条数为 0 时，日/周/月报告仍然生成并入库（`empty=true`，`status=ok`）。列表和预览都保留报告壳，并写明没有可汇总的上报、不编造利用率。这不是失败。失败仍是窗口不合法或整段超出保留期。
 
@@ -259,7 +263,7 @@ CPU、内存、磁盘、加速卡利用率只接受 0～100%（含两端）。�
 | FR-ADMIN-01 | 未设置管理 Token 时，部署、改主机、生成报告、保存设置等写接口不校验。读接口始终开放 | P1 |
 | FR-ADMIN-02 | 已设置时，写接口必须带 `X-Management-Token`。缺失或错误为 401，`code` 为 `management_token_required`。保存的是 SHA-256，GET 不返回明文或哈希 | P1 |
 | FR-ADMIN-03 | 首次启动前可用环境变量 `MONITOR_MANAGEMENT_TOKEN`（至少 8 位、不含空格）。只在库里还没有管理 Token 时写入哈希，不覆盖已有值，不写回 `center.json` | P1 |
-| FR-ADMIN-04 | Agent 的 `token` 只校验 `POST /api/v1/metrics`。两把 Token 不能互换 | P0 |
+| FR-ADMIN-04 | Agent 的 `token` 只校验 `POST /api/v1/metrics` 和 `POST /api/v1/metrics/batch`。两把 Token 不能互换。补报不要求管理 Token | P0 |
 | FR-ADMIN-05 | 报告推送渠道为企业微信（markdown）、钉钉（markdown；当前不加签，机器人关键词需包含「诊断」）、飞书（text）。只接受 http/https Webhook。读取接口只返回渠道、是否启用和打码后的地址 | P1 |
 
 ### 3.8 Agent 安装（FR-DEPLOY）
@@ -302,7 +306,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
   "host_type": "gpu",
   "timestamp": 1722096000,
   "token": "optional-agent-token",
-  "agent_version": "1.11.0",
+  "agent_version": "1.12.0",
   "system": {
     "cpu_percent": 23.5,
     "cpu_count": 64,
@@ -357,8 +361,9 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 
 ### 5.2 存储要点
 
-- `hosts`：身份、最新快照、在线判定、隐藏标记、资产 JSON（含历史 IP 与改址撤销）
-- `metrics_history`：历史上报。保留期只清这张表。历史点可带精简 `disks[]`（挂载、百分比、已用、总量）
+- `hosts`：身份、最新快照、在线判定、隐藏标记、资产 JSON（含历史 IP 与改址撤销）。补报若比当前快照更旧，不改 `last_seen` 和末次快照
+- `metrics_history`：历史上报。`ts` 是采集时间，`received_at` 是中心收到的时刻，`backfill` 标记补报。同一 `(host_id, ts)` 只留第一笔。保留期只清这张表。历史点可带精简 `disks[]`（挂载、百分比、已用、总量）
+- `spool_overflows`：采集端上报的队列溢出。被丢掉的时段在历史里仍是「离线（无数据）」
 - `diagnostic_reports`：周期、半开请求窗、是否裁剪、Markdown、JSON、`source`、`status`、`error`、`generated_at`。清理历史点时不删
 - 资源组、部署清单、`admin_settings`：只在中心库。部署目标可标 `retired`
 
@@ -370,7 +375,8 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/v1/metrics` | Agent 上报。只在这里校验 Agent `token` |
+| POST | `/api/v1/metrics` | Agent 实时上报。校验 Agent `token`。响应带 `spool_retention_hours` |
+| POST | `/api/v1/metrics/batch` | 补报。正文 `{samples, overflows, token, host_id}`，单次最多 100 条。同样只校验 Agent `token` |
 | GET | `/api/v1/health` | 健康检查，含中心 `version` |
 | GET | `/api/v1/hosts` | 主机列表。默认不含已隐藏。`?hidden=1` 只看已隐藏，`?include_hidden=1` 含全部 |
 | GET | `/api/v1/hosts/{host_id}` | 详情，含 `asset` 与采集规格。已隐藏的仍可按 id 打开 |
@@ -426,7 +432,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 4. 隐藏后该机退出列表和在线统计；恢复后重新出现。没有 `confirm=delete` 时硬删除不发生。
 5. 时段统计能按相对分钟和绝对起止返回 avg / min / max / p95 / busy_ratio，集群为样本加权。
 6. 使用诊断能生成并再次打开日/周/月报告。窗口里没有上报时，三份报告都留在列表里，页面标明无数据，不消失。基本不用必须同时满足平均 <5% 和繁忙 <5%（有卡时加速卡同样）。平均 14% 或加速卡平均 9% 不是基本不用。高负荷为样本足够且繁忙占比 ≥40% 或 P95 ≥85%。
-7. 停止 Agent 超过离线阈值后状态变为离线，今日关注把它算进离线。
+7. 停止 Agent 超过离线阈值后状态变为离线，今日关注把它算进离线。实时页不出现第二种离线徽章。采集端在送不出去时把样本留在 `data/spool`，恢复后按采集时间补报；时段统计把补上的时段写成「断网（已补报）」，没有样本的空档写成「离线（无数据）」。
 8. 未设置管理 Token 时写接口可用；设置后，不带 `X-Management-Token` 的写操作被拒绝，读报告仍可用。未配置 Webhook 时生成报告只入库。
 9. 全程无外部监控软件依赖。自测 `PYTHONPATH=. python3 -m unittest discover -s tests` 通过。
 
@@ -437,7 +443,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 | 需求 | 实现 | 主要测试 |
 | --- | --- | --- |
 | FR-01 | `scripts/deploy_center.sh`、`push_upgrade.sh`、`upgrade_center.sh`、`center/storage.py` | `tests/test_upgrade_center.py`、`tests/test_center_backup.py` |
-| FR-02 | `agent/main.py`、`agent/metrics/` | `tests/test_basic.py`、`tests/test_gpu.py`、`tests/test_amd.py`、`tests/test_npu.py`、`tests/test_cnmon.py`、`tests/test_rknn.py`、`tests/test_pci_accel.py`、`tests/test_disk.py`、`tests/test_network.py`、`tests/test_load.py` |
+| FR-02 | `agent/main.py`、`agent/spool.py`、`agent/metrics/` | `tests/test_basic.py`、`tests/test_spool_backfill.py`、`tests/test_gpu.py`、`tests/test_amd.py`、`tests/test_npu.py`、`tests/test_cnmon.py`、`tests/test_rknn.py`、`tests/test_pci_accel.py`、`tests/test_disk.py`、`tests/test_network.py`、`tests/test_load.py` |
 | FR-03、FR-04 | `center/api.py`、`center/hostmeta.py`、`center/readdress.py`、`center/anomaly.py`、`center/static/` | `tests/test_host_meta.py`、`tests/test_host_list.py`、`tests/test_readdress.py`、`tests/test_ux.py` |
 | FR-UTIL | `center/storage.py` 时段聚合 | `tests/test_period_util.py` |
 | FR-DIAG | `center/reports.py`、`center/report_schedule.py` | `tests/test_reports.py` |
