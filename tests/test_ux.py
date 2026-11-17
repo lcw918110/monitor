@@ -81,7 +81,25 @@ class AgentVersionTests(unittest.TestCase):
         self.assertIn("applyHealthVersion", app_js)
         self.assertIn("periodDetailToken", app_js)
         self.assertIn("离线概览", app_js)
+        self.assertIn('data-kind="cluster"', app_js)
+        self.assertIn("renderPeriodSummary", app_js)
+        self.assertIn("renderPeriodList", app_js)
+        self.assertNotIn("点上面的数字可筛到主机表", app_js)
         self.assertIn("reportPresentation", app_js)
+        with open(os.path.join(ROOT, "center/static/index.html"), encoding="utf-8") as fh:
+            console = fh.read()
+        self.assertIn('id="periodSummary"', console)
+        self.assertIn('data-help="realtime"', console)
+        self.assertIn('data-help="period"', console)
+        self.assertIn('data-help="charts"', console)
+        self.assertIn('data-help="reports"', console)
+        self.assertNotIn("按当前快照。重点数据机上的数据外传异常也在这里", console)
+        self.assertNotIn("悬停显示上海时间和数值；没有补上的空档", console)
+        self.assertNotIn("中心按配置自动生成上一完整周期（默认每日 00:10", console)
+        with open(os.path.join(ROOT, "center/static/settings.html"), encoding="utf-8") as fh:
+            settings = fh.read()
+        self.assertIn('data-help="guard"', settings)
+        self.assertNotIn("它不能保证数据出不去，也不拦截连接", settings)
         self.assertNotIn("loadPeriodHostDetail(selectedId);\n        renderHosts(allHosts);", app_js)
         self.assertIn("applyHealthVersion", deploy_js)
         self.assertIn("不会卸载", deploy_html)
@@ -236,6 +254,56 @@ const zeros = ux.attentionTags({
   anomaly: { findings: [] },
 }, {});
 assert.deepStrictEqual(zeros, []);
+const model = ux.periodViewModel({
+  host_count: 2,
+  hosts_with_samples: 1,
+  sample_count: 10,
+  rollup_note: "集群汇总按样本加权",
+  hosts: [{ host_id: "a", address: "10.0.0.8" }],
+  offline: {
+    no_data: { interval_count: 2, total_seconds: 30, label: "离线（无数据）" },
+    backfill: { interval_count: 1, total_seconds: 10, label: "断网（已补报）" },
+  },
+  cluster: { accel_summary: "GPU ×1" },
+});
+assert.strictEqual(model.list[0].kind, "cluster");
+assert.strictEqual(model.list[0].label, "集群");
+assert.strictEqual(model.list[1].kind, "host");
+assert.strictEqual(model.list[1].id, "a");
+assert.strictEqual(model.summary.noDataLabel, "离线（无数据）");
+assert.strictEqual(model.summary.backfillLabel, "断网（已补报）");
+assert.strictEqual(model.summary.noDataCount, 2);
+assert.strictEqual(model.summary.noDataSeconds, 30);
+assert.strictEqual(model.summary.backfillCount, 1);
+assert.strictEqual(model.summary.hostsWithSamples, 1);
+assert.strictEqual(model.summary.hostCount, 2);
+assert.ok(model.list.every(function (row) {
+  return String(row.label).indexOf("没有样本") < 0;
+}));
+const help = ux.helpCatalogText();
+[
+  "离线（无数据）", "断网（已补报）", "数据外传异常", "不能拦截",
+  "闲", "忙", "磁盘占用", "「-」", "Asia/Shanghai",
+  "00:10", "周一 00:20", "每月 1 日 00:30", "错过不补", "设置",
+  "今日关注", "名词解释",
+].forEach(function (term) {
+  assert.ok(help.indexOf(term) >= 0, "help missing " + term);
+});
+assert.strictEqual(ux.reportSectionCollapsed("9. 附录"), true);
+assert.strictEqual(ux.reportSectionCollapsed("名词解释"), true);
+assert.strictEqual(ux.reportSectionCollapsed("2. 总览"), false);
+assert.strictEqual(ux.reportParagraphGlossary("口径：集群 avg。闲忙两极只看 CPU 与加速卡。"), true);
+assert.strictEqual(ux.reportParagraphGlossary("窗口在线率 1 / 2。"), false);
+const plan = ux.reportPreviewPlan([
+  { title: "1. 抬头", paragraphs: ["时间窗：昨天。", "口径：样本加权。"] },
+  { title: "2. 总览", paragraphs: ["窗口在线率 1 / 2。"] },
+  { title: "9. 附录", paragraphs: ["集群样本数 3。"] },
+]);
+assert.strictEqual(plan[0].collapsed, false);
+assert.strictEqual(plan[0].glossaryParagraphs, 1);
+assert.strictEqual(plan[0].openParagraphs, 1);
+assert.strictEqual(plan[1].collapsed, false);
+assert.strictEqual(plan[2].collapsed, true);
 function fakeDoc(text) {
   var sub = { textContent: text };
   return {

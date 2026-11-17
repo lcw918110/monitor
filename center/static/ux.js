@@ -250,6 +250,327 @@
     return { mode: "full", title: title, message: "" };
   }
 
+  function offlinePart(block, fallbackCount, fallbackSeconds) {
+    var part = block || {};
+    return {
+      count: part.interval_count != null ? part.interval_count : fallbackCount || 0,
+      seconds: part.total_seconds != null ? part.total_seconds : fallbackSeconds || 0,
+    };
+  }
+
+  /**
+   * 时段页拆成两块：list 只有「集群」和主机；summary 只有汇总数字。
+   * 名词解释不进这个模型。
+   */
+  function periodViewModel(data) {
+    data = data || {};
+    var off = data.offline || {};
+    var nodata = offlinePart(off.no_data, off.interval_count, off.total_seconds);
+    var filled = offlinePart(off.backfill, 0, 0);
+    var hosts = data.hosts || [];
+    var list = [{ kind: "cluster", id: "", label: "集群" }];
+    var i;
+    for (i = 0; i < hosts.length; i++) {
+      var host = hosts[i] || {};
+      list.push({
+        kind: "host",
+        id: host.host_id || "",
+        label: host.address || host.hostname || host.host_id || "-",
+      });
+    }
+    var cluster = data.cluster || {};
+    return {
+      list: list,
+      summary: {
+        hostsWithSamples: data.hosts_with_samples || 0,
+        hostCount: data.host_count || 0,
+        sampleCount: data.sample_count || 0,
+        noDataCount: nodata.count || 0,
+        noDataSeconds: nodata.seconds || 0,
+        backfillCount: filled.count || 0,
+        backfillSeconds: filled.seconds || 0,
+        noDataLabel: "离线（无数据）",
+        backfillLabel: "断网（已补报）",
+        accelSummary: cluster.accel_summary || data.accel_summary || "",
+        rollupNote: data.rollup_note || "集群汇总按样本加权",
+      },
+    };
+  }
+
+  /** 预览里整节收起：附录、口径、名词解释、用语说明。正文数字仍展开。 */
+  function reportSectionCollapsed(title) {
+    var text = String(title || "");
+    return (
+      text.indexOf("附录") >= 0 ||
+      text.indexOf("名词解释") >= 0 ||
+      text.indexOf("口径") >= 0 ||
+      text.indexOf("用语说明") >= 0
+    );
+  }
+
+  /** 开着的章节里，仍把纯解释段收进「说明」。带台数的结论不收。 */
+  function reportParagraphGlossary(text) {
+    var t = String(text || "").replace(/^\s+/, "");
+    if (t.indexOf("口径：") === 0 || t.indexOf("口径:") === 0) return true;
+    if (t.indexOf("重点数据守护只发现并提示") === 0) return true;
+    if (t.indexOf("只统计被标为重点数据机") === 0) return true;
+    if (t.indexOf("若已启用诊断报告推送，本节会随") === 0) return true;
+    return false;
+  }
+
+  function reportPreviewPlan(sections) {
+    return (sections || []).map(function (sec) {
+      var title = (sec && sec.title) || "";
+      var paras = (sec && sec.paragraphs) || [];
+      var glossary = 0;
+      var i;
+      for (i = 0; i < paras.length; i++) {
+        if (reportParagraphGlossary(paras[i])) glossary += 1;
+      }
+      return {
+        title: title,
+        collapsed: reportSectionCollapsed(title),
+        glossaryParagraphs: glossary,
+        openParagraphs: paras.length - glossary,
+      };
+    });
+  }
+
+  var HELP = {
+    realtime: {
+      title: "说明",
+      items: [
+        {
+          term: "今日关注",
+          text: "按当前快照。类别是离线、磁盘快满、卡异常、高负载、数据外传异常。点一类筛到主机表。长期空闲仍看使用诊断。",
+        },
+        {
+          term: "离线",
+          text: "实时页只有这一个状态。超过离线阈值没有上报就标为离线。读不到的数显示「-」，不用最后一次快照冒充当前利用率。",
+        },
+        {
+          term: "数据外传异常",
+          text: "只提示重点数据机上的迹象，不能拦截，也不能保证数据出不去。",
+        },
+        {
+          term: "磁盘占用",
+          text: "磁盘占用看容量。磁盘读取、写入和磁盘 I/O 利用率另计，不进入闲忙。闲忙只看 CPU 和加速卡。",
+        },
+        {
+          term: "负载",
+          text: "load1 或 load5 / 核数达到阈值时变黄。读不到显示「-」。",
+        },
+        {
+          term: "字段说明",
+          text: "各列含义和单位见可下载的字段说明。",
+          href: "/api/v1/export/field-guide.txt",
+          hrefLabel: "字段说明",
+        },
+        {
+          term: "范围",
+          text: "聚焦 CPU / NPU 监测与统计。异常仅判定展示。不引入外部监控软件。",
+        },
+      ],
+    },
+    period: {
+      title: "说明",
+      items: [
+        {
+          term: "离线（无数据）",
+          text: "事后才分开计。这段没有样本，也不会再补上。机器或采集端停了，或本机队列把样本丢掉了。第一次上报之前不算。实时页在中断期间只显示「离线」。",
+        },
+        {
+          term: "断网（已补报）",
+          text: "机器和采集端当时还在采样，样本先留在本机，恢复后按原来的采集时间补上。这些点和平时一样进入平均、P95 和繁忙占比。",
+        },
+        {
+          term: "闲 / 忙",
+          text: "只看 CPU 和加速卡。磁盘占用、磁盘读写和内存不进入闲忙。",
+        },
+        {
+          term: "磁盘占用",
+          text: "磁盘占用是容量。磁盘读取、写入是 Mbps，磁盘 I/O 利用率是盘忙不忙。读不到显示「-」。",
+        },
+        {
+          term: "集群",
+          text: "左侧列表只放集群和主机。点「集群」后，右侧是汇总数字和指标表。集群汇总按样本加权。",
+        },
+        {
+          term: "趋势",
+          text: "悬停显示上海时间（Asia/Shanghai）和数值。没有补上的空档是「离线（无数据）」；补上的点是「断网（已补报）」。",
+        },
+      ],
+    },
+    charts: {
+      title: "说明",
+      items: [
+        {
+          term: "悬停",
+          text: "悬停显示上海时间（Asia/Shanghai）和该点数值。",
+        },
+        {
+          term: "空档",
+          text: "没有补上的空档是「离线（无数据）」，数值是横线。补上的点写「断网（已补报）」。",
+        },
+      ],
+    },
+    reports: {
+      title: "说明",
+      items: [
+        {
+          term: "自动生成",
+          text: "中心按配置自动生成上一完整周期（默认每日 00:10、每周一 00:20、每月 1 日 00:30，上海时间）。错过不补。同一窗口只保留一份，重新生成会覆盖。",
+        },
+        {
+          term: "推送",
+          text: "推送到企业微信、钉钉或飞书在「设置」里配置，未配置则不外发。",
+        },
+        {
+          term: "口径",
+          text: "闲忙只看 CPU 和加速卡。磁盘占用和磁盘读写不进入闲忙。缺数写样本不足，不编造。读不到显示「-」。",
+        },
+        {
+          term: "离线（无数据）",
+          text: "窗口里没有样本、也不会再补上的空档。",
+        },
+        {
+          term: "断网（已补报）",
+          text: "本机留存后按原采集时间补上的时段，已计入利用率。",
+        },
+        {
+          term: "预览",
+          text: "名词解释、口径和附录默认收起。下载的 Markdown 仍保留这些说明。",
+        },
+      ],
+    },
+    guard: {
+      title: "说明",
+      items: [
+        {
+          term: "重点数据机",
+          text: "只对勾选的主机或整个资源组生效。主机上单独保存的设置优先于资源组。清除本条之后，这台主机改回跟随资源组。",
+        },
+        {
+          term: "数据外传异常",
+          text: "只发现并提示重点数据可能正在离开的迹象，不能拦截，也不能保证数据出不去。看不到加密隧道里的内容，也不能指出究竟是哪一个文件离开了。备份和同步必须写进白名单，否则会报数据外传异常。",
+        },
+        {
+          term: "读不到",
+          text: "读失败的路径显示「-」。",
+        },
+      ],
+    },
+  };
+
+  function helpTopic(id) {
+    return HELP[id] || null;
+  }
+
+  function helpText(id) {
+    var topic = helpTopic(id);
+    if (!topic) return "";
+    return (topic.items || [])
+      .map(function (item) {
+        return item.term + " " + item.text;
+      })
+      .join("\n");
+  }
+
+  function helpCatalogText() {
+    var keys = [];
+    var id;
+    for (id in HELP) {
+      if (Object.prototype.hasOwnProperty.call(HELP, id)) keys.push(id);
+    }
+    return keys
+      .map(function (key) {
+        return helpText(key);
+      })
+      .join("\n");
+  }
+
+  function escapeHelp(text) {
+    return String(text == null ? "" : text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function installHelp(doc) {
+    if (!doc || !doc.body || doc.__monitorHelp) return;
+    doc.__monitorHelp = true;
+    var pop = doc.createElement("div");
+    pop.className = "help-pop";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", "说明");
+    pop.hidden = true;
+    doc.body.appendChild(pop);
+
+    function closePop() {
+      pop.hidden = true;
+      pop.removeAttribute("data-for");
+    }
+
+    function openPop(topicId, anchor) {
+      var topic = helpTopic(topicId);
+      if (!topic) return;
+      var html = "<h3>" + escapeHelp(topic.title || "说明") + "</h3><dl>";
+      (topic.items || []).forEach(function (item) {
+        html += "<dt>" + escapeHelp(item.term) + "</dt><dd>" + escapeHelp(item.text);
+        if (item.href) {
+          html +=
+            ' <a class="link" href="' +
+            escapeHelp(item.href) +
+            '">' +
+            escapeHelp(item.hrefLabel || "打开") +
+            "</a>";
+        }
+        html += "</dd>";
+      });
+      html += "</dl>";
+      pop.innerHTML = html;
+      pop.hidden = false;
+      pop.setAttribute("data-for", topicId);
+      var rect = anchor.getBoundingClientRect();
+      var width = Math.min(360, (doc.defaultView || window).innerWidth - 16);
+      pop.style.width = width + "px";
+      var view = doc.defaultView || window;
+      var left = rect.left;
+      if (left + width > view.innerWidth - 8) left = view.innerWidth - width - 8;
+      if (left < 8) left = 8;
+      var top = rect.bottom + 6;
+      pop.style.left = left + "px";
+      pop.style.top = top + "px";
+      var height = pop.offsetHeight || 0;
+      if (top + height > view.innerHeight - 8) {
+        top = Math.max(8, rect.top - height - 6);
+        pop.style.top = top + "px";
+      }
+    }
+
+    doc.addEventListener("click", function (ev) {
+      var target = ev.target;
+      var btn = target && target.closest ? target.closest("[data-help]") : null;
+      if (btn && doc.body.contains(btn)) {
+        ev.preventDefault();
+        var id = btn.getAttribute("data-help") || "";
+        if (!pop.hidden && pop.getAttribute("data-for") === id) {
+          closePop();
+          return;
+        }
+        openPop(id, btn);
+        return;
+      }
+      if (!pop.hidden && !pop.contains(target)) closePop();
+    });
+    doc.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") closePop();
+    });
+  }
+
+  if (typeof document !== "undefined") installHelp(document);
+
   return {
     accelHealthLabel: accelHealthLabel,
     attentionTags: attentionTags,
@@ -259,5 +580,13 @@
     applyHealthVersion: applyHealthVersion,
     reportListItemVisible: reportListItemVisible,
     reportPresentation: reportPresentation,
+    periodViewModel: periodViewModel,
+    reportSectionCollapsed: reportSectionCollapsed,
+    reportParagraphGlossary: reportParagraphGlossary,
+    reportPreviewPlan: reportPreviewPlan,
+    helpTopic: helpTopic,
+    helpText: helpText,
+    helpCatalogText: helpCatalogText,
+    installHelp: installHelp,
   };
 });

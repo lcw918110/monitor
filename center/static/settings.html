@@ -54,13 +54,14 @@
 
     <section class="panel" id="sectionDataGuard">
       <div class="panel-head">
-        <h2>重点数据守护</h2>
+        <div class="period-title">
+          <h2>重点数据守护</h2>
+          <button type="button" class="help-btn" data-help="guard">说明</button>
+        </div>
         <span class="muted" id="guardStatus">加载中…</span>
       </div>
       <div class="settings-copy">
-        <p>只对勾选的主机或整个资源组生效，这些机器在实时页上标成<strong>重点数据机</strong>。用来发现重点数据可能正在离开的迹象：外传异常、路径完整性变化、未允许网段外连、可移动磁盘挂载。发现之后进今日关注的「数据外传异常」，并记进时段统计和使用诊断。</p>
-        <p>它不能保证数据出不去，也不拦截连接、不读文件内容、不抓包。拦得住要靠防火墙和目录权限。加密隧道里的内容看不到，也指不出究竟是哪一个文件离开了。正常的备份和同步必须写进白名单，否则会报数据外传异常。</p>
-        <p>主机上单独保存的设置优先于资源组。清除本条之后，这台主机改回跟随资源组；资源组没有设置时，就不再是重点数据机。读失败的路径在详情里显示为「-」。</p>
+        <p>只对勾选的主机或整个资源组生效，这些机器标成重点数据机。主机上的设置优先于资源组。</p>
       </div>
       <div class="form-grid">
         <label>作用范围
@@ -185,6 +186,7 @@
   <footer class="foot">
     <span>管理 Token、报告推送和 Agent 上报 Token 分开。中心参数写在 center.json；推送未配置时，诊断报告只留在本机。</span>
   </footer>
+  <script src="/ux.js"></script>
   <script src="/admin.js"></script>
   <script src="/settings.js"></script>
 </body>
