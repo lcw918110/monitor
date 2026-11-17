@@ -1474,6 +1474,17 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .settings-copy code { word-break: break-all; }
 
+.push-last {
+  margin: 8px 16px 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.push-last.ok { color: var(--ok); }
+.push-last.bad { color: var(--bad); }
+.push-last.skip { color: var(--warn); }
+
 .hidden-row {
   display: flex;
   justify-content: space-between;

@@ -47,12 +47,20 @@
       "last_seen": 1722096000,
       "cpu_percent": 12.3,
       "mem_percent": 45.0,
-      "gpu_count": 4,
-      "gpu_util_avg": 55.0
+      "disk_percent": 61.0,
+      "disk_read_mbps": 1.2,
+      "disk_write_mbps": 8.4,
+      "disk_io_util_percent": 6.0,
+      "accel_count": 4,
+      "accel_summary": "NVIDIA ×4 A100",
+      "accel_util_avg": 55.0,
+      "data_guard": {"marked": true, "attention": false, "kinds": []}
     }
   ]
 }
 ```
+
+页面口径用 `accel_summary` 表示加速卡型号和数量，用 `disk_read_mbps` / `disk_write_mbps` 表示磁盘读写，用 `data_guard.marked` 表示「重点数据机」徽章。离线行不把这些数字当成当前利用率。
 
 ### 1.3 GET `/api/v1/hosts/{host_id}`
 
@@ -105,7 +113,30 @@
 - `generated_at` 是实际计算时间，与 `as_of` / 窗口边界分开
 - 0～100% 以外的利用率不进入平均 / P95 / 繁忙占比，报告写明排除条数和主机
 - 空闲判定：在线且样本足够时，CPU 平均 <5% 且繁忙 <5%；有加速卡则同样 <5%。高负荷为繁忙占比 ≥40% 或 P95 ≥85%（CPU 或加速卡）。磁盘不进闲忙。排行、闲忙和 CSV 含负责人、用途。已隐藏主机不进入报告
-- 读接口不校验 Agent Token。启用管理 Token 后，生成报告这一条 POST 要带 `X-Management-Token`；未启用时不校验。成功响应可带 `push`（未配置时 `skipped: true`）
+- 读接口不校验 Agent Token。启用管理 Token 后，生成报告这一条 POST 要带 `X-Management-Token`；未启用时不校验。成功响应可带 `push`（未配置时 `skipped: true`）。`push.ok` 为 false 时，报告 `status` 仍是 `ok`
+
+### 1.7 设置 `GET/POST /api/v1/settings` 与 `POST /api/v1/settings/push-test`
+
+`GET /api/v1/settings` 返回 `settings` 和 `center`。`settings` 说明管理 Token 是否已设置、诊断报告推送是否启用、渠道（`wecom` 企业微信 / `dingtalk` 钉钉 / `feishu` 飞书）、打码后的 Webhook（主机名 + 密钥末四位），以及 `push_last`。不返回管理 Token 明文、Agent 上报 Token 明文、Webhook 原文，也不返回哈希。
+
+`push_last` 还没有记录时为 `null`。有记录时：
+
+| 字段 | 说明 |
+| --- | --- |
+| `kind` | `test` 测试发送，`report` 报告推送 |
+| `kind_label` | 「测试发送」或「报告推送」 |
+| `at` | 北京时间 `YYYY-MM-DD HH:MM:SS` |
+| `ok` | 对方接受为 true |
+| `skipped` | 未启用或没有 Webhook 时为 true，且没有访问网络 |
+| `reason` | 未发出时为 `not_configured` |
+| `error` | 失败原因，不含 Webhook |
+| `summary` | 设置页展示的那一句 |
+
+`POST /api/v1/settings` 保存管理 Token、推送开关 / 渠道 / Webhook，以及 `center` 里的中心参数。管理 Token 不是保存 Webhook 或启用推送的前提。未设置管理 Token 时写接口不校验；已设置则要请求头 `X-Management-Token`，缺失或错误为 401，`code` 为 `management_token_required`。
+
+`POST /api/v1/settings/push-test` 与上面同一套鉴权。它只发一条短消息，三个渠道的正文都含「诊断」。企业微信为 markdown，钉钉为 markdown 且没有加签字段，飞书为 text。不生成、不保存诊断报告。未启用或没有 Webhook 时返回 200，`push.skipped` 为 true，`push.reason` 为 `not_configured`。传输失败再试两次（约 0.4 秒、0.8 秒），单次超时 10 秒；对方返回非 0 不重试。成功、失败和未发出都会更新 `push_last`。
+
+定时生成和手动「生成并保存」成功后同样更新 `push_last`。推送失败不改变报告 `status`。
 
 ---
 
@@ -170,6 +201,12 @@ loop:
 | TC-REPORT-06 | `as_of` 取旧窗口、`generated_at` 取现在 | 正文「实际生成时刻」是后者 |
 | TC-REPORT-07 | 加速卡样本 >100% | 不进入平均，正文点名主机和排除条数 |
 | TC-REPORT-08 | 清理超期 `metrics_history` | `diagnostic_reports` 仍在 |
+| TC-PUSH-01 | 未启用或没有 Webhook 时「测试发送」 | 不访问网络；`skipped`，原因为 `not_configured`；设置页能看到未发出 |
+| TC-PUSH-02 | 企业微信、钉钉、飞书各发一条测试消息 | 正文含「诊断」；钉钉报文没有 `sign`；不生成诊断报告 |
+| TC-PUSH-03 | 测试发送或报告推送之后 GET `/api/v1/settings` | `push_last` 有北京时间、成功或失败原因，以及测试发送或报告推送；响应里没有 Webhook 原文 |
+| TC-PUSH-04 | 已设置管理 Token 后测试发送 | 不带 `X-Management-Token` 为 401；带上才发送。未设置 Token 时与其它写接口一样放行 |
+| TC-PUSH-05 | 推送请求失败后再看报告 | 报告生成仍成功；错误文本、日志和 `push_last` 都不含 Webhook |
+| TC-PUSH-06 | 传输失败，以及对方返回非 0 | 传输失败再试两次；对方拒绝只请求一次 |
 
 ---
 

@@ -21,6 +21,7 @@ from center.admin_settings import (
     _UPDATE_FIELDS,
     bootstrap_management_token,
     handle_get_admin_settings,
+    handle_test_push,
     write_allowed,
 )
 from center.center_params import (
@@ -535,6 +536,11 @@ def make_handler(
 
             if path == "/api/v1/settings":
                 code, payload = handle_settings_write(admin_store, body, runtime)
+                self._send_json(code, payload)
+                return
+
+            if path == "/api/v1/settings/push-test":
+                code, payload = handle_test_push(admin_store)
                 self._send_json(code, payload)
                 return
 

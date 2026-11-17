@@ -123,7 +123,8 @@
         <span class="muted" id="pushStatus">加载中…</span>
       </div>
       <div class="settings-copy">
-        <p>定时生成和页面上的「生成并保存」成功后，会把报告正文发到下面的机器人。未启用或没有 Webhook 时不发请求，报告仍照常入库。</p>
+        <p>定时生成和页面上的「生成并保存」成功后，会把报告正文发到下面的机器人。未启用或没有 Webhook 时不发请求，报告仍照常入库。推送失败不会把这份报告记成失败。</p>
+        <p>「测试发送」只向已经保存的渠道和 Webhook 发一条短消息，消息里包含「诊断」，不会生成新的诊断报告。未启用或没有 Webhook 时不访问网络。最近一次推送结果显示在下面，包括成功或失败原因、北京时间，以及这是测试发送还是报告推送。</p>
         <p>正文过长会截断，并提示到监测台「使用诊断」看全文。钉钉若开了加签，当前版本不会计算签名，请改用自定义关键词，关键词包含「诊断」。</p>
       </div>
       <div class="form-grid">
@@ -145,9 +146,11 @@
       <p class="settings-copy" id="channelHint"></p>
       <div class="form-actions">
         <button type="button" id="btnSavePush" class="btn primary">保存推送</button>
+        <button type="button" id="btnTestPush" class="btn">测试发送</button>
         <button type="button" id="btnClearPush" class="btn">清空 Webhook</button>
         <span class="muted" id="pushHint"></span>
       </div>
+      <p id="pushLast" class="push-last">还没有推送记录。</p>
     </section>
 
     <section class="panel" id="sectionToken">

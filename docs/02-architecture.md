@@ -57,8 +57,12 @@
 | 便携解释器 | `center/python_bundle.py` | 按架构选择中心上的 CPython 包 |
 | 部署 | `center/deploy_*.py` | 清单、SSH 部署、探查、Excel |
 | 中心参数 | `center/center_params.py` | `center.json` 的分组、默认值与说明。设置页写入文件；报告、着色、清理立即读新值 |
-| 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）与报告推送配置，表 `admin_settings`。与中心参数同页，不进 `center.json` |
-| 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书 Webhook；未配置不发请求 |
+| 管理设置 | `center/admin_settings.py` | 可选管理 Token（只存 SHA-256）、报告推送配置，以及最近一次推送结果。表 `admin_settings`。与中心参数同页，不进 `center.json`。GET 不回显 Token 明文和 Webhook 原文 |
+| 报告推送 | `center/report_push.py` | 企业微信 / 钉钉 / 飞书，单渠道单 Webhook。未配置不发请求。测试发送不生成报告。传输失败再试两次。错误文本不带 Webhook |
+| 重点数据守护（中心） | `center/data_guard.py` | 策略、上报时重算、设置接口。未标记的主机不入库，也不进今日关注 |
+| 重点数据守护（判定） | `common/data_guard.py` | 外传异常、路径完整性变化、未允许网段外连、可移动磁盘挂载。不读文件、不抓包、不拦截 |
+| 重点数据守护（采集） | `agent/metrics/data_guard.py` | 路径清点、连接摘要、可移动挂载。不打开文件内容 |
+| 重点数据守护（调度） | `agent/data_guard_run.py` | 读中心下发的策略；短时发送失败时跟指标一起落盘 |
 | Web UI | `center/static/*` | 监测台（实时监控 / 时段统计 / 使用诊断）、部署页 `/deploy.html`、设置页 `/settings.html` |
 | Agent 入口 | `agent/main.py` | 配置加载、循环调度、失败入队与成功后补报 |
 | 本地队列 | `agent/spool.py` | `data/spool`：按采集时间留样本，默认 24 小时，溢出记事件 |
@@ -80,9 +84,9 @@
 - **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组
 - **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路
-- **admin_settings**：管理 Token 哈希、报告推送开关 / 渠道 / Webhook。与监测库同一个 SQLite。接口不回显 Token 明文和完整 Webhook。中心阈值在 `config/center.json`，不在这张表  
+- **admin_settings**：管理 Token 哈希、报告推送开关 / 渠道 / Webhook、最近一次推送结果。与监测库同一个 SQLite。接口不回显 Token 明文和完整 Webhook。中心阈值在 `config/center.json`，不在这张表  
 
-容量与并发适合规模见路线图 **N4**。摸底方法和空白结果表在 `docs/15-capacity-lab.md`：数字必须实测后填写，本文不写主机台数。双中心 / 双活继续不做；备份与恢复见 `docs/14-ops-runbook.md`。框架化扩展指标见 **N2**。
+容量与并发适合规模见路线图 **N4** 和 `docs/15-capacity-lab.md`。结果表里已有 2026-10-28 的开发 Mac 外推行，那不是生产上限，本文仍不写主机台数。双中心 / 双活继续不做；备份与恢复见 `docs/14-ops-runbook.md`。框架化扩展指标见 **N2**。
 
 ---
 

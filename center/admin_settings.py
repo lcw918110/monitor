@@ -2,7 +2,9 @@
 
 管理 Token 只存 SHA-256，接口不再回显明文。
 未设置时写接口与以前一样开放；设置之后，变更类接口必须带当前 Token。
+管理 Token 不是保存 Webhook 或启用推送的前提。
 Webhook 要能再次发送，所以保存在中心库里，读取接口只给打码后的地址。
+最近一次推送结果（测试发送或报告推送）也在这张表里，不带 Webhook 原文。
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ import threading
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from center.report_push import CHANNEL_LABELS, SUPPORTED_CHANNELS
+from center.report_push import CHANNEL_LABELS, SUPPORTED_CHANNELS, public_push_result
 
 
 _TOKEN_KEY = "management_token_sha256"
 _PUSH_ENABLED = "push_enabled"
 _PUSH_CHANNEL = "push_channel"
 _PUSH_WEBHOOK = "push_webhook_url"
+_PUSH_LAST = "push_last_receipt"
 
 _UPDATE_FIELDS = {
     "management_token",
@@ -217,6 +220,27 @@ class AdminSettingsStore:
             "webhook_url": self._get(_PUSH_WEBHOOK).strip(),
         }
 
+    def record_push_receipt(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """保存最近一次推送结果。入库前去掉 Webhook。"""
+        url = str(self.push_config().get("webhook_url") or "")
+        kind = str((result or {}).get("kind") or "report")
+        view = public_push_result(result or {}, kind, url)
+        self._sets({_PUSH_LAST: json.dumps(view, ensure_ascii=False)})
+        return view
+
+    def push_last_view(self) -> Optional[Dict[str, Any]]:
+        raw = self._get(_PUSH_LAST)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        url = str(self.push_config().get("webhook_url") or "")
+        return public_push_result(data, str(data.get("kind") or "report"), url)
+
     def public_view(self) -> Dict[str, Any]:
         cfg = self.push_config()
         url = cfg["webhook_url"]
@@ -227,6 +251,7 @@ class AdminSettingsStore:
             "push_channel_label": CHANNEL_LABELS.get(cfg["channel"], cfg["channel"]),
             "push_webhook_set": bool(url),
             "push_webhook_hint": mask_webhook(url) if url else "",
+            "push_last": self.push_last_view(),
         }
 
     def update(self, data: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
@@ -320,6 +345,23 @@ def handle_get_admin_settings(store: Optional[AdminSettingsStore]) -> Tuple[int,
     if store is None:
         return 503, {"ok": False, "error": "管理设置未初始化"}
     return 200, {"ok": True, "settings": store.public_view()}
+
+
+def handle_test_push(store: Optional[AdminSettingsStore]) -> Tuple[int, Dict[str, Any]]:
+    """用已保存的渠道和 Webhook 发一条短消息。不生成诊断报告。"""
+    if store is None:
+        return 503, {"ok": False, "error": "管理设置未初始化"}
+    from center.report_push import push_report, remember_push_result
+
+    try:
+        result = push_report({}, store=store, kind="test")
+    except Exception:  # noqa: BLE001
+        result = remember_push_result(
+            store,
+            {"ok": False, "skipped": False, "kind": "test", "error": "推送失败"},
+            "test",
+        )
+    return 200, {"ok": True, "push": result, "settings": store.public_view()}
 
 
 def handle_save_admin_settings(
