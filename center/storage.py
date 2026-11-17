@@ -1814,31 +1814,55 @@ class Storage:
     def _history_edges(
         self, host_id: str, before_ts: int
     ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """返回 (最早一条, 窗口前最近一条, 窗口前最近一条非补报)。"""
-        with self._lock:
-            conn = self._connect()
-            try:
-                row = conn.execute(
-                    """
-                    SELECT MIN(ts) AS first_ts,
-                           MAX(CASE WHEN ts < ? THEN ts END) AS prior_ts,
-                           MAX(CASE WHEN ts < ? AND COALESCE(backfill, 0) = 0 THEN ts END) AS prior_live
-                    FROM metrics_history
-                    WHERE host_id=?
-                    """,
-                    (int(before_ts), int(before_ts), host_id),
-                ).fetchone()
-            finally:
-                conn.close()
-        if not row:
-            return None, None, None
+        """返回 (最早一条, 窗口前最近一条, 窗口前最近一条非补报)。
+
+        三次查找都走 idx_metrics_host_ts(host_id, ts)。最早一条是该主机全部
+        历史上报里最小的 ts。窗口前是 ts < before_ts。非补报把 backfill 为空或
+        0 视为实时点，从窗口起点沿索引往前取第一条。锁包住这三次读取。
+        """
+        bound = int(before_ts)
 
         def _opt(value: Any) -> Optional[int]:
             if value is None:
                 return None
             return int(value)
 
-        return _opt(row["first_ts"]), _opt(row["prior_ts"]), _opt(row["prior_live"])
+        with self._lock:
+            conn = self._connect()
+            try:
+                first_row = conn.execute(
+                    """
+                    SELECT MIN(ts) AS first_ts
+                    FROM metrics_history
+                    WHERE host_id=?
+                    """,
+                    (host_id,),
+                ).fetchone()
+                prior_row = conn.execute(
+                    """
+                    SELECT MAX(ts) AS prior_ts
+                    FROM metrics_history
+                    WHERE host_id=? AND ts < ?
+                    """,
+                    (host_id, bound),
+                ).fetchone()
+                live_row = conn.execute(
+                    """
+                    SELECT ts AS prior_live
+                    FROM metrics_history
+                    WHERE host_id=? AND ts < ?
+                      AND (backfill IS NULL OR backfill = 0)
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """,
+                    (host_id, bound),
+                ).fetchone()
+            finally:
+                conn.close()
+        first_ts = _opt(first_row["first_ts"]) if first_row else None
+        prior_ts = _opt(prior_row["prior_ts"]) if prior_row else None
+        prior_live = _opt(live_row["prior_live"]) if live_row else None
+        return first_ts, prior_ts, prior_live
 
     def count_visible_samples(self, from_ts: int, to_ts: int) -> int:
         """未隐藏主机在闭区间内的历史上报条数。隐藏主机不计入诊断预览。"""
