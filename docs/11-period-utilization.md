@@ -134,3 +134,19 @@ CPU / 内存 / 磁盘 / 加速卡利用率若小于 0 或大于 100（或非有�
 ## 存储
 
 `metrics_history` 压缩字段在原有趋势键上**只增不删**：`net_rated_mbps`、`net_rx_percent`、`net_tx_percent`、`mem_total_mb`、`disk_total_gb`、`disk_read_mbps`、`disk_write_mbps`、`disk_io_util_percent`。有 `disk_io[]` 时最多留 16 条整盘读写。不写入网卡列表，避免撑库。未改 Agent 昇腾解析。没有新字段的旧点保持原样。
+
+划分「离线（无数据）」和「断网（已补报）」之前，每台主机取三个边界：全历史最早的 `ts`、窗口起点之前最近一条、窗口起点之前最近一条非补报。`backfill` 为空或 0 算实时点，与 `COALESCE(backfill, 0) = 0` 相同。空主机三个值都为空。窗口起点上的点算在窗口内，不算窗口前。最早一条是该主机全部历史上报里的最小 `ts`，不限于本窗口。
+
+这三次查找都走已有索引 `idx_metrics_host_ts (host_id, ts)`，读的时候持有存储锁：
+
+```sql
+SELECT MIN(ts) FROM metrics_history WHERE host_id=?
+SELECT MAX(ts) FROM metrics_history WHERE host_id=? AND ts < ?
+SELECT ts FROM metrics_history
+WHERE host_id=? AND ts < ?
+  AND (backfill IS NULL OR backfill = 0)
+ORDER BY ts DESC
+LIMIT 1
+```
+
+`MIN(ts)` 与 `MAX(ts)` 在覆盖索引上定位。非补报那条从窗口起点沿索引往前找，遇到第一条实时点即停。查询计划为 `SEARCH ... idx_metrics_host_ts`，后两条带 `ts<?`。不另建索引。保留天数、离线切分和 `PERIOD_MAX_ROWS` 不变。

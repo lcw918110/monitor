@@ -80,7 +80,7 @@
 ## 4. 数据与容量（概要）
 
 - **hosts**：每机最新完整 payload。可空列 `hidden` / `hidden_at` / `asset_meta`（手工资产 JSON）。NULL 视为未隐藏。迁移只加列，不重写 `metrics_history`
-- **metrics_history**：压缩历史点。`ts` 是采集时间，`received_at` 是收到时刻，`backfill` 标记补报。同一 `(host_id, ts)` 只留第一笔。保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘。队列溢出在 `spool_overflows`
+- **metrics_history**：压缩历史点。`ts` 是采集时间，`received_at` 是收到时刻，`backfill` 标记补报。同一 `(host_id, ts)` 只留第一笔。索引 `idx_metrics_host_ts (host_id, ts)`。时段统计的窗口边界（该主机最早一条、窗口起点之前最近一条、窗口起点之前最近一条非补报）按这个索引分三次读取：`MIN(ts)`、`MAX(ts) WHERE ts < 窗口起点`，以及 `backfill` 为空或 0 时按 `ts` 倒序 `LIMIT 1`。保留天数由 `retention_days` 决定（示例 7，可按环境加长）。有 `disks[]` 时另存精简挂载，供诊断报告点名最满盘。队列溢出在 `spool_overflows`
 - **diagnostic_reports**：已生成的日/周/月诊断报告（Markdown + JSON，含 `source` / `status` / `generated_at`）。读取不重算。`retention_days` 不删除这张表
 - **resource_groups** / **host_group_members**：中心侧资源组
 - **部署库**：与监测库可同机；目标清单、任务日志、探查结果。Agent 安装只走产品路径（`/deploy.html`、`deploy_fleet.sh`），不包含笔记本 scp 旁路

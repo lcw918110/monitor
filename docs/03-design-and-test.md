@@ -100,7 +100,7 @@
 
 ### 1.5 时段利用 `GET /api/v1/hosts/{id}/period-stats` 与 `GET /api/v1/period-stats`
 
-见 `docs/11-period-utilization.md`。相对窗口 `minutes` 保持兼容；绝对窗口 `from_ts`/`to_ts`（Unix 秒）成对使用并裁剪到保留期。集群汇总为**样本加权**（合并各机窗口内样本后再聚合），不含已隐藏主机。各主机带 `owner` / `purpose`。
+见 `docs/11-period-utilization.md`。相对窗口 `minutes` 保持兼容；绝对窗口 `from_ts`/`to_ts`（Unix 秒）成对使用并裁剪到保留期。集群汇总为**样本加权**（合并各机窗口内样本后再聚合），不含已隐藏主机。各主机带 `owner` / `purpose`。每台主机的窗口边界（全历史最早 `ts`、窗口起点之前最近一条、窗口起点之前最近一条非补报）按 `idx_metrics_host_ts (host_id, ts)` 分三次读取。
 
 ### 1.6 使用诊断报告 `/api/v1/reports`
 
@@ -188,6 +188,7 @@ loop:
 | TC-SPOOL-02 | 队列超过条数或保留时间 | 丢掉最旧样本，并留下溢出事件 |
 | TC-SPOOL-03 | 带旧 timestamp 的补报 | 历史 `ts` 是采集时间；`(host_id, ts)` 不重复；不把更新的快照改旧 |
 | TC-SPOOL-04 | 窗口里既有空档又有补报点 | 时段概览和诊断正文分开写「离线（无数据）」与「断网（已补报）」 |
+| TC-PERIOD-01 | 空主机、只有窗口内的点、窗口前有实时点、窗口前最近一条是补报、最早点在窗口之外 | `_history_edges` 的三元组与按主机聚合的定义一致；查询计划使用 `idx_metrics_host_ts`，带 `ts` 上界的语句计划里有 `ts<?` |
 | TC-RET-01 | 写入超期历史后触发清理 | 旧记录删除 |
 | TC-REPORT-01 | 生成日报后删除原始历史再 GET | 正文与入库时一致，不重算 |
 | TC-REPORT-02 | CPU 平均 14% 或加速卡平均 9% | 不算基本不用（阈值 5%） |
