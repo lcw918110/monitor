@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">中心控制台 · CPU / 加速卡监测 · v1.13.0</p>
+        <p class="sub tip-host" data-tip-id="scope">中心控制台 · CPU / 加速卡监测 · v1.13.0</p>
       </div>
     </div>
     <nav class="shell-nav" aria-label="主导航">
@@ -24,9 +24,8 @@
       <a class="shell-link" href="/settings.html" data-shell="settings">设置</a>
     </nav>
     <div class="top-meta">
-      <a class="link" href="/api/v1/export/hosts.csv">导出 CSV</a>
+      <a class="link tip-host" href="/api/v1/export/hosts.csv" data-tip-id="export-csv">导出 CSV</a>
       <a class="link" href="/api/v1/export/hosts.json">导出 JSON</a>
-      <a class="link" href="/api/v1/export/field-guide.txt">字段说明</a>
       <span id="refreshHint">自动刷新 15s</span>
       <button type="button" id="btnRefresh" class="btn">立即刷新</button>
     </div>
@@ -35,13 +34,12 @@
   <div id="viewRealtime" class="tab-view">
     <section class="attention" id="attention" aria-label="今日关注">
       <div class="attention-head">
-        <h2>今日关注</h2>
-        <span class="muted" id="attentionHint">按当前快照。重点数据机上的数据外传异常也在这里，只提示迹象，不能拦截。长期空闲仍看使用诊断。</span>
+        <h2 class="tip-host" data-tip-id="attention">今日关注</h2>
       </div>
       <div class="attention-row" id="attentionList"></div>
       <div class="attention-names" id="attentionNames"></div>
+      <div class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></div>
     </section>
-    <section class="anomaly-summary" id="anomalySummary" aria-label="异常汇总"></section>
     <section class="stats" id="stats" aria-label="集群统计"></section>
 
     <main class="layout">
@@ -71,9 +69,9 @@
               <option value="">全部负责人</option>
               <option value="__none__">未填负责人</option>
             </select>
-            <button type="button" id="btnGroups" class="btn btn-sm">管理分组</button>
-            <button type="button" id="btnHidden" class="btn btn-sm">已隐藏</button>
-            <button type="button" id="btnImport" class="btn btn-sm">导入资产</button>
+            <button type="button" id="btnGroups" class="btn btn-sm tip-host" data-tip-id="groups">管理分组</button>
+            <button type="button" id="btnHidden" class="btn btn-sm tip-host" data-tip-id="hidden-hosts">已隐藏</button>
+            <button type="button" id="btnImport" class="btn btn-sm tip-host" data-tip-id="import-assets">导入资产</button>
             <span class="muted" id="hostCount"></span>
           </div>
         </div>
@@ -81,12 +79,10 @@
           <div class="group-panel-row">
             <input id="newGroupName" type="text" maxlength="40" placeholder="新资源组名称" />
             <button type="button" id="btnAddGroup" class="btn btn-sm">添加</button>
-            <span class="muted">分组只存在中心端，Agent 无需升级</span>
           </div>
           <div class="group-chip-list" id="groupList"></div>
         </div>
         <div class="group-panel" id="hiddenPanel" hidden>
-          <p class="muted">已隐藏的主机不计入在线/离线统计，也不进入之后的诊断报告。历史仍在，可恢复。</p>
           <div id="hiddenList"><p class="muted">加载中…</p></div>
         </div>
         <div class="group-panel" id="importPanel" hidden>
@@ -94,7 +90,6 @@
             <input id="importFile" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
             <button type="button" id="btnImportPreview" class="btn btn-sm">预览匹配</button>
             <button type="button" id="btnImportApply" class="btn btn-sm" disabled>写入匹配行</button>
-            <span class="muted">按 IP 匹配已有主机。用户名、密码列会被忽略，不会入库。</span>
           </div>
           <div id="importResult"></div>
         </div>
@@ -111,11 +106,11 @@
                 <th class="sortable" data-sort="type">类型</th>
                 <th class="sortable" data-sort="cpu_percent">CPU利用率</th>
                 <th class="sortable" data-sort="mem_percent">内存利用率</th>
-                <th class="sortable" data-sort="disk_percent">磁盘占用</th>
-                <th class="sortable" data-sort="disk_count">磁盘数</th>
-                <th class="sortable" data-sort="accel">加速卡</th>
-                <th class="sortable" data-sort="accel_util">加速卡使用率</th>
-                <th class="sortable" data-sort="load1" title="1 分钟负载。读不到显示 -。变黄表示 load1 或 load5 / 核数达到阈值">负载</th>
+                <th class="sortable tip-host" data-sort="disk_percent" data-tip-id="disk-cap">磁盘占用</th>
+                <th class="sortable tip-host" data-sort="disk_count" data-tip-id="disk-count">磁盘数</th>
+                <th class="sortable tip-host" data-sort="accel" data-tip-id="accel-id">加速卡</th>
+                <th class="sortable tip-host" data-sort="accel_util" data-tip-id="accel-util">加速卡使用率</th>
+                <th class="sortable tip-host" data-sort="load1" data-tip-id="load-high">负载</th>
                 <th class="sortable" data-sort="last_seen">最近上报</th>
               </tr>
             </thead>
@@ -141,10 +136,11 @@
       <h2>时段统计</h2>
       <div class="filters period-util-controls" id="periodUtilControls"></div>
     </section>
+    <div class="period-summary" id="periodSummary" aria-label="汇总"></div>
     <div class="period-layout">
       <section class="panel period-util-panel">
         <div class="panel-head">
-          <h2>集群与主机</h2>
+          <h2 class="tip-host" data-tip-id="period-list">集群与主机</h2>
         </div>
         <div class="period-util-body" id="periodUtilBody">
           <p class="muted">加载时段统计…</p>
@@ -152,20 +148,19 @@
       </section>
       <section class="panel period-detail">
         <div class="panel-head">
-          <h2>主机时段</h2>
+          <h2 id="periodDetailHeading">主机时段</h2>
           <span class="muted" id="periodDetailTitle">请选择主机</span>
         </div>
         <div id="periodDetailBody" class="detail-body">
-          <p class="empty">点选左侧主机，查看该机时段指标</p>
+          <p class="empty">未选择主机</p>
         </div>
       </section>
       <section class="panel period-charts-panel" aria-label="趋势">
         <div class="panel-head">
-          <h2>趋势</h2>
-          <span class="muted">悬停显示上海时间和数值；没有补上的空档是「离线（无数据）」</span>
+          <h2 class="tip-host" data-tip-id="trend">趋势</h2>
         </div>
         <div id="periodCharts" class="period-charts">
-          <p class="empty">点选主机后，这里显示该机趋势</p>
+          <p class="empty">未选择主机</p>
         </div>
       </section>
     </div>
@@ -173,7 +168,9 @@
 
   <div id="viewReports" class="tab-view" hidden>
     <section class="period-toolbar" aria-label="使用诊断">
-      <h2>使用诊断</h2>
+      <div class="period-title">
+        <h2 class="tip-host" data-tip-id="reports">使用诊断</h2>
+      </div>
       <div class="filters" id="reportControls">
         <button type="button" class="period-btn active" data-report-period="day">日报</button>
         <button type="button" class="period-btn" data-report-period="week">周报</button>
@@ -185,12 +182,10 @@
         <span class="muted" id="reportWindowHint"></span>
       </div>
     </section>
-    <p class="report-schedule-note muted" id="reportScheduleNote">中心按配置自动生成上一完整周期（默认每日 00:10、每周一 00:20、每月 1 日 00:30，上海时间）。错过不补。同一窗口只保留一份，重新生成会覆盖。推送到企业微信、钉钉或飞书在「设置」里配置，未配置则不外发。</p>
     <div class="report-layout">
       <section class="panel">
         <div class="panel-head">
-          <h2>已保存</h2>
-          <span class="muted">打开不会重算</span>
+          <h2 class="tip-host" data-tip-id="report-open">已保存</h2>
         </div>
         <div id="reportList" class="report-list">
           <p class="muted">加载报告列表…</p>
@@ -198,19 +193,15 @@
       </section>
       <section class="panel">
         <div class="panel-head">
-          <h2>预览</h2>
+          <h2 class="tip-host" data-tip-id="report-preview">预览</h2>
           <span id="reportActions" class="report-actions"></span>
         </div>
         <div id="reportPreview" class="report-preview">
-          <p class="empty">选择日报、周报或月报后生成。结果写入中心数据库，再次打开直接读库存。</p>
+          <p class="empty tip-host" data-tip-id="report-empty-preview">尚未打开报告</p>
         </div>
       </section>
     </div>
   </div>
-
-  <footer class="foot">
-    <span>聚焦 CPU / NPU 监测与统计 · 异常仅判定展示 · 不引入外部监控软件</span>
-  </footer>
 
   <script src="/ux.js"></script>
   <script src="/admin.js"></script>

@@ -20,7 +20,7 @@
 - **监测**：CPU（利用率 / 核数 / 负载 / 架构 / 机型）+ 加速卡（英伟达 / **AMD** / 华为昇腾 / 寒武纪 / 瑞芯微 RKNN）。厂商工具和设备节点都没有时，从 `/sys/bus/pci/devices` 识别已知加速卡（例如 `cabc:0270` → MLU270），健康状态为 `abnormal`，注明驱动缺失或设备无响应，**不**把利用率当成 0% 样本。寒武纪 `cnmon info` 只按整行 `Card N` 分卡：利用率取 `MLU Average`，温度优先 Chip、其次 Board、否则取 Cluster 最大值，显存只认 Physical Memory Usage，功耗取 Power 的 Usage，健康取 Health State 下面的 Device（`Good` 视为正常；没有这一段就留空）。各厂商先读结构化输出（`nvidia-smi` CSV、`rocm-smi` / `amd-smi` JSON；`cnmon info -j` 只在临时目录里跑，避免在工作目录留下 `cnmon_info.json`），再退回文本。工具失败的 stderr / 退出码写进卡的 note。`nvidia-smi` 版本看 `-h` 抬头，不用会在 535/470 上失败的 `--version`。同一块卡按 PCI 总线号合并
 - **主机类型**：仅 `auto` | `cpu` | `gpu`（gpu=各类加速卡；兼容旧值 `app`→cpu、`npu`→gpu）
 - **异常判定**：默认阈值触发后页面 **黄色(偏高) / 红色(异常)** 着色（不做告警通知通道）。CPU 负载看 load1/核数和 load5/核数，共用 `cpu_load_per_core_warn`（默认 2.0）。读不到负载时上报 null，页面显示 `-`，不写成 0
-- **详情统计**：顶栏只有一排：**实时监控、主机、时段统计、使用诊断、运维、设置**。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。磁盘占用率是容量；磁盘读取、写入（Mbps）和磁盘 I/O 利用率（%util）另计，不进入闲忙。实时中断只显示「离线」。事后时段概览分开「离线（无数据）」和「断网（已补报）」：前者没有样本也不会再补上，后者是采集端把样本留在 `data/spool`（默认 24 小时，设置页可改），恢复后按原来的采集时间补上。点主机只换右侧汇总和下方趋势。悬停显示上海时间和数值，没补上的空档是横线。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
+- **详情统计**：顶栏只有一排：**实时监控、主机、时段统计、使用诊断、运维、设置**。时段页可选 1h / 2h / 6h / 24h / 7d 或自定义起止，看平均 / 最低 / 最高 / P95 / 繁忙占比；支持单机与集群汇总。磁盘占用率是容量；磁盘读取、写入（Mbps）和磁盘 I/O 利用率（%util）另计，不进入闲忙。实时中断只显示「离线」。时段页用汇总条分开「离线（无数据）」和「断网（已补报）」的段数和时长：前者没有样本也不会再补上，后者是采集端把样本留在 `data/spool`（默认 24 小时，设置页可改），恢复后按原来的采集时间补上。定义在对应名字上悬停，不铺在列表上。鼠标移入显示，移开隐藏。左侧是集群与主机列表，点「集群」看汇总表，点主机只换右侧汇总和下方趋势。悬停显示上海时间和数值，没补上的空档是横线。使用诊断在中心本地生成日/周/月报告并入库，页面预览、下载 Markdown 和主机排行 CSV。预览里口径悬停在对应的词上；带表的附录点章节名才展开。下载的 Markdown 仍是全文。窗口没有上报时仍留下报告，并标明无数据（见 `docs/13-diagnostic-reports.md`）
 - **主机列表**：实时监控页点击列头对 CPU% / 内存% / 磁盘% / 加速卡% / 负载 / 负责人 / 用途等排序；主机列优先显示**完整 IP**（手工展示地址、未停用的部署清单、`host_id` 内嵌 IP、RFC1918 网卡，避免短主机名片段；跳过 `198.18.0.0/15` Clash TUN / 基准测试假 IP）。负责人和用途可筛选、可搜索。历史 IP 也能搜到
 - **资产信息**：每台主机可手工填写负责人、用途，以及 CPU、内存、硬盘、GPU、型号/资产编号、备注。详情里这些手工字段和 Agent 采集的规格（CPU 型号/核数、内存总量、磁盘、加速卡型号数量）并排显示。采集上报不会改写手工文字
 - **隐藏与删除**：详情「从列表隐藏」后，该机退出列表、在线/离线统计、集群时段汇总和之后的诊断报告，历史上报仍在，可从「已隐藏」恢复。彻底删除要输入 `delete`（`DELETE /api/v1/hosts/{id}?confirm=delete`），连同该机历史一起去掉。可选同时删掉部署清单里 host_id 或 IP 对得上的目标。已隐藏的主机再上报也不会自动出现
@@ -308,7 +308,8 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
 | GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
-| GET/POST | `/api/v1/settings` | 管理 Token、报告推送，以及全部中心参数（分组、说明、默认值）。GET 不回显管理 Token / Agent 上报 Token 明文，Webhook 打码。POST 在已启用管理 Token 时要带请求头。中心参数写入 `config/center.json` |
+| GET/POST | `/api/v1/settings` | 管理 Token、诊断报告推送、最近一次推送结果，以及全部中心参数（分组、说明、默认值）。GET 不回显管理 Token / Agent 上报 Token 明文，Webhook 打码。POST 在已启用管理 Token 时要带请求头。中心参数写入 `config/center.json` |
+| POST | `/api/v1/settings/push-test` | 「测试发送」：按已保存的渠道和 Webhook 发一条含「诊断」的短消息。不生成报告。未启用或没有地址时不访问网络。已启用管理 Token 时要带请求头 |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页）。写操作在启用管理 Token 后要带请求头 |
 
 `token`（`config/center.json` 或部署参数）只在 `POST /api/v1/metrics` 校验 Agent 上报，不是网页登录。管理 Token 是另一把可选口令，见下面「管理 Token 与报告推送」。
@@ -317,7 +318,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 管理 Token 与报告推送
 
-打开 `/settings.html`。这一页同时编辑 `config/center.json` 里的中心参数（按保留与清理、异常着色、诊断报告阈值、时段利用率、报告时刻、上报 Token、服务与部署分组，常用项在前，每项有说明，未配置显示默认并可恢复）以及下面两项。除监听地址、端口、数据目录需要重启外，其余保存后当前进程立即生效。说明见 `config/center.example.md`。
+打开 `/settings.html`。这一页同时编辑 `config/center.json` 里的中心参数（按保留与清理、异常着色、诊断报告阈值、时段利用率、报告时刻、上报 Token、服务与部署分组，常用项在前，每项名字上悬停可看说明，未配置显示默认并可恢复）以及下面两项。除监听地址、端口、数据目录需要重启外，其余保存后当前进程立即生效。说明见 `config/center.example.md`。
 
 **管理 Token（可选）**
 
@@ -329,10 +330,12 @@ tail -n 50 .deploy-agent/run/agent.log
 
 **报告推送（可选）**
 
-- 渠道：企业微信、钉钉、飞书，填机器人 Webhook。未启用或没填地址时，`deliver_report` 什么都不发。
-- 定时生成和页面「生成并保存」成功后都会推送。失败不影响报告入库。
+- 渠道：企业微信、钉钉、飞书，填一个机器人 Webhook。未启用或没填地址时，`deliver_report` 什么都不发。管理 Token 不是保存或启用的前提；端口对外之前仍建议先设上。
+- 定时生成和页面「生成并保存」成功后都会推送。失败不影响报告入库，设置页记下最近一次结果。
+- 「测试发送」只发一条含「诊断」的短消息，不生成新的诊断报告。未启用或没有 Webhook 时不访问网络。
 - 钉钉请用自定义关键词「诊断」。当前不算加签。
-- 接口只显示打码后的地址。完整 Webhook 留在中心数据库，便于下次发送。
+- 接口只显示打码后的地址和最近一次推送结果（成功或失败原因、北京时间、测试发送或报告推送）。完整 Webhook 留在中心数据库，便于下次发送。
+- 这不是今日关注、离线或数据外传异常的即时推送。重点数据守护若写进诊断报告，只随报告发出。
 
 细节见 `docs/13-diagnostic-reports.md`。
 
@@ -340,7 +343,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 文档
 
-给客户机房交接时，用下面三份对外手册。产品现为 **v1.13.0**。部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册与需求、设计用同一套说法：顶栏六个入口、实时「离线」、事后「离线（无数据）」与「断网（已补报）」、磁盘容量和磁盘读写分开、趋势悬停为上海时间，并包含重点数据守护。部署手册和交付清单没有为这一项整本改版。步骤仍与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致。
+给客户机房交接时，用下面三份对外手册。产品现为 **v1.13.0**。部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。三份手册与需求、设计用同一套说法：顶栏六个入口、实时「离线」、事后「离线（无数据）」与「断网（已补报）」、磁盘容量和磁盘读写分开、趋势悬停为上海时间、重点数据守护，以及诊断报告推送的「测试发送」和最近一次结果。步骤仍与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致。
 
 | 文档 | 说明 |
 | --- | --- |
@@ -355,7 +358,7 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
 | **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机，以及备份 / 恢复 / 回滚（弱高可用；双中心不做）** |
-| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA） |
+| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针和结果表（含 2026-10-28 开发机外推，不是生产上限，也不是 SLA） |
 | **[`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)** | **对外部署手册：给客户机房的安装、升级、备份、验收** |
 | **[`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)** | **对外使用手册：监测台、时段离线概览、无数据诊断、运维确认与设置** |
 | **[`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)** | **对外交付资料清单：交什么文件、给谁、部署前后检查** |
@@ -366,13 +369,16 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 下一步（摘要）
 
-详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。v1.10.0 先把常见任务做顺，不新增监测能力：
+详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。现行版本 **v1.13.0**。诊断报告推送已经在设置页：企业微信 / 钉钉 / 飞书，可「测试发送」，并显示最近一次推送结果。它不是今日关注、离线或数据外传异常的即时告警。
 
-- **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
+- **已在设置页**：管理 Token、诊断报告推送（含测试发送和最近一次结果）、重点数据守护（只检测，不拦截）
+- **U1**：顶栏、今日关注、白话健康、报告深链已交付；长期空闲名单仍待
 - **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
-- **U3 可选**：保存筛选仍待做。管理 Token 和诊断报告推送已在 `/settings.html`
-- **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N3 拓扑；长期运维见路线图 O1–O7
-- **N2 指标框架化**：已单独立项，不与 NH-02/NH-03 同轮实现。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)。本轮不写代码
+- **U3 仍待**：可保存的筛选。不要把诊断报告推送再当成还没做的功能
+- **N1**：生产中心已在运行，路线图不再把它写成未开始
+- **N4**：容量表已有 2026-10-28 的开发机外推，不是生产上限
+- **N2 指标框架化**：仍未做。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)
+- **机器周期管理**（隐藏 / 换机 / 退役，[Issue #39](https://github.com/lcw918110/monitor/issues/39)）仍未做
 - **高可用**：备份 / 恢复按 `docs/14-ops-runbook.md`。双中心 / 双活继续不做
 
 ## 自测

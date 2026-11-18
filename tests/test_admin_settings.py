@@ -13,7 +13,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from unittest import mock
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,7 +25,7 @@ from center.admin_settings import (
     bootstrap_management_token,
     hash_management_token,
 )
-from center.report_push import build_payload, push_report, set_push_store
+from center.report_push import build_payload, build_test_payload, push_report, set_push_store
 from center.report_schedule import ReportScheduler, deliver_report
 from center.server import make_handler
 from center.storage import Storage
@@ -229,6 +229,9 @@ class PushDeliveryTests(unittest.TestCase):
         text = build_payload("wecom", long_report)["markdown"]["content"]
         self.assertLessEqual(len(text), 3500)
         self.assertIn("正文已截断", text)
+        self.assertTrue(dingtalk["markdown"]["text"].startswith("【诊断报告】"))
+        self.assertNotIn("sign", dingtalk)
+        self.assertNotIn("timestamp", dingtalk)
 
         with mock.patch(
             "center.report_push.urlopen",
@@ -260,6 +263,140 @@ class PushDeliveryTests(unittest.TestCase):
         sent = json.loads(opener.call_args[0][0].data.decode("utf-8"))
         self.assertEqual(sent["msgtype"], "markdown")
         self.assertIn("使用诊断", sent["markdown"]["text"])
+        last = self.store.public_view()["push_last"]
+        self.assertEqual(last["kind"], "report")
+        self.assertEqual(last["kind_label"], "报告推送")
+        self.assertTrue(last["ok"])
+        self.assertNotIn("secret-key-abcdef", json.dumps(self.store.public_view(), ensure_ascii=False))
+
+    def test_test_send_skips_without_network_and_records(self) -> None:
+        fixed = datetime(2026, 11, 17, 9, 46, 2, tzinfo=SHANGHAI)
+        with mock.patch("center.report_push.now_shanghai", return_value=fixed):
+            with mock.patch("center.report_push.urlopen") as opener:
+                missing = push_report({}, self.store, kind="test")
+        opener.assert_not_called()
+        self.assertTrue(missing["skipped"])
+        self.assertEqual(missing["reason"], "not_configured")
+        self.assertIn("未启用推送或没有 Webhook", missing["message"])
+        self.assertIn("测试发送未发出", missing["summary"])
+        self.assertEqual(missing["kind"], "test")
+        self.assertEqual(missing["at"], "2026-11-17 09:46:02")
+
+        self.store.update(
+            {"push_webhook_url": WEBHOOK, "push_enabled": False, "push_channel": "dingtalk"}
+        )
+        with mock.patch("center.report_push.now_shanghai", return_value=fixed):
+            with mock.patch("center.report_push.urlopen") as opener:
+                disabled = push_report({}, self.store, kind="test")
+        opener.assert_not_called()
+        self.assertTrue(disabled["skipped"])
+        view = self.store.public_view()
+        self.assertEqual(view["push_last"]["kind_label"], "测试发送")
+        self.assertIn("未发出", view["push_last"]["summary"])
+        self.assertNotIn(WEBHOOK, json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("secret-key-abcdef", json.dumps(view, ensure_ascii=False))
+
+    def test_test_payload_has_diagnosis_and_dingtalk_is_unsigned(self) -> None:
+        for channel in ("wecom", "dingtalk", "feishu"):
+            payload = build_test_payload(channel)
+            blob = json.dumps(payload, ensure_ascii=False)
+            self.assertIn("诊断", blob)
+            self.assertIn("未生成新的诊断报告", blob)
+            self.assertLess(len(blob), 500)
+            self.assertNotIn("sign", payload)
+            self.assertNotIn("timestamp", payload)
+            self.assertNotIn("secret", blob)
+        self.store.update(
+            {"push_enabled": True, "push_channel": "dingtalk", "push_webhook_url": WEBHOOK}
+        )
+        with mock.patch(
+            "center.report_push.urlopen",
+            return_value=_Resp('{"errcode":0,"errmsg":"ok"}'),
+        ) as opener:
+            result = push_report({}, self.store, kind="test")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["kind"], "test")
+        sent = json.loads(opener.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(set(sent.keys()), {"msgtype", "markdown"})
+        self.assertIn("诊断", sent["markdown"]["text"])
+        self.assertNotIn("sign", sent)
+        self.assertNotIn(WEBHOOK, json.dumps(sent))
+
+    def test_last_result_hides_webhook_even_if_vendor_echoes_it(self) -> None:
+        self.store.update(
+            {"push_enabled": True, "push_channel": "wecom", "push_webhook_url": WEBHOOK}
+        )
+        echoed = '{"errcode":93000,"errmsg":"rejected %s"}' % WEBHOOK
+        with mock.patch("center.report_push.urlopen", return_value=_Resp(echoed)) as opener:
+            failed = push_report(self.report, self.store)
+        self.assertEqual(opener.call_count, 1)
+        self.assertFalse(failed["ok"])
+        dumped = json.dumps(failed, ensure_ascii=False)
+        self.assertNotIn(WEBHOOK, dumped)
+        self.assertNotIn("secret-key-abcdef", dumped)
+        view = self.store.public_view()
+        self.assertEqual(view["push_last"]["kind"], "report")
+        self.assertIn("失败", view["push_last"]["summary"])
+        self.assertNotIn(WEBHOOK, json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("secret-key-abcdef", json.dumps(view, ensure_ascii=False))
+        conn = sqlite3.connect(self.store.db_path)
+        try:
+            row = conn.execute(
+                "SELECT value FROM admin_settings WHERE key='push_last_receipt'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        self.assertNotIn(WEBHOOK, row[0])
+        self.assertNotIn("secret-key-abcdef", row[0])
+
+        conn = sqlite3.connect(self.store.db_path)
+        try:
+            conn.execute(
+                "UPDATE admin_settings SET value=? WHERE key='push_last_receipt'",
+                (json.dumps({"ok": False, "kind": "report", "at": "2026-11-17 09:46:02",
+                             "channel": "wecom", "error": "泄漏 " + WEBHOOK,
+                             "webhook_url": WEBHOOK}, ensure_ascii=False),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        again = self.store.public_view()
+        blob = json.dumps(again, ensure_ascii=False)
+        self.assertNotIn(WEBHOOK, blob)
+        self.assertNotIn("secret-key-abcdef", blob)
+        self.assertNotIn("webhook_url", blob)
+
+    def test_transport_failure_retries_twice_without_leaking_url(self) -> None:
+        self.store.update(
+            {"push_enabled": True, "push_channel": "feishu", "push_webhook_url": WEBHOOK}
+        )
+        with mock.patch("center.report_push.time.sleep") as sleeper:
+            with mock.patch(
+                "center.report_push.urlopen",
+                side_effect=[URLError(WEBHOOK), URLError(WEBHOOK), _Resp('{"code":0}')],
+            ) as opener:
+                result = push_report(self.report, self.store)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleeper.call_args_list], [0.4, 0.8])
+        self.assertNotIn(WEBHOOK, json.dumps(result, ensure_ascii=False))
+
+        with mock.patch("center.report_push.time.sleep") as sleeper:
+            with mock.patch(
+                "center.report_push.urlopen",
+                side_effect=URLError(WEBHOOK),
+            ) as opener:
+                failed = push_report({}, self.store, kind="test")
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["error"], "推送请求失败")
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual(sleeper.call_count, 2)
+        self.assertEqual(failed["kind"], "test")
+        blob = json.dumps(self.store.public_view(), ensure_ascii=False)
+        self.assertNotIn(WEBHOOK, blob)
+        self.assertNotIn("secret-key-abcdef", blob)
+        self.assertIn("测试发送失败", blob)
 
 
 class ManagementGateTests(unittest.TestCase):
@@ -295,9 +432,16 @@ class ManagementGateTests(unittest.TestCase):
         with urlopen(self.base + "/settings.html") as resp:
             html = resp.read().decode("utf-8")
         self.assertIn("管理 Token", html)
+        self.assertIn("诊断报告推送", html)
+        self.assertIn("启用推送", html)
+        self.assertIn("测试发送", html)
         self.assertIn("企业微信", html)
         self.assertIn("钉钉", html)
         self.assertIn("飞书", html)
+        with urlopen(self.base + "/settings.js") as resp:
+            script = resp.read().decode("utf-8")
+        self.assertIn("/api/v1/settings/push-test", script)
+        self.assertIn("push_last", script)
         with urlopen(self.base + "/") as resp:
             index = resp.read().decode("utf-8")
         self.assertIn("/settings.html", index)
@@ -380,6 +524,13 @@ class ManagementGateTests(unittest.TestCase):
         self.assertEqual(generated["push"]["channel"], "wecom")
         self.assertEqual(opener.call_count, 1)
         self.assertNotIn("secret-key-abcdef", json.dumps(generated["push"]))
+        code, after_push = _request("GET", self.base + "/api/v1/settings")
+        self.assertEqual(code, 200, after_push)
+        last = after_push["settings"]["push_last"]
+        self.assertEqual(last["kind"], "report")
+        self.assertEqual(last["kind_label"], "报告推送")
+        self.assertTrue(last["ok"])
+        self.assertNotIn("secret-key-abcdef", json.dumps(after_push, ensure_ascii=False))
 
         code, cleared = _request(
             "POST",
@@ -391,3 +542,76 @@ class ManagementGateTests(unittest.TestCase):
         self.assertFalse(cleared["settings"]["management_token_set"])
         code, opened = _request("POST", self.base + "/api/v1/groups", {"name": "清空后开放"})
         self.assertEqual(code, 200, opened)
+
+    def test_test_send_gate_does_not_create_report(self) -> None:
+        code, before = _request("GET", self.base + "/api/v1/reports")
+        self.assertEqual(code, 200, before)
+        with mock.patch("center.report_push.urlopen") as opener:
+            code, skipped = _request("POST", self.base + "/api/v1/settings/push-test", {})
+        self.assertEqual(code, 200, skipped)
+        opener.assert_not_called()
+        self.assertTrue(skipped["push"]["skipped"])
+        self.assertEqual(skipped["push"]["reason"], "not_configured")
+        self.assertEqual(skipped["push"]["kind"], "test")
+        self.assertIn("未启用推送或没有 Webhook", skipped["push"]["message"])
+        self.assertIn("测试发送未发出", skipped["settings"]["push_last"]["summary"])
+
+        code, saved = _request("POST", self.base + "/api/v1/settings", {"management_token": TOKEN})
+        self.assertEqual(code, 200, saved)
+        with mock.patch("center.report_push.urlopen") as opener:
+            code, denied = _request("POST", self.base + "/api/v1/settings/push-test", {})
+        self.assertEqual(code, 401, denied)
+        self.assertEqual(denied["code"], "management_token_required")
+        opener.assert_not_called()
+
+        auth = {"Content-Type": "application/json", "X-Management-Token": TOKEN}
+        self.admin.update(
+            {"push_enabled": True, "push_channel": "dingtalk", "push_webhook_url": WEBHOOK}
+        )
+        with mock.patch(
+            "center.report_push.urlopen",
+            return_value=_Resp('{"errcode":0,"errmsg":"ok"}'),
+        ) as opener:
+            code, sent = _request(
+                "POST", self.base + "/api/v1/settings/push-test", {}, headers=auth
+            )
+        self.assertEqual(code, 200, sent)
+        self.assertTrue(sent["push"]["ok"], sent)
+        self.assertEqual(sent["push"]["kind_label"], "测试发送")
+        self.assertEqual(opener.call_count, 1)
+        body = json.loads(opener.call_args[0][0].data.decode("utf-8"))
+        self.assertIn("诊断", body["markdown"]["text"])
+        self.assertNotIn("sign", body)
+        self.assertNotIn("secret-key-abcdef", json.dumps(sent, ensure_ascii=False))
+        code, after = _request("GET", self.base + "/api/v1/reports")
+        self.assertEqual(len(after.get("reports") or []), len(before.get("reports") or []))
+        self.assertNotIn("诊断报告推送测试", json.dumps(after, ensure_ascii=False))
+
+    def test_generate_succeeds_when_push_fails(self) -> None:
+        code, saved = _request("POST", self.base + "/api/v1/settings", {"management_token": TOKEN})
+        self.assertEqual(code, 200, saved)
+        self.admin.update(
+            {"push_enabled": True, "push_channel": "wecom", "push_webhook_url": WEBHOOK}
+        )
+        auth = {"Content-Type": "application/json", "X-Management-Token": TOKEN}
+        with mock.patch("center.report_push.time.sleep"):
+            with mock.patch("center.report_push.urlopen", side_effect=URLError(WEBHOOK)) as opener:
+                code, generated = _request(
+                    "POST",
+                    self.base + "/api/v1/reports/generate",
+                    {"period": "day", "as_of": _ts(2026, 10, 5, 12, 0)},
+                    headers=auth,
+                )
+        self.assertEqual(code, 200, generated)
+        self.assertEqual(generated["report"]["status"], "ok")
+        self.assertFalse(generated["push"]["ok"])
+        self.assertEqual(generated["push"]["error"], "推送请求失败")
+        self.assertEqual(opener.call_count, 3)
+        blob = json.dumps(generated, ensure_ascii=False)
+        self.assertNotIn(WEBHOOK, blob)
+        self.assertNotIn("secret-key-abcdef", blob)
+        code, settings = _request("GET", self.base + "/api/v1/settings")
+        self.assertEqual(settings["settings"]["push_last"]["kind"], "report")
+        self.assertFalse(settings["settings"]["push_last"]["ok"])
+        self.assertNotIn("secret-key-abcdef", json.dumps(settings, ensure_ascii=False))
+        self.assertNotIn(WEBHOOK, json.dumps(settings, ensure_ascii=False))

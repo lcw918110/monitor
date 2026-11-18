@@ -47,12 +47,20 @@
       "last_seen": 1722096000,
       "cpu_percent": 12.3,
       "mem_percent": 45.0,
-      "gpu_count": 4,
-      "gpu_util_avg": 55.0
+      "disk_percent": 61.0,
+      "disk_read_mbps": 1.2,
+      "disk_write_mbps": 8.4,
+      "disk_io_util_percent": 6.0,
+      "accel_count": 4,
+      "accel_summary": "NVIDIA ×4 A100",
+      "accel_util_avg": 55.0,
+      "data_guard": {"marked": true, "attention": false, "kinds": []}
     }
   ]
 }
 ```
+
+页面口径用 `accel_summary` 表示加速卡型号和数量，用 `disk_read_mbps` / `disk_write_mbps` 表示磁盘读写，用 `data_guard.marked` 表示「重点数据机」徽章。离线行不把这些数字当成当前利用率。
 
 ### 1.3 GET `/api/v1/hosts/{host_id}`
 
@@ -105,7 +113,30 @@
 - `generated_at` 是实际计算时间，与 `as_of` / 窗口边界分开
 - 0～100% 以外的利用率不进入平均 / P95 / 繁忙占比，报告写明排除条数和主机
 - 空闲判定：在线且样本足够时，CPU 平均 <5% 且繁忙 <5%；有加速卡则同样 <5%。高负荷为繁忙占比 ≥40% 或 P95 ≥85%（CPU 或加速卡）。磁盘不进闲忙。排行、闲忙和 CSV 含负责人、用途。已隐藏主机不进入报告
-- 读接口不校验 Agent Token。启用管理 Token 后，生成报告这一条 POST 要带 `X-Management-Token`；未启用时不校验。成功响应可带 `push`（未配置时 `skipped: true`）
+- 读接口不校验 Agent Token。启用管理 Token 后，生成报告这一条 POST 要带 `X-Management-Token`；未启用时不校验。成功响应可带 `push`（未配置时 `skipped: true`）。`push.ok` 为 false 时，报告 `status` 仍是 `ok`
+
+### 1.7 设置 `GET/POST /api/v1/settings` 与 `POST /api/v1/settings/push-test`
+
+`GET /api/v1/settings` 返回 `settings` 和 `center`。`settings` 说明管理 Token 是否已设置、诊断报告推送是否启用、渠道（`wecom` 企业微信 / `dingtalk` 钉钉 / `feishu` 飞书）、打码后的 Webhook（主机名 + 密钥末四位），以及 `push_last`。不返回管理 Token 明文、Agent 上报 Token 明文、Webhook 原文，也不返回哈希。
+
+`push_last` 还没有记录时为 `null`。有记录时：
+
+| 字段 | 说明 |
+| --- | --- |
+| `kind` | `test` 测试发送，`report` 报告推送 |
+| `kind_label` | 「测试发送」或「报告推送」 |
+| `at` | 北京时间 `YYYY-MM-DD HH:MM:SS` |
+| `ok` | 对方接受为 true |
+| `skipped` | 未启用或没有 Webhook 时为 true，且没有访问网络 |
+| `reason` | 未发出时为 `not_configured` |
+| `error` | 失败原因，不含 Webhook |
+| `summary` | 设置页展示的那一句 |
+
+`POST /api/v1/settings` 保存管理 Token、推送开关 / 渠道 / Webhook，以及 `center` 里的中心参数。管理 Token 不是保存 Webhook 或启用推送的前提。未设置管理 Token 时写接口不校验；已设置则要请求头 `X-Management-Token`，缺失或错误为 401，`code` 为 `management_token_required`。
+
+`POST /api/v1/settings/push-test` 与上面同一套鉴权。它只发一条短消息，三个渠道的正文都含「诊断」。企业微信为 markdown，钉钉为 markdown 且没有加签字段，飞书为 text。不生成、不保存诊断报告。未启用或没有 Webhook 时返回 200，`push.skipped` 为 true，`push.reason` 为 `not_configured`。传输失败再试两次（约 0.4 秒、0.8 秒），单次超时 10 秒；对方返回非 0 不重试。成功、失败和未发出都会更新 `push_last`。
+
+定时生成和手动「生成并保存」成功后同样更新 `push_last`。推送失败不改变报告 `status`。
 
 ---
 
@@ -132,9 +163,9 @@ loop:
 ## 3. Web 页面信息架构
 
 1. **顶部**：产品名 + 刷新 + 一条顶栏（实时监控 / 主机 / 时段统计 / 使用诊断 / 运维 / 设置）。运维仍打开 `/deploy.html`
-2. **实时监控**：异常汇总、集群卡片、主机表（可排序、按资源组 / 负责人筛选，搜索含用途）。列把规格和实时利用率分开：加速卡型号数量 | 加速卡使用率；磁盘% | 磁盘数；另有负责人、用途。离线行不填实时数字。详情可改手工资产，旁边只读展示采集规格；可隐藏或彻底删除。工具条可打开已隐藏列表和资产表导入预览
-3. **时段统计**：先看「离线（无数据）」和「断网（已补报）」，再看集群与各主机的平均 / P95 / 繁忙占比，可导出中文 CSV。点左侧主机只换右侧详情。趋势悬停是上海时间；空档为横线
-4. **使用诊断**：选择已结束的窗口生成或覆盖报告，看定时/手动与成功/失败/无数据，下载 Markdown 与排行 CSV。没有上报时报告仍留在列表里，右侧是空状态说明
+2. **实时监控**：今日关注是类别和台数，判定是一排计数，集群统计是数字卡片，下面是主机表（可排序、按资源组 / 负责人筛选，搜索含用途）。列把规格和实时利用率分开：加速卡型号数量 | 加速卡使用率；磁盘% | 磁盘数；另有负责人、用途。离线行不填实时数字。名词解释在对应标题、列名或状态词上悬停，移开就消失。详情可改手工资产，旁边只读展示采集规格；可隐藏或彻底删除。工具条可打开已隐藏列表和资产表导入预览
+3. **时段统计**：汇总条给出「离线（无数据）」和「断网（已补报）」的段数与时长。左侧列表第一行是「集群」，点它看集群平均 / P95 / 繁忙占比；点一台主机只换右侧详情。可导出中文 CSV。趋势悬停是上海时间；空档为横线。定义在对应名字上悬停
+4. **使用诊断**：选择已结束的窗口生成或覆盖报告，看定时/手动与成功/失败/无数据，下载 Markdown 与排行 CSV。调度在「使用诊断」标题上悬停。预览里口径悬停在对应的词上；带表的附录点章节名才展开。下载的 Markdown 仍是全文。没有上报时报告仍留在列表里，右侧是空状态
 5. **主机详情**：在线时展示实时用量与分盘；离线时标明末次快照不是实时。手工资产可编辑，采集规格只读，并提供隐藏与彻底删除
 
 风格：清晰运维控制台，中文标签，数字突出。磁盘汇总口径见 `docs/12-disk-mounts.md`。地址口径见 `center/hostaddr.py`。
@@ -171,6 +202,12 @@ loop:
 | TC-REPORT-06 | `as_of` 取旧窗口、`generated_at` 取现在 | 正文「实际生成时刻」是后者 |
 | TC-REPORT-07 | 加速卡样本 >100% | 不进入平均，正文点名主机和排除条数 |
 | TC-REPORT-08 | 清理超期 `metrics_history` | `diagnostic_reports` 仍在 |
+| TC-PUSH-01 | 未启用或没有 Webhook 时「测试发送」 | 不访问网络；`skipped`，原因为 `not_configured`；设置页能看到未发出 |
+| TC-PUSH-02 | 企业微信、钉钉、飞书各发一条测试消息 | 正文含「诊断」；钉钉报文没有 `sign`；不生成诊断报告 |
+| TC-PUSH-03 | 测试发送或报告推送之后 GET `/api/v1/settings` | `push_last` 有北京时间、成功或失败原因，以及测试发送或报告推送；响应里没有 Webhook 原文 |
+| TC-PUSH-04 | 已设置管理 Token 后测试发送 | 不带 `X-Management-Token` 为 401；带上才发送。未设置 Token 时与其它写接口一样放行 |
+| TC-PUSH-05 | 推送请求失败后再看报告 | 报告生成仍成功；错误文本、日志和 `push_last` 都不含 Webhook |
+| TC-PUSH-06 | 传输失败，以及对方返回非 0 | 传输失败再试两次；对方拒绝只请求一次 |
 
 ---
 
@@ -201,7 +238,7 @@ monitor/
 
 设置接口 `GET/POST /api/v1/data-guard`。POST 与其它写接口一样要管理 Token。导出仍是中文表头，JSON 键为 `data_guard_marked`、`egress_anomaly_count` 等英文名。
 
-做不到的事要写在设置页、详情和字段说明里：不能拦截；看不到加密隧道里的内容；不能指出哪一个文件离开了；备份和同步必须进白名单。
+做不到的事写在「重点数据守护」标题的悬停里，设置页、详情和字段说明是同一句话：不能拦截；看不到加密隧道里的内容；不能指出哪一个文件离开了；备份和同步必须进白名单。鼠标移入显示，移开隐藏。
 
 | 用例 | 期望 |
 | --- | --- |

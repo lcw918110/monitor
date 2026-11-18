@@ -173,7 +173,10 @@
     }
     const targets = data.targets || [];
     if (!targets.length) {
-      targetStateCell(body, "清单是空的。在下方加入一台机器，或用表格导入。");
+      targetStateCell(
+        body,
+        '<span class="tip-host" data-tip-id="ops-empty">清单是空的</span>'
+      );
       return;
     }
     $("targetBody").innerHTML = targets
@@ -234,9 +237,14 @@
             }
             const hint = ERROR_HINTS[code] || "";
             return (
-              (code ? "<code>" + escapeHtml(code) + "</code> " : "") +
-              escapeHtml(msg) +
-              (hint ? '<div class="muted">' + escapeHtml(hint) + "</div>" : "")
+              (code
+                ? "<code" +
+                  (hint ? ' class="tip-host" data-tip="' + escapeHtml(hint) + '"' : "") +
+                  ">" +
+                  escapeHtml(code) +
+                  "</code> "
+                : "") +
+              escapeHtml(msg)
             );
           })() +
           "</td>" +

@@ -9,6 +9,8 @@
   let periodSortKey = "";
   let periodSortDir = "desc";
   let periodUtilData = null;
+  /** "" 跟随已选主机；"cluster" 时右侧显示集群汇总。 */
+  let periodFocus = "";
   const RATE_SORT_KEYS = {
     cpu_percent: true,
     mem_percent: true,
@@ -90,6 +92,7 @@
     newGroupName: document.getElementById("newGroupName"),
     btnAddGroup: document.getElementById("btnAddGroup"),
     periodUtilControls: document.getElementById("periodUtilControls"),
+    periodSummary: document.getElementById("periodSummary"),
     periodUtilBody: document.getElementById("periodUtilBody"),
     periodDetailTitle: document.getElementById("periodDetailTitle"),
     periodDetailBody: document.getElementById("periodDetailBody"),
@@ -134,7 +137,66 @@
       }
       return { mode: "full", title: report.title || "使用诊断", message: "" };
     },
+    periodViewModel: function (data) {
+      data = data || {};
+      var hosts = data.hosts || [];
+      return {
+        list: [{ kind: "cluster", id: "", label: "集群" }].concat(
+          hosts.map(function (host) {
+            host = host || {};
+            return {
+              kind: "host",
+              id: host.host_id || "",
+              label: host.address || host.hostname || host.host_id || "-",
+            };
+          })
+        ),
+        summary: {
+          hostsWithSamples: data.hosts_with_samples || 0,
+          hostCount: data.host_count || 0,
+          sampleCount: data.sample_count || 0,
+          noDataCount: 0,
+          noDataSeconds: 0,
+          backfillCount: 0,
+          backfillSeconds: 0,
+          noDataLabel: "离线（无数据）",
+          backfillLabel: "断网（已补报）",
+          accelSummary: "",
+          rollupNote: "",
+        },
+      };
+    },
+    reportSectionCollapsed: function () {
+      return false;
+    },
+    reportParagraphGlossary: function () {
+      return false;
+    },
+    reportParagraphView: function (text) {
+      return { show: String(text || ""), anchor: "", tip: "" };
+    },
+    reportSectionLong: function () {
+      return true;
+    },
   };
+
+  function tipOpen(id, text) {
+    if (id) return ' class="tip-host" data-tip-id="' + escapeHtml(id) + '"';
+    if (text) return ' class="tip-host" data-tip="' + escapeHtml(text) + '"';
+    return "";
+  }
+
+  function tipLabel(label, id, text) {
+    const attrs = tipOpen(id, text);
+    if (!attrs) return escapeHtml(label);
+    return "<span" + attrs + ">" + escapeHtml(label) + "</span>";
+  }
+
+  function setPeriodPane(mode, title) {
+    const heading = document.getElementById("periodDetailHeading");
+    if (heading) heading.textContent = mode === "cluster" ? "汇总" : "主机时段";
+    if (el.periodDetailTitle) el.periodDetailTitle.textContent = title;
+  }
 
   function fmtPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
@@ -1016,7 +1078,7 @@
     syncShellNav();
     if (next === "period") {
       loadPeriodUtil();
-      if (selectedId) loadPeriodHostDetail(selectedId);
+      if (periodFocus !== "cluster" && selectedId) loadPeriodHostDetail(selectedId);
     } else if (next === "reports") {
       loadReportList();
       refreshReportWindowHint();
@@ -1062,7 +1124,7 @@
       '" />' +
       '<button type="button" class="period-btn" id="btnPeriodCustom">应用</button>' +
       "</span></div>" +
-      '<div class="period-control-group"><span class="period-control-label">繁忙阈值</span>' +
+      '<div class="period-control-group"><span class="period-control-label tip-host" data-tip-id="busy-line">繁忙阈值</span>' +
       '<label class="muted">CPU <input id="busyCpu" type="number" min="0" max="100" step="1" value="' +
       busyCpu +
       '" />%</label>' +
@@ -1073,7 +1135,7 @@
       '<a class="link" id="periodExport" href="/api/v1/export/period-stats.csv?' +
       periodQuery() +
       '">导出 CSV</a>' +
-      '<a class="link" href="/api/v1/export/period-stats-fields.csv">字段说明</a>' +
+      '<a class="link tip-host" href="/api/v1/export/period-stats-fields.csv" data-tip-id="field-guide">字段说明</a>' +
       "</div></div>";
     bindPeriodControls();
   }
@@ -1138,7 +1200,7 @@
 
   function reloadPeriodViews() {
     loadPeriodUtil();
-    if (selectedId) loadPeriodHostDetail(selectedId);
+    if (periodFocus !== "cluster" && selectedId) loadPeriodHostDetail(selectedId);
   }
 
   const PERIOD_METRIC_ROWS = [
@@ -1189,13 +1251,22 @@
     let html =
       meta +
       '<table class="period-stats-table"><thead><tr>' +
-      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th><th>P95</th><th>繁忙占比</th>" +
+      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th><th>P95</th><th" +
+      tipOpen("busy-ratio") +
+      ">繁忙占比</th>" +
       "</tr></thead><tbody>";
+    const metricTips = {
+      disk_percent: "disk-cap",
+      disk_read_mbps: "disk-rw",
+      disk_write_mbps: "disk-rw",
+      disk_io_util_percent: "disk-io",
+      load1: "load-high",
+    };
     PERIOD_METRIC_ROWS.forEach(([label, key, suffix]) => {
       const a = metrics[key] || {};
       html +=
         "<tr><td>" +
-        label +
+        tipLabel(label, metricTips[key] || "") +
         "</td><td>" +
         fmtStatNum(a.avg, suffix) +
         "</td><td>" +
@@ -1238,37 +1309,34 @@
     };
   }
 
+  function offlineFigure(label, part, tipId) {
+    return (
+      '<div class="stat"><div class="label">' +
+      tipLabel(label, tipId) +
+      '</div><div class="value">' +
+      (part.count || 0) +
+      ' 段</div><div class="sub">' +
+      fmtDuration(part.seconds) +
+      "</div></div>"
+    );
+  }
+
   function renderOfflineOverview(data) {
     const off = (data && data.offline) || {};
-    const threshold = off.offline_seconds != null ? off.offline_seconds : 90;
     const hosts = off.hosts || [];
-    const total = off.host_total != null ? off.host_total : (data && data.host_count) || 0;
     const nodata = offlinePart(off.no_data, off.interval_count, off.total_seconds);
     const filled = offlinePart(off.backfill, 0, 0);
     let html = '<div class="offline-overview">';
     html += '<div class="section-title">离线概览</div>';
     html +=
-      '<p class="muted">实时页面在中断期间只显示「离线」（超过 ' +
-      escapeHtml(String(threshold)) +
-      " 秒没有上报）。事后这里分开计：「离线（无数据）」是没有样本、也不会再补上；「断网（已补报）」是本机留存后按原采集时间补上的时段。第一次上报之前不算。</p>";
+      '<div class="offline-figures">' +
+      offlineFigure("离线（无数据）", nodata, "nodata") +
+      offlineFigure("断网（已补报）", filled, "backfill") +
+      "</div>";
     if (!hosts.length) {
       html += '<p class="empty">这一时段没有离线（无数据），也没有断网（已补报）。</p>';
     } else {
       const shownHosts = hosts.slice(0, 12);
-      html +=
-        "<p><strong>离线（无数据） " +
-        (nodata.count || 0) +
-        " 段</strong> · 累计 " +
-        fmtDuration(nodata.seconds) +
-        " · <strong>断网（已补报） " +
-        (filled.count || 0) +
-        " 段</strong> · 累计 " +
-        fmtDuration(filled.seconds) +
-        " · " +
-        hosts.length +
-        " / " +
-        total +
-        " 台</p>";
       html +=
         '<table class="period-stats-table offline-table"><thead><tr><th>主机</th><th>离线（无数据）</th><th>断网（已补报）</th></tr></thead><tbody>';
       shownHosts.forEach((h) => {
@@ -1295,9 +1363,7 @@
       html += "</tbody></table>";
       if (hosts.length > shownHosts.length) {
         html +=
-          '<p class="muted">另有 ' +
-          (hosts.length - shownHosts.length) +
-          " 台，点左侧主机可看该机全部时段。</p>";
+          '<p class="muted">另有 ' + (hosts.length - shownHosts.length) + " 台。</p>";
       }
     }
     const overflow = off.overflows || {};
@@ -1305,7 +1371,7 @@
       html +=
         '<p class="muted">本地队列溢出丢掉 ' +
         escapeHtml(String(overflow.dropped)) +
-        " 条。这些时段没有样本，记在「离线（无数据）」，不是静默空档。</p>";
+        " 条，记在「离线（无数据）」。</p>";
     }
     if (off.incomplete) {
       html += '<p class="muted">有主机的历史上报达到读取上限，窗口末尾是否离线未判断。</p>';
@@ -1331,7 +1397,7 @@
 
   function renderHostOffline(offline) {
     if (!offline) {
-      return '<p class="muted">离线时段随主机列表一起返回。若这里是空的，先等左侧时段统计加载完。</p>';
+      return '<p class="muted">离线时段还没到。</p>';
     }
     const nodata = offlinePart(offline.no_data, offline.interval_count, offline.total_seconds);
     const filled = offlinePart(offline.backfill, 0, 0);
@@ -1340,23 +1406,20 @@
     }
     let html = '<div class="offline-overview">';
     html += '<div class="section-title">离线时段</div>';
+    html +=
+      '<div class="offline-figures">' +
+      offlineFigure("离线（无数据）", nodata, "nodata") +
+      offlineFigure("断网（已补报）", filled, "backfill") +
+      "</div>";
     if (!nodata.count && !filled.count) {
       html += '<p class="empty">这一时段该机没有离线（无数据），也没有断网（已补报）。</p>';
     } else {
-      html +=
-        "<p><strong>离线（无数据） " +
-        (nodata.count || 0) +
-        " 段</strong> · 累计 " +
-        fmtDuration(nodata.seconds) +
-        "</p>";
-      if (nodata.intervals.length) html += renderSpanList(nodata.intervals);
-      html +=
-        "<p><strong>断网（已补报） " +
-        (filled.count || 0) +
-        " 段</strong> · 累计 " +
-        fmtDuration(filled.seconds) +
-        "</p>";
-      if (filled.intervals.length) html += renderSpanList(filled.intervals);
+      if (nodata.intervals.length) {
+        html += '<p class="muted">' + tipLabel("离线（无数据）", "nodata") + "</p>" + renderSpanList(nodata.intervals);
+      }
+      if (filled.intervals.length) {
+        html += '<p class="muted">' + tipLabel("断网（已补报）", "backfill") + "</p>" + renderSpanList(filled.intervals);
+      }
     }
     const overflows = offline.overflows || [];
     if (overflows.length) {
@@ -1383,9 +1446,14 @@
 
   function markPeriodRows(hostId) {
     if (!el.periodUtilBody) return;
-    Array.from(el.periodUtilBody.querySelectorAll("tr[data-id]")).forEach((row) => {
+    const clusterOn = periodFocus === "cluster";
+    Array.from(el.periodUtilBody.querySelectorAll("tr[data-id], tr[data-kind]")).forEach((row) => {
+      if (row.getAttribute("data-kind") === "cluster") {
+        row.classList.toggle("active", clusterOn);
+        return;
+      }
       const id = decodeURIComponent(row.getAttribute("data-id") || "");
-      row.classList.toggle("active", id === hostId);
+      row.classList.toggle("active", !clusterOn && id === hostId);
     });
   }
 
@@ -1434,11 +1502,9 @@
     const hosts = ((data && data.hosts) || []).filter(
       (host) => host && host.data_guard && host.data_guard.marked
     );
-    let html = '<div class="section-title">重点数据守护</div>';
-    html +=
-      '<p class="guard-note">只统计重点数据机。下面是外传异常、路径完整性变化、未允许网段外连、可移动磁盘挂载的次数和时长。这只是迹象，不能保证数据出不去，也看不出究竟是哪一个文件离开了。</p>';
+    let html = '<div class="section-title tip-host" data-tip-id="guard">重点数据守护</div>';
     if (!hosts.length) {
-      html += '<p class="muted">当前没有重点数据机。到设置里勾选之后，这里才会计数。</p>';
+      html += '<p class="muted tip-host" data-tip-id="guard-empty">当前没有重点数据机。</p>';
       return html;
     }
     html +=
@@ -1477,138 +1543,131 @@
     return html;
   }
 
-  function renderPeriodUtil(data) {
-    periodUtilData = data;
-    if (!el.periodUtilBody) return;
-    updatePeriodExportLink();
-    if (!data || data.ok === false) {
-      el.periodUtilBody.innerHTML =
-        '<p class="muted">' +
-        escapeHtml((data && data.error) || "时段统计加载失败") +
-        "</p>";
-      return;
-    }
-    const cluster = data.cluster || {};
-    const hosts = data.hosts || [];
-    const scrollTop = el.periodUtilBody.scrollTop;
-    let html = renderOfflineOverview(data);
-    html += renderDataGuardPeriod(data);
-    const clusterSummary =
-      cluster.accel_summary || data.accel_summary || "";
-    html +=
-      '<p class="muted period-cluster-note">' +
-      escapeHtml(data.rollup_note || "集群汇总按样本加权") +
-      " · 主机 " +
-      (data.hosts_with_samples || 0) +
-      "/" +
-      (data.host_count || 0) +
-      " 有样本 · 共 " +
-      (data.sample_count || 0) +
-      " 点" +
-      (clusterSummary
-        ? " · 加速卡 " + escapeHtml(clusterSummary)
-        : "") +
-      "</p>";
-    html += '<div class="section-title">集群汇总</div>';
+  function summaryCard(label, value, sub, tipId, tipText) {
+    return (
+      '<div class="stat"><div class="label">' +
+      tipLabel(label, tipId, tipText) +
+      '</div><div class="value">' +
+      value +
+      "</div>" +
+      (sub ? '<div class="sub">' + sub + "</div>" : "") +
+      "</div>"
+    );
+  }
+
+  function renderPeriodSummary(data) {
+    if (!el.periodSummary) return;
+    const summary = UX.periodViewModel(data || {}).summary;
+    const accelNote = summary.accelSummary ? "加速卡 " + summary.accelSummary : "";
+    let html = summaryCard(
+      "有样本",
+      (summary.hostsWithSamples || 0) + "/" + (summary.hostCount || 0),
+      accelNote ? escapeHtml(accelNote) : "",
+      "",
+      "这一窗口有历史上报的未隐藏主机"
+    );
+    html += summaryCard(
+      "样本点",
+      String(summary.sampleCount || 0),
+      "",
+      "",
+      summary.rollupNote || "集群汇总按样本加权"
+    );
+    html += summaryCard(
+      summary.noDataLabel,
+      (summary.noDataCount || 0) + " 段",
+      fmtDuration(summary.noDataSeconds),
+      "nodata"
+    );
+    html += summaryCard(
+      summary.backfillLabel,
+      (summary.backfillCount || 0) + " 段",
+      fmtDuration(summary.backfillSeconds),
+      "backfill"
+    );
+    el.periodSummary.innerHTML = html;
+  }
+
+  function renderClusterDetail(data) {
+    if (!el.periodDetailBody || periodFocus !== "cluster") return;
+    const cluster = (data && data.cluster) || {};
+    setPeriodPane("cluster", "集群");
+    let html = '<div class="section-title">集群汇总</div>';
     html += renderPeriodStatsTable({
       metrics: cluster.metrics,
-      sample_count: cluster.sample_count || data.sample_count,
-      from_ts: data.window && data.window.from_ts,
-      to_ts: data.window && data.window.to_ts,
-      window: data.window,
-      busy_thresholds: data.busy_thresholds,
+      sample_count: cluster.sample_count || (data && data.sample_count),
+      from_ts: data && data.window && data.window.from_ts,
+      to_ts: data && data.window && data.window.to_ts,
+      window: data && data.window,
+      busy_thresholds: data && data.busy_thresholds,
     });
-    html += '<div class="section-title">各主机</div>';
-    if (!hosts.length) {
-      html += '<p class="muted">暂无主机</p>';
-      el.periodUtilBody.innerHTML = html;
-      el.periodUtilBody.scrollTop = scrollTop;
-      return;
+    html += renderOfflineOverview(data);
+    html += renderDataGuardPeriod(data);
+    el.periodDetailBody.innerHTML = html;
+    if (el.periodCharts) {
+      resetTrendCharts();
+      el.periodCharts.innerHTML = '<p class="empty">未选择主机</p>';
     }
+  }
+
+  function renderPeriodList(data) {
+    const hosts = (data && data.hosts) || [];
+    const scrollTop = el.periodUtilBody.scrollTop;
+    const cluster = (data && data.cluster) || {};
+    const clusterCpu = ((cluster.metrics || {}).cpu_percent || {}).avg;
+    const clusterAccel = ((cluster.metrics || {}).accel_util_avg || {}).avg;
     const sorted = hosts.slice().sort((a, b) =>
       cmpSort(periodSortValue(a, periodSortKey), periodSortValue(b, periodSortKey), periodSortDir)
     );
-    html +=
+    let html =
       '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
-      '<th class="sortable" data-sort="host">主机 / 地址</th>' +
-      '<th class="sortable" data-sort="group">资源组</th>' +
-      '<th class="sortable" data-sort="owner">负责人</th>' +
-      '<th class="sortable" data-sort="purpose">用途</th>' +
-      '<th class="sortable" data-sort="accel_id">加速卡</th>' +
+      '<th class="sortable" data-sort="host">集群与主机</th>' +
       '<th class="sortable" data-sort="samples">样本</th>' +
-      '<th class="sortable" data-sort="cpu_avg">CPU 均</th>' +
-      '<th class="sortable" data-sort="cpu_p95">CPU P95</th>' +
-      '<th class="sortable" data-sort="cpu_busy">CPU 繁忙</th>' +
-      '<th class="sortable" data-sort="mem_avg">内存均</th>' +
-      '<th class="sortable" data-sort="disk_avg">磁盘占用均</th>' +
-      '<th class="sortable" data-sort="accel_avg">加速卡均</th>' +
-      '<th class="sortable" data-sort="accel_p95">加速卡 P95</th>' +
-      '<th class="sortable" data-sort="accel_busy">加速卡繁忙</th>' +
-      '<th class="sortable" data-sort="rx_pct">入向占额定</th>' +
-      '<th class="sortable" data-sort="tx_pct">出向占额定</th>' +
+      '<th class="sortable tip-host" data-sort="cpu_avg" data-tip-id="period-cpu">CPU</th>' +
+      '<th class="sortable tip-host" data-sort="accel_avg" data-tip-id="period-accel">加速卡</th>' +
       "</tr></thead><tbody>";
+    html +=
+      '<tr data-kind="cluster" data-id=""><td>' +
+      tipLabel("集群", "cluster") +
+      "</td><td>" +
+      (data.sample_count || 0) +
+      "</td><td>" +
+      fmtStatNum(clusterCpu, "%") +
+      "</td><td>" +
+      fmtStatNum(clusterAccel, "%") +
+      "</td></tr>";
+    if (!sorted.length) {
+      html += '<tr><td colspan="4" class="muted">暂无主机</td></tr>';
+    }
     sorted.forEach((h) => {
       const m = h.metrics || {};
       const cpu = m.cpu_percent || {};
-      const mem = m.mem_percent || {};
-      const disk = m.disk_percent || {};
       const accel = m.accel_util_avg || {};
-      const rxp = m.net_rx_percent || {};
-      const txp = m.net_tx_percent || {};
       const live = hostById(h.host_id) || {};
       const row = Object.assign({}, h, {
         address: h.address || live.address,
+        hostname: h.hostname || live.hostname,
         group_name: h.group_name || live.group_name,
         owner: h.owner || live.owner,
         purpose: h.purpose || live.purpose,
-        accel_summary: h.accel_summary || live.accel_summary,
-        accel_count: h.accel_count != null ? h.accel_count : live.accel_count,
+        data_guard: h.data_guard || live.data_guard,
       });
-      const active = h.host_id === selectedId ? " active" : "";
-      const accelId = accelSummaryOf(row) || (accelCountOf(row) ? "×" + accelCountOf(row) : "-");
+      const tip = [row.group_name || "未分组", row.owner || "", row.purpose || ""]
+        .filter(Boolean)
+        .join(" · ");
       html +=
         '<tr data-id="' +
         encodeURIComponent(h.host_id) +
-        '" class="' +
-        active.trim() +
+        '" title="' +
+        escapeHtml(tip) +
         '"><td>' +
         hostAddressCell(row) +
-        "</td><td>" +
-        escapeHtml(row.group_name || "未分组") +
-        '</td><td class="col-clip" title="' +
-        escapeHtml(row.owner || h.owner || "") +
-        '">' +
-        escapeHtml(row.owner || h.owner || "—") +
-        '</td><td class="col-clip" title="' +
-        escapeHtml(row.purpose || h.purpose || "") +
-        '">' +
-        escapeHtml(row.purpose || h.purpose || "—") +
-        '</td><td class="accel-id-cell" title="' +
-        escapeHtml(accelId) +
-        '">' +
-        escapeHtml(accelId) +
         "</td><td>" +
         (h.sample_count || 0) +
         "</td><td>" +
         fmtStatNum(cpu.avg, "%") +
         "</td><td>" +
-        fmtStatNum(cpu.p95, "%") +
-        "</td><td>" +
-        fmtBusy(cpu.busy_ratio) +
-        "</td><td>" +
-        fmtStatNum(mem.avg, "%") +
-        "</td><td>" +
-        fmtStatNum(disk.avg, "%") +
-        "</td><td>" +
         fmtStatNum(accel.avg, "%") +
-        "</td><td>" +
-        fmtStatNum(accel.p95, "%") +
-        "</td><td>" +
-        fmtBusy(accel.busy_ratio) +
-        "</td><td>" +
-        fmtStatNum(rxp.avg, "%") +
-        "</td><td>" +
-        fmtStatNum(txp.avg, "%") +
         "</td></tr>";
     });
     html += "</tbody></table></div>";
@@ -1617,6 +1676,24 @@
     const periodTable = el.periodUtilBody.querySelector(".period-hosts-table");
     syncSortHeaders(periodTable, periodSortKey, periodSortDir);
     markPeriodRows(selectedId);
+  }
+
+  function renderPeriodUtil(data) {
+    periodUtilData = data;
+    if (!el.periodUtilBody) return;
+    updatePeriodExportLink();
+    if (!data || data.ok === false) {
+      if (el.periodSummary) el.periodSummary.innerHTML = "";
+      el.periodUtilBody.innerHTML =
+        '<p class="muted">' +
+        escapeHtml((data && data.error) || "时段统计加载失败") +
+        "</p>";
+      return;
+    }
+    if (!selectedId) periodFocus = "cluster";
+    renderPeriodSummary(data);
+    renderPeriodList(data);
+    if (periodFocus === "cluster") renderClusterDetail(data);
   }
 
   async function loadPeriodUtil() {
@@ -1646,9 +1723,13 @@
     return num > 0 ? num : 90;
   }
 
-  function chartCard(title, pts, color, kind, pick) {
+  function chartCard(title, pts, color, kind, pick, tipId) {
     return (
-      '<div class="chart-card"><div class="title">' +
+      '<div class="chart-card"><div class="title' +
+      (tipId ? " tip-host" : "") +
+      '"' +
+      (tipId ? ' data-tip-id="' + tipId + '"' : "") +
+      ">" +
       escapeHtml(title) +
       "</div>" +
       trendChart(title, chartPoints(pts, pick), color, kind, chartGapSeconds()) +
@@ -1676,15 +1757,16 @@
     html += chartCard("加速卡利用率（%）", pts, "#c9a0ff", "percent", accelUtil);
     html += chartCard("加速卡最高温度（°C）", pts, "#e25c5c", "temp", accelTemp);
     html += chartCard("内存利用率（%）", pts, "#46c2b0", "percent", (point) => point.mem_percent);
-    html += chartCard("磁盘占用率（%）", pts, "#8fd18a", "percent", (point) => point.disk_percent);
-    html += chartCard("磁盘读取速率（Mbps）", pts, "#7ec8e3", "mbps", (point) => point.disk_read_mbps);
-    html += chartCard("磁盘写入速率（Mbps）", pts, "#e3c07e", "mbps", (point) => point.disk_write_mbps);
+    html += chartCard("磁盘占用率（%）", pts, "#8fd18a", "percent", (point) => point.disk_percent, "disk-cap");
+    html += chartCard("磁盘读取速率（Mbps）", pts, "#7ec8e3", "mbps", (point) => point.disk_read_mbps, "disk-rw");
+    html += chartCard("磁盘写入速率（Mbps）", pts, "#e3c07e", "mbps", (point) => point.disk_write_mbps, "disk-rw");
     html += chartCard(
       "磁盘I/O利用率（%）",
       pts,
       "#d6a23a",
       "percent",
-      (point) => point.disk_io_util_percent
+      (point) => point.disk_io_util_percent,
+      "disk-io"
     );
     html += chartCard("网络接收速率（Mbps）", pts, "#9ec7ff", "mbps", (point) => point.net_rx_mbps);
     html += chartCard("网络发送速率（Mbps）", pts, "#f0b4a0", "mbps", (point) => point.net_tx_mbps);
@@ -1695,12 +1777,12 @@
   function paintPeriodDetail(hostId, stats, points, flags) {
     if (!el.periodDetailBody || selectedId !== hostId) return;
     const host = hostById(hostId);
-    if (el.periodDetailTitle) {
-      el.periodDetailTitle.textContent =
-        (host && (host.address || host.hostname || host.host_id)) ||
+    setPeriodPane(
+      "host",
+      (host && (host.address || host.hostname || host.host_id)) ||
         (stats && (stats.address || stats.hostname || stats.host_id)) ||
-        hostId;
-    }
+        hostId
+    );
     const loadingCharts = flags && flags.loadingCharts;
     if (!stats && loadingCharts) {
       el.periodDetailBody.innerHTML = '<p class="muted">正在读取该机这一时段…</p>';
@@ -1752,12 +1834,12 @@
       periodDetailKey = "";
       periodDetailPoints = null;
       periodDetailToken += 1;
-      if (el.periodDetailTitle) el.periodDetailTitle.textContent = "请选择主机";
+      setPeriodPane("host", "请选择主机");
       el.periodDetailBody.innerHTML =
         '<p class="empty">点选左侧主机，查看该机时段指标</p>';
       if (el.periodCharts) {
         resetTrendCharts();
-        el.periodCharts.innerHTML = '<p class="empty">点选主机后，这里显示该机趋势</p>';
+        el.periodCharts.innerHTML = '<p class="empty">未选择主机</p>';
       }
       return;
     }
@@ -1952,11 +2034,11 @@
   function renderAttention(hosts) {
     if (!el.attentionList) return;
     const defs = [
-      ["offline", "离线"],
-      ["disk", "磁盘快满"],
-      ["accel", "卡异常"],
-      ["load", "高负载"],
-      ["data_exfil", "数据外传异常"],
+      ["offline", "离线", "offline-live"],
+      ["disk", "磁盘快满", "disk-full"],
+      ["accel", "卡异常", "accel-bad"],
+      ["load", "高负载", "load-high"],
+      ["data_exfil", "数据外传异常", "data-exfil"],
     ];
     const buckets = { offline: [], disk: [], accel: [], load: [], data_exfil: [] };
     (hosts || []).forEach((h) => {
@@ -1968,12 +2050,15 @@
       .map((pair) => {
         const key = pair[0];
         const label = pair[1];
+        const tipId = pair[2];
         const on = attentionKey === key ? " active" : "";
         return (
-          '<button type="button" class="attention-chip' +
+          '<button type="button" class="attention-chip tip-host' +
           on +
           '" data-attention="' +
           key +
+          '" data-tip-id="' +
+          tipId +
           '">' +
           label +
           '<span class="count">' +
@@ -1992,8 +2077,7 @@
     });
     if (!el.attentionNames) return;
     if (!attentionKey) {
-      el.attentionNames.innerHTML =
-        '<span class="muted">点上面的数字可筛到主机表。点主机名打开详情。</span>';
+      el.attentionNames.innerHTML = "";
       return;
     }
     if (!names.length) {
@@ -2015,7 +2099,9 @@
       .join("");
     if (names.length > 12) {
       el.attentionNames.innerHTML +=
-        '<span class="muted">另有 ' + (names.length - 12) + " 台，用筛选看全表</span>";
+        '<span class="muted tip-host" data-tip="用筛选看全表">另有 ' +
+        (names.length - 12) +
+        " 台</span>";
     }
   }
 
@@ -2025,14 +2111,16 @@
     }
     const s = (data && data.summary) || {};
     const current = el.filterStatus ? el.filterStatus.value : "";
-    function anomalyPill(level, label, count) {
+    function anomalyPill(level, label, count, title) {
       const on = current === level ? " active" : "";
       return (
-        '<button type="button" class="pill ' +
+        '<button type="button" class="pill tip-host ' +
         level +
         on +
         '" data-anomaly="' +
         level +
+        '" data-tip="' +
+        escapeHtml(title) +
         '">' +
         label +
         " " +
@@ -2040,20 +2128,20 @@
         "</button>"
       );
     }
+    const cpuWarn = thresholds.cpu_warn_percent || 80;
+    const cpuCrit = thresholds.cpu_critical_percent || 95;
+    const loadLine = thresholds.cpu_load_per_core_warn || 2;
+    const tempWarn = thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c || 85;
     el.anomalySummary.innerHTML =
-      anomalyPill("normal", "正常", s.normal) +
-      anomalyPill("warn", "偏高", s.warn) +
-      anomalyPill("critical", "异常", s.critical) +
-      anomalyPill("unknown", "未知/离线", s.unknown) +
-      '<span class="muted threshold-hint">阈值：CPU≥' +
-      (thresholds.cpu_warn_percent || 80) +
-      "% 黄 / ≥" +
-      (thresholds.cpu_critical_percent || 95) +
-      "% 红；内存磁盘同理；负载 load1 或 load5 / 核 ≥" +
-      (thresholds.cpu_load_per_core_warn || 2) +
-      " 黄；加速卡温度≥" +
-      (thresholds.accel_temp_warn_c || thresholds.npu_temp_warn_c || 85) +
-      "°C 黄</span>";
+      anomalyPill("normal", "正常", s.normal, "资源判定为正常") +
+      anomalyPill("warn", "偏高", s.warn, "达到偏高线。CPU≥" + cpuWarn + "% 为黄") +
+      anomalyPill("critical", "异常", s.critical, "达到异常线。CPU≥" + cpuCrit + "% 为红") +
+      anomalyPill(
+        "unknown",
+        "未知/离线",
+        s.unknown,
+        "离线或读不到。负载 load1 或 load5 / 核 ≥" + loadLine + " 为黄；加速卡温度≥" + tempWarn + "°C 为黄"
+      );
   }
 
   function renderStats(s) {
@@ -2141,7 +2229,7 @@
 
   
   function offlineMetricCell() {
-    return '<span class="muted" title="主机离线，不展示实时指标">—</span>';
+    return '<span class="muted tip-host" data-tip-id="offline-metric">—</span>';
   }
 
 function renderHosts(hosts) {
@@ -2153,11 +2241,16 @@ function renderHosts(hosts) {
     const hostTable = el.hostBody && el.hostBody.closest("table");
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
-      const hint = attentionKey
-        ? "今日关注里这一类没有主机"
-        : "无匹配主机（可调整筛选或部署 Agent）";
+      const hint = attentionKey ? "今日关注里这一类没有主机" : "无匹配主机";
+      const tip = attentionKey ? "" : "可调整筛选，或到运维页部署采集端。";
       el.hostBody.innerHTML =
-        '<tr><td colspan="15" class="muted">' + hint + "</td></tr>";
+        '<tr><td colspan="15" class="muted' +
+        (tip ? " tip-host" : "") +
+        '"' +
+        (tip ? ' data-tip="' + escapeHtml(tip) + '"' : "") +
+        ">" +
+        hint +
+        "</td></tr>";
       return;
     }
     el.hostBody.innerHTML = view
@@ -2257,9 +2350,7 @@ function renderHosts(hosts) {
   function renderDataGuardDetail(data) {
     const guard = (data && data.data_guard) || {};
     if (!guard.marked) return "";
-    let html = '<div class="section-title">重点数据守护</div>';
-    html +=
-      '<p class="guard-note">重点数据守护只发现并提示重点数据可能正在离开的迹象，不能保证数据出不去。拦截属于防火墙和权限。它看不到加密隧道里的内容，也不能指出究竟是哪一个文件离开了。备份和同步必须写进白名单。</p>';
+    let html = '<div class="section-title tip-host" data-tip-id="guard">重点数据守护</div>';
     const events = guard.events || [];
     if (!events.length) {
       html += "<p>当前没有数据外传异常。</p>";
@@ -2316,7 +2407,7 @@ function renderHosts(hosts) {
     const accelStatus = (anomaly.accel || anomaly.npu || {}).status;
 
     let html = renderDataGuardDetail(data);
-    html += '<div class="section-title">资源异常判定（黄=偏高 / 红=异常）</div>';
+    html += '<div class="section-title tip-host" data-tip-id="anomaly-colors">资源异常判定</div>';
     html +=
       "<div class=\"kv\"><div class=\"k\">总体</div><div class=\"v\">" +
       statusBadge(anomaly.overall) +
@@ -2352,9 +2443,10 @@ function renderHosts(hosts) {
     html += renderAssetSection(data);
 
     html +=
-      '<div class="section-title">CPU / 基础资源（' +
-      (data.online ? "实时用量" : "末次快照，非实时") +
-      " + 额定/总量）</div>";
+      '<div class="section-title tip-host" data-tip="实时用量，以及额定或总量。">' +
+      "CPU / 基础资源" +
+      (data.online ? "" : " · 末次快照，非实时") +
+      "</div>";
     html += '<div class="kv">';
     html +=
       '<div class="k">地址</div><div class="v">' +
@@ -2506,7 +2598,7 @@ function renderHosts(hosts) {
       '<div class="section-title">加速卡明细（英伟达 / AMD / 华为 / 寒武纪 / 瑞芯微 RKNN）</div>';
     if (!cards.length) {
       html +=
-        '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / rocm-smi / amd-smi / npu-smi / cnmon / rknpu）</p>';
+        '<p class="muted tip-host" data-tip-id="no-accel">未检测到加速卡</p>';
     } else {
       const invText = accelSummaryOf(data) || accelListInventory(cards);
       if (invText) {
@@ -2655,11 +2747,10 @@ function renderHosts(hosts) {
       escapeHtml(data.host_id || "") +
       "</div></div>" +
       '<div class="asset-actions">' +
-      '<button type="button" class="btn btn-sm" id="btnReaddress">更换 IP</button>' +
+      '<button type="button" class="btn btn-sm tip-host" id="btnReaddress" data-tip-id="readdress">更换 IP</button>' +
       (data.readdress_undo
-        ? ' <button type="button" class="btn btn-sm" id="btnReaddressUndo">撤销更换 IP</button>'
+        ? ' <button type="button" class="btn btn-sm tip-host" id="btnReaddressUndo" data-tip-id="readdress-undo">撤销更换 IP</button>'
         : "") +
-      '<span class="muted">旧 IP 留在历史里，监控 ID 和历史上报不改。新 IP 上的部署目标会改指向这台主机，旧 IP 目标停用但不删除。撤销会按当时记下的 host_id 和停用状态恢复，并清掉这次写入的手工地址和那一条历史 IP。</span>' +
       "</div>"
     );
   }
@@ -2883,7 +2974,7 @@ function renderHosts(hosts) {
     });
     const flag = assetValue(data, "monitor_flag");
     return (
-      '<div class="section-title">资产信息（手工维护，Agent 不会覆盖）</div>' +
+      '<div class="section-title tip-host" data-tip-id="asset-manual">资产信息</div>' +
       '<div class="asset-grid">' +
       '<div><form id="assetForm" class="asset-form">' +
       fields +
@@ -2898,7 +2989,7 @@ function renderHosts(hosts) {
       '<label class="muted"><input type="checkbox" id="hideAlsoDeploy" /> 同时移除部署清单里对应的目标</label>' +
       '<button type="button" class="btn btn-sm btn-danger" id="btnDeleteHost">彻底删除…</button>' +
       "</div></div>" +
-      '<div><div class="spec-label">采集规格（Agent 上报，只读）</div>' +
+      '<div><div class="spec-label tip-host" data-tip-id="asset-collected">采集规格</div>' +
       renderCollectedHardware(data.hardware) +
       "</div></div>"
     );
@@ -3171,7 +3262,9 @@ function renderHosts(hosts) {
       renderHosts(hosts);
       if (currentTab === "period") {
         await loadPeriodUtil();
-        if (selectedId) await loadPeriodHostDetail(selectedId, { quiet: true });
+        if (periodFocus !== "cluster" && selectedId) {
+          await loadPeriodHostDetail(selectedId, { quiet: true });
+        }
       } else if (currentTab === "reports") {
         // 诊断预览来自已入库报告，定时刷新不重算、不打断阅读
       } else if (selectedId) {
@@ -3227,6 +3320,148 @@ function renderHosts(hosts) {
     return source === "scheduled" ? "定时" : "手动";
   }
 
+  function renderReportViewParagraph(view, muted) {
+    if (!view || !view.show) return "";
+    const show = String(view.show);
+    const tip = view.tip ? String(view.tip) : "";
+    const anchor = view.anchor ? String(view.anchor) : "";
+    let inner = escapeHtml(show);
+    if (tip && anchor && show.indexOf(anchor) >= 0) {
+      inner = escapeHtml(show).replace(
+        escapeHtml(anchor),
+        '<span class="tip-host" data-tip="' +
+          escapeHtml(tip) +
+          '">' +
+          escapeHtml(anchor) +
+          "</span>"
+      );
+    } else if (tip) {
+      inner =
+        '<span class="tip-host" data-tip="' + escapeHtml(tip) + '">' + escapeHtml(show) + "</span>";
+    }
+    return '<p' + (muted ? ' class="muted"' : "") + ">" + inner + "</p>";
+  }
+
+  function renderReportTables(sec) {
+    let html = "";
+    (sec.tables || []).forEach((table) => {
+      if (table.caption) {
+        html += '<p class="report-caption">' + escapeHtml(table.caption) + "</p>";
+      }
+      const headers = table.headers || [];
+      html += "<div class='table-wrap'><table><thead><tr>";
+      headers.forEach((h) => {
+        html += "<th>" + escapeHtml(h) + "</th>";
+      });
+      html += "</tr></thead><tbody>";
+      const hostIds = table.host_ids || [];
+      (table.rows || []).forEach((row, rowIndex) => {
+        const hostId = hostIds[rowIndex] || "";
+        html += "<tr>";
+        headers.forEach((_, i) => {
+          const cell = row[i] == null ? "" : row[i];
+          html +=
+            "<td>" +
+            (i === 0 ? hostJumpButton(cell, hostId) : escapeHtml(cell)) +
+            "</td>";
+        });
+        html += "</tr>";
+      });
+      html += "</tbody></table></div>";
+    });
+    return html;
+  }
+
+  function splitReportCopy(items, headingTips, visible) {
+    (items || []).forEach((item) => {
+      const view = UX.reportParagraphView(item);
+      if (!view.show) {
+        if (view.tip) headingTips.push(view.tip);
+        return;
+      }
+      visible.push(view);
+    });
+  }
+
+  function renderReportSection(sec) {
+    const title = (sec && sec.title) || "";
+    const paragraphs = (sec && sec.paragraphs) || [];
+    const notes = (sec && sec.notes) || [];
+    if (UX.reportSectionCollapsed(title) && UX.reportSectionLong(sec)) {
+      let inner = "";
+      paragraphs.forEach((p) => {
+        inner += "<p>" + escapeHtml(p) + "</p>";
+      });
+      inner += renderReportTables(sec);
+      notes.forEach((n) => {
+        inner += '<p class="muted">' + escapeHtml(n) + "</p>";
+      });
+      return (
+        '<details class="report-gloss"><summary class="tip-host" data-tip-id="report-long">' +
+        escapeHtml(title) +
+        "</summary>" +
+        inner +
+        "</details>"
+      );
+    }
+    const headingTips = [];
+    const visible = [];
+    const visibleNotes = [];
+    if (UX.reportSectionCollapsed(title)) {
+      paragraphs.concat(notes).forEach((item) => {
+        if (item) headingTips.push(String(item));
+      });
+    } else {
+      splitReportCopy(paragraphs, headingTips, visible);
+      splitReportCopy(notes, headingTips, visibleNotes);
+    }
+    let html =
+      "<h3" +
+      (headingTips.length ? ' class="tip-host" data-tip="' + escapeHtml(headingTips.join("\n")) + '"' : "") +
+      ">" +
+      escapeHtml(title) +
+      "</h3>";
+    visible.forEach((view) => {
+      html += renderReportViewParagraph(view, false);
+    });
+    html += renderReportTables(sec);
+    visibleNotes.forEach((view) => {
+      html += renderReportViewParagraph(view, true);
+    });
+    return html;
+  }
+
+  function renderReportMarkdown(markdown) {
+    const text = String(markdown || "");
+    const parts = text.split(/\n(?=## )/);
+    return parts
+      .map((part) => {
+        const match = part.match(/^##\s+(.+)$/m);
+        const title = match ? match[1] : "";
+        const block = "<pre>" + escapeHtml(part) + "</pre>";
+        if (title && UX.reportSectionCollapsed(title) && part.length > 420) {
+          return (
+            '<details class="report-gloss"><summary class="tip-host" data-tip-id="report-long">' +
+            escapeHtml(title) +
+            "</summary>" +
+            block +
+            "</details>"
+          );
+        }
+        if (title && UX.reportSectionCollapsed(title)) {
+          return (
+            '<h3 class="tip-host" data-tip="' +
+            escapeHtml(part) +
+            '">' +
+            escapeHtml(title) +
+            "</h3>"
+          );
+        }
+        return block;
+      })
+      .join("");
+  }
+
   function renderReportDocument(report) {
     if (!el.reportPreview) return;
     report = report || {};
@@ -3244,49 +3479,21 @@ function renderHosts(hosts) {
       " · 实际生成 " +
       escapeHtml(fmtReportTime(report.generated_at || report.created_at)) +
       "</p>";
-    if (view.mode !== "full") {
+    if (view.mode === "failed") {
       html +=
-        '<div class="report-empty"><strong>' +
-        (failed ? "这份报告没有生成成功" : "没有可汇总的上报") +
-        "</strong><p>" +
+        '<div class="report-empty"><strong>这份报告没有生成成功</strong><p>' +
         escapeHtml(view.message) +
         "</p></div>";
+    } else if (view.mode === "empty") {
+      html +=
+        '<div class="report-empty"><strong class="tip-host" data-tip="' +
+        escapeHtml(view.message) +
+        '">没有可汇总的上报</strong></div>';
     } else if (!sections.length && report.markdown) {
-      html += "<pre>" + escapeHtml(report.markdown) + "</pre>";
+      html += renderReportMarkdown(report.markdown);
     }
     sections.forEach((sec) => {
-      html += "<h3>" + escapeHtml(sec.title || "") + "</h3>";
-      (sec.paragraphs || []).forEach((p) => {
-        html += "<p>" + escapeHtml(p) + "</p>";
-      });
-      (sec.tables || []).forEach((table) => {
-        if (table.caption) {
-          html += '<p class="report-caption">' + escapeHtml(table.caption) + "</p>";
-        }
-        const headers = table.headers || [];
-        html += "<div class='table-wrap'><table><thead><tr>";
-        headers.forEach((h) => {
-          html += "<th>" + escapeHtml(h) + "</th>";
-        });
-        html += "</tr></thead><tbody>";
-        const hostIds = table.host_ids || [];
-        (table.rows || []).forEach((row, rowIndex) => {
-          const hostId = hostIds[rowIndex] || "";
-          html += "<tr>";
-          headers.forEach((_, i) => {
-            const cell = row[i] == null ? "" : row[i];
-            html +=
-              "<td>" +
-              (i === 0 ? hostJumpButton(cell, hostId) : escapeHtml(cell)) +
-              "</td>";
-          });
-          html += "</tr>";
-        });
-        html += "</tbody></table></div>";
-      });
-      (sec.notes || []).forEach((n) => {
-        html += '<p class="muted">' + escapeHtml(n) + "</p>";
-      });
+      html += renderReportSection(sec);
     });
     el.reportPreview.innerHTML = html;
     Array.from(el.reportPreview.querySelectorAll(".host-jump")).forEach((btn) => {
@@ -3304,7 +3511,7 @@ function renderHosts(hosts) {
         '<a class="link" href="/api/v1/reports/' +
         id +
         '/rankings.csv">下载排行 CSV</a>' +
-        '<a class="link" href="/api/v1/export/rankings-fields.csv">字段说明</a>';
+        '<a class="link tip-host" href="/api/v1/export/rankings-fields.csv" data-tip-id="field-guide">字段说明</a>';
       const regen = document.getElementById("btnRegenReport");
       if (regen) {
         regen.addEventListener("click", () => {
@@ -3326,7 +3533,7 @@ function renderHosts(hosts) {
     const visible = (reports || []).filter((item) => UX.reportListItemVisible(item));
     if (!visible.length) {
       el.reportList.innerHTML =
-        '<p class="empty">还没有报告。选择日报、周报或月报后点「生成并保存」。没有上报时也会留下一份，并标明无数据。</p>';
+        '<p class="empty tip-host" data-tip-id="report-empty-list">还没有报告。</p>';
       return;
     }
     el.reportList.innerHTML = visible
@@ -3419,8 +3626,14 @@ function renderHosts(hosts) {
       let text = (data.label || "") + " " + (data.range_text || "");
       if (data.clamped) text += "（将被保留期裁剪）";
       if (data.window_error) text += "（" + data.window_error + "）";
-      if (data.empty) text += " · 这一窗口没有上报，生成后仍会留下报告";
       el.reportWindowHint.textContent = text;
+      if (data.empty) {
+        el.reportWindowHint.classList.add("tip-host");
+        el.reportWindowHint.setAttribute("data-tip-id", "report-window-empty");
+      } else {
+        el.reportWindowHint.classList.remove("tip-host");
+        el.reportWindowHint.removeAttribute("data-tip-id");
+      }
     } catch (e) {
       el.reportWindowHint.textContent = e.message || "";
     }
@@ -3475,6 +3688,11 @@ function renderHosts(hosts) {
     }
   }
 
+  document.addEventListener("click", (ev) => {
+    const link = ev.target.closest && ev.target.closest("#gotoPeriodTab");
+    if (!link) return;
+    periodFocus = "";
+  });
   if (el.periodUtilBody) {
     el.periodUtilBody.addEventListener("click", (ev) => {
       const th = ev.target.closest && ev.target.closest("thead th[data-sort]");
@@ -3491,12 +3709,20 @@ function renderHosts(hosts) {
       }
       const tr = ev.target.closest && ev.target.closest("tr[data-id]");
       if (!tr || !el.periodUtilBody.contains(tr)) return;
+      if (tr.getAttribute("data-kind") === "cluster") {
+        periodFocus = "cluster";
+        markPeriodRows("");
+        renderClusterDetail(periodUtilData);
+        return;
+      }
       const id = decodeURIComponent(tr.getAttribute("data-id") || "");
       if (!id) return;
+      const fromCluster = periodFocus === "cluster";
+      periodFocus = "";
       const key = id + "?" + periodQuery();
       selectedId = id;
       markPeriodRows(id);
-      if (periodDetailKey !== key) loadPeriodHostDetail(id);
+      if (fromCluster || periodDetailKey !== key) loadPeriodHostDetail(id);
     });
   }
   el.btnRefresh.addEventListener("click", refresh);
