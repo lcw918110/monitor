@@ -114,6 +114,9 @@
   let activeReportId = null;
   let activeReport = null;
   let attentionKey = "";
+  /** 主机详情页签：hardware 只读硬件，asset 可改资产。换主机时回到硬件。 */
+  let detailPane = "hardware";
+  let detailHostId = "";
   const UX = window.MonitorUX || {
     accelHealthLabel: function (health) {
       return health || "-";
@@ -1040,7 +1043,7 @@
     let key = "realtime";
     if (parsed.tab === "reports") key = "reports";
     else if (parsed.tab === "period") key = "period";
-    else if (parsed.focus === "hosts") key = "hosts";
+    // #hosts 没有单独页面，主机表就在实时监控里，高亮仍落在「实时监控」。
     Array.from(document.querySelectorAll(".shell-link")).forEach((link) => {
       const on = link.getAttribute("data-shell") === key;
       link.classList.toggle("active", on);
@@ -2383,9 +2386,15 @@ function renderHosts(hosts) {
 
   function renderDetail(data) {
     if (!data) {
+      detailHostId = "";
+      detailPane = "hardware";
       el.detailTitle.textContent = "请选择左侧主机";
       el.detailBody.innerHTML = '<p class="empty">暂无选中主机</p>';
       return;
+    }
+    if (data.host_id !== detailHostId) {
+      detailPane = "hardware";
+      detailHostId = data.host_id || "";
     }
     const p = data.payload || {};
     const sys = p.system || {};
@@ -2439,8 +2448,9 @@ function renderHosts(hosts) {
     html +=
       '<p class="muted"><a class="link" href="#period" id="gotoPeriodTab">查看该机时段统计</a></p>';
 
-    html += renderAddressSection(data);
-    html += renderAssetSection(data);
+    html +=
+      '<div class="section-title tip-host" data-tip-id="asset-collected">采集规格</div>' +
+      renderCollectedHardware(data.hardware);
 
     html +=
       '<div class="section-title tip-host" data-tip="实时用量，以及额定或总量。">' +
@@ -2712,7 +2722,31 @@ function renderHosts(hosts) {
       html += "</tbody></table></div>";
     }
 
-    el.detailBody.innerHTML = html;
+    const assetHtml = renderAddressSection(data) + renderAssetSection(data);
+    const hardwareOn = detailPane !== "asset";
+    el.detailBody.innerHTML =
+      '<div class="detail-tabs" role="tablist" aria-label="主机详情">' +
+      '<button type="button" class="tab-btn' +
+      (hardwareOn ? " active" : "") +
+      '" role="tab" id="detailTabHardware" data-detail-tab="hardware" aria-selected="' +
+      (hardwareOn ? "true" : "false") +
+      '" aria-controls="detailPaneHardware">硬件基本信息</button>' +
+      '<button type="button" class="tab-btn tip-host' +
+      (hardwareOn ? "" : " active") +
+      '" role="tab" id="detailTabAsset" data-detail-tab="asset" data-tip-id="asset-manual" aria-selected="' +
+      (hardwareOn ? "false" : "true") +
+      '" aria-controls="detailPaneAsset">资产信息</button>' +
+      "</div>" +
+      '<div class="detail-pane" role="tabpanel" id="detailPaneHardware" data-detail-pane="hardware" aria-labelledby="detailTabHardware"' +
+      (hardwareOn ? "" : " hidden") +
+      ">" +
+      html +
+      "</div>" +
+      '<div class="detail-pane" role="tabpanel" id="detailPaneAsset" data-detail-pane="asset" aria-labelledby="detailTabAsset"' +
+      (hardwareOn ? " hidden" : "") +
+      ">" +
+      assetHtml +
+      "</div>";
     const gotoPeriod = document.getElementById("gotoPeriodTab");
     if (gotoPeriod) {
       gotoPeriod.addEventListener("click", (ev) => {
@@ -2722,6 +2756,25 @@ function renderHosts(hosts) {
     }
     bindAssetActions(data);
     bindReaddress(data);
+    bindDetailTabs();
+  }
+
+  function bindDetailTabs() {
+    if (!el.detailBody) return;
+    Array.from(el.detailBody.querySelectorAll("[data-detail-tab]")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const next = btn.getAttribute("data-detail-tab") === "asset" ? "asset" : "hardware";
+        detailPane = next;
+        Array.from(el.detailBody.querySelectorAll("[data-detail-tab]")).forEach((item) => {
+          const on = item.getAttribute("data-detail-tab") === next;
+          item.classList.toggle("active", on);
+          item.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        Array.from(el.detailBody.querySelectorAll("[data-detail-pane]")).forEach((pane) => {
+          pane.hidden = pane.getAttribute("data-detail-pane") !== next;
+        });
+      });
+    });
   }
 
   function renderAddressSection(data) {
@@ -2974,9 +3027,7 @@ function renderHosts(hosts) {
     });
     const flag = assetValue(data, "monitor_flag");
     return (
-      '<div class="section-title tip-host" data-tip-id="asset-manual">资产信息</div>' +
-      '<div class="asset-grid">' +
-      '<div><form id="assetForm" class="asset-form">' +
+      '<form id="assetForm" class="asset-form">' +
       fields +
       (flag
         ? '<p class="muted">表格「是否资源监控」：' + escapeHtml(flag) + "</p>"
@@ -2988,10 +3039,7 @@ function renderHosts(hosts) {
       '<button type="button" class="btn btn-sm" id="btnHideHost">从列表隐藏</button>' +
       '<label class="muted"><input type="checkbox" id="hideAlsoDeploy" /> 同时移除部署清单里对应的目标</label>' +
       '<button type="button" class="btn btn-sm btn-danger" id="btnDeleteHost">彻底删除…</button>' +
-      "</div></div>" +
-      '<div><div class="spec-label tip-host" data-tip-id="asset-collected">采集规格</div>' +
-      renderCollectedHardware(data.hardware) +
-      "</div></div>"
+      "</div>"
     );
   }
 
