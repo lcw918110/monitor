@@ -308,7 +308,8 @@ tail -n 50 .deploy-agent/run/agent.log
 | GET | `/api/v1/reports/{id}` | 报告 JSON（含 Markdown 与分节） |
 | GET | `/api/v1/reports/{id}/markdown` | 下载 Markdown |
 | GET | `/api/v1/reports/{id}/rankings.csv` | 下载主机排行 CSV |
-| GET/POST | `/api/v1/settings` | 管理 Token、报告推送，以及全部中心参数（分组、说明、默认值）。GET 不回显管理 Token / Agent 上报 Token 明文，Webhook 打码。POST 在已启用管理 Token 时要带请求头。中心参数写入 `config/center.json` |
+| GET/POST | `/api/v1/settings` | 管理 Token、诊断报告推送、最近一次推送结果，以及全部中心参数（分组、说明、默认值）。GET 不回显管理 Token / Agent 上报 Token 明文，Webhook 打码。POST 在已启用管理 Token 时要带请求头。中心参数写入 `config/center.json` |
+| POST | `/api/v1/settings/push-test` | 「测试发送」：按已保存的渠道和 Webhook 发一条含「诊断」的短消息。不生成报告。未启用或没有地址时不访问网络。已启用管理 Token 时要带请求头 |
 | * | `/api/v1/deploy/*` | 部署清单、设置、SSH 任务等（见部署页）。写操作在启用管理 Token 后要带请求头 |
 
 `token`（`config/center.json` 或部署参数）只在 `POST /api/v1/metrics` 校验 Agent 上报，不是网页登录。管理 Token 是另一把可选口令，见下面「管理 Token 与报告推送」。
@@ -329,10 +330,12 @@ tail -n 50 .deploy-agent/run/agent.log
 
 **报告推送（可选）**
 
-- 渠道：企业微信、钉钉、飞书，填机器人 Webhook。未启用或没填地址时，`deliver_report` 什么都不发。
-- 定时生成和页面「生成并保存」成功后都会推送。失败不影响报告入库。
+- 渠道：企业微信、钉钉、飞书，填一个机器人 Webhook。未启用或没填地址时，`deliver_report` 什么都不发。管理 Token 不是保存或启用的前提；端口对外之前仍建议先设上。
+- 定时生成和页面「生成并保存」成功后都会推送。失败不影响报告入库，设置页记下最近一次结果。
+- 「测试发送」只发一条含「诊断」的短消息，不生成新的诊断报告。未启用或没有 Webhook 时不访问网络。
 - 钉钉请用自定义关键词「诊断」。当前不算加签。
-- 接口只显示打码后的地址。完整 Webhook 留在中心数据库，便于下次发送。
+- 接口只显示打码后的地址和最近一次推送结果（成功或失败原因、北京时间、测试发送或报告推送）。完整 Webhook 留在中心数据库，便于下次发送。
+- 这不是今日关注、离线或数据外传异常的即时推送。重点数据守护若写进诊断报告，只随报告发出。
 
 细节见 `docs/13-diagnostic-reports.md`。
 
@@ -340,7 +343,7 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 文档
 
-给客户机房交接时，用下面三份对外手册。产品现为 **v1.13.0**。部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。使用手册与需求、设计用同一套说法：顶栏六个入口、实时「离线」、事后「离线（无数据）」与「断网（已补报）」、磁盘容量和磁盘读写分开、趋势悬停为上海时间，并包含重点数据守护。部署手册和交付清单没有为这一项整本改版。步骤仍与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致。
+给客户机房交接时，用下面三份对外手册。产品现为 **v1.13.0**。部署见 [`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)，日常使用见 [`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)，交什么文件、给谁、装完如何验收见 [`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)。三份手册与需求、设计用同一套说法：顶栏六个入口、实时「离线」、事后「离线（无数据）」与「断网（已补报）」、磁盘容量和磁盘读写分开、趋势悬停为上海时间、重点数据守护，以及诊断报告推送的「测试发送」和最近一次结果。步骤仍与本文及 [`docs/14-ops-runbook.md`](docs/14-ops-runbook.md) 一致。
 
 | 文档 | 说明 |
 | --- | --- |
@@ -355,7 +358,7 @@ tail -n 50 .deploy-agent/run/agent.log
 | `docs/12-disk-mounts.md` | 多挂载点磁盘：过滤规则与汇总口径 |
 | `docs/13-diagnostic-reports.md` | 日/周/月使用诊断报告（本地计算、入库、预览与下载） |
 | **`docs/14-ops-runbook.md`** | **怎么干活：`push_upgrade.sh`、便携 Python、隐藏主机，以及备份 / 恢复 / 回滚（弱高可用；双中心不做）** |
-| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针、旋钮和空白结果表（不是 SLA） |
+| `docs/15-capacity-lab.md` | 单进程 SQLite 容量探针和结果表（含 2026-10-28 开发机外推，不是生产上限，也不是 SLA） |
 | **[`docs/16-external-deploy-guide.md`](docs/16-external-deploy-guide.md)** | **对外部署手册：给客户机房的安装、升级、备份、验收** |
 | **[`docs/17-external-user-guide.md`](docs/17-external-user-guide.md)** | **对外使用手册：监测台、时段离线概览、无数据诊断、运维确认与设置** |
 | **[`docs/18-external-handoff-pack.md`](docs/18-external-handoff-pack.md)** | **对外交付资料清单：交什么文件、给谁、部署前后检查** |
@@ -366,13 +369,16 @@ tail -n 50 .deploy-agent/run/agent.log
 
 ## 下一步（摘要）
 
-详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。v1.10.0 先把常见任务做顺，不新增监测能力：
+详见 [`docs/10-roadmap.md`](docs/10-roadmap.md)。现行版本 **v1.13.0**。诊断报告推送已经在设置页：企业微信 / 钉钉 / 飞书，可「测试发送」，并显示最近一次推送结果。它不是今日关注、离线或数据外传异常的即时告警。
 
-- **U1 总览与可读状态**（已交付顶栏、今日关注四类、白话健康、报告深链；长期空闲名单仍待）
+- **已在设置页**：管理 Token、诊断报告推送（含测试发送和最近一次结果）、重点数据守护（只检测，不拦截）
+- **U1**：顶栏、今日关注、白话健康、报告深链已交付；长期空闲名单仍待
 - **U2 运维闭环**（下一优先）：部署收进同一套壳；中心升级只引导现有 `push_upgrade.sh`
-- **U3 可选**：保存筛选仍待做。管理 Token 和诊断报告推送已在 `/settings.html`
-- **仍保留**：N1 服务器实装、N4 容量（探针和空白结果表已有，数字待实测）、N3 拓扑；长期运维见路线图 O1–O7
-- **N2 指标框架化**：已单独立项，不与 NH-02/NH-03 同轮实现。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)。本轮不写代码
+- **U3 仍待**：可保存的筛选。不要把诊断报告推送再当成还没做的功能
+- **N1**：生产中心已在运行，路线图不再把它写成未开始
+- **N4**：容量表已有 2026-10-28 的开发机外推，不是生产上限
+- **N2 指标框架化**：仍未做。跟踪 [Issue #35](https://github.com/lcw918110/monitor/issues/35)
+- **机器周期管理**（隐藏 / 换机 / 退役，[Issue #39](https://github.com/lcw918110/monitor/issues/39)）仍未做
 - **高可用**：备份 / 恢复按 `docs/14-ops-runbook.md`。双中心 / 双活继续不做
 
 ## 自测

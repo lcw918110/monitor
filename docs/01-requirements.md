@@ -2,7 +2,7 @@
 
 | 文档版本 | 2.0 |
 | 对应产品 | v1.13.0 |
-| 最近修订 | 2026-11-16 |
+| 最近修订 | 2026-11-17 |
 | 状态 | 现行规格。本文可单独阅读，与代码、`docs/13-diagnostic-reports.md`、`docs/14-ops-runbook.md` 一致 |
 
 本文描述已经交付的产品行为。采集、存储、页面和脚本若以后变更，应同时改本文。指标框架化（路线图 N2 / NH-04，[Issue #35](https://github.com/lcw918110/monitor/issues/35)）不在本文的已交付范围，本轮也不实现。诊断报告空闲线和高负荷线在 `report` 配置里，设置页可改。
@@ -31,7 +31,7 @@
 | 存储 | TSDB / MySQL | 中心单进程 **SQLite** |
 | 展示 | Grafana | 自研中文监测台。顶栏一排：实时监控、主机、时段统计、使用诊断、运维、设置 |
 | 异常 | 规则引擎 + 通知通道 | 页面按阈值黄/红着色。没有邮件、短信、电话等即时告警通道 |
-| 诊断报告 | 自建报表 | 中心本地生成日/周/月报告并入库；可下载 Markdown 与排行 CSV。设置了 Webhook 时，成功生成后发到企业微信、钉钉或飞书 |
+| 诊断报告 | 自建报表 | 中心本地生成日/周/月报告并入库；可下载 Markdown 与排行 CSV。设置了 Webhook 时，成功生成后发到企业微信、钉钉或飞书。设置页可「测试发送」，并显示最近一次推送结果 |
 | 鉴权 | LDAP / SSO / 多用户 | Agent 上报可选共享 Token。另有可选的一把管理 Token（SHA-256），不是按用户分的登录 |
 | 高可用 | 多副本、自动切换 | 不做双中心、双活、SQLite 多写或自动故障切换。备份与恢复由人执行，见 `docs/14-ops-runbook.md` |
 
@@ -256,13 +256,13 @@ CPU、内存、磁盘、加速卡利用率只接受 0～100%（含两端）。�
 
 报告结构：抬头（类型、时间窗、对比窗、口径、保留期裁剪）、总览、集群资源利用、主机排行、闲忙两极、磁盘、资源组（有分组时）、诊断与建议、附录。单机读取上限 250000 行（时段统计接口默认仍是 60000）。触达上限时附录写明，不从别的报告补数据。诊断建议不根据部署日志推断「部署残留」。
 
-定时和手动生成成功后调用 `deliver_report`。设置页启用了 Webhook 才发送；未配置则不发请求，报告仍入库。推送失败只记结果，不把这次生成改成失败。正文过长会截断。
+定时和手动生成成功后调用 `deliver_report`。设置页启用了 Webhook 才发送；未配置则不发请求，报告仍入库。推送失败只记最近一次结果，不把这次生成改成失败。正文过长会截断。这不是今日关注、离线或数据外传异常的即时推送。
 
 `retention_days` 不删除 `diagnostic_reports`。报告可以在原始点过期后继续打开。
 
 ### 3.7 管理 Token 与报告推送（FR-ADMIN）
 
-配置在中心库 `admin_settings`，不进 `config/center.json`。升级保留 `data/` 时会留下来。同一设置页还编辑 `center.json` 里中心实际读取的参数（保留与清理、异常着色、诊断报告阈值、时段利用率、报告时刻、Agent 上报 Token、监听地址等），按组展示，未配置用内置默认并可恢复。除监听地址、端口、数据目录要重启外，保存后当前进程按新值工作。管理 Token 和 Webhook 仍只在库里，接口不回显明文。
+配置在中心库 `admin_settings`，不进 `config/center.json`。升级保留 `data/` 时会留下来。同一设置页还编辑 `center.json` 里中心实际读取的参数（保留与清理、异常着色、诊断报告阈值、时段利用率、报告时刻、Agent 上报 Token、监听地址等），按组展示，未配置用内置默认并可恢复。除监听地址、端口、数据目录要重启外，保存后当前进程按新值工作。管理 Token 和 Webhook 仍只在库里，接口不回显明文。管理 Token 不是保存 Webhook 或启用推送的前提：没设 Token 时写接口仍然开放；中心端口对别人可见之前，仍建议先设上。
 
 | ID | 需求 | 优先级 |
 | --- | --- | --- |
@@ -270,7 +270,8 @@ CPU、内存、磁盘、加速卡利用率只接受 0～100%（含两端）。�
 | FR-ADMIN-02 | 已设置时，写接口必须带 `X-Management-Token`。缺失或错误为 401，`code` 为 `management_token_required`。保存的是 SHA-256，GET 不返回明文或哈希 | P1 |
 | FR-ADMIN-03 | 首次启动前可用环境变量 `MONITOR_MANAGEMENT_TOKEN`（至少 8 位、不含空格）。只在库里还没有管理 Token 时写入哈希，不覆盖已有值，不写回 `center.json` | P1 |
 | FR-ADMIN-04 | Agent 的 `token` 只校验 `POST /api/v1/metrics` 和 `POST /api/v1/metrics/batch`。两把 Token 不能互换。补报不要求管理 Token | P0 |
-| FR-ADMIN-05 | 报告推送渠道为企业微信（markdown）、钉钉（markdown；当前不加签，机器人关键词需包含「诊断」）、飞书（text）。只接受 http/https Webhook。读取接口只返回渠道、是否启用和打码后的地址 | P1 |
+| FR-ADMIN-05 | 报告推送渠道为企业微信（markdown）、钉钉（markdown；当前不加签，机器人关键词需包含「诊断」）、飞书（text）。只接受 http/https Webhook。读取接口只返回渠道、是否启用、打码后的地址，以及最近一次推送结果。不返回 Webhook 原文 | P1 |
+| FR-ADMIN-06 | 设置页「测试发送」用已保存的渠道和 Webhook 发一条含「诊断」的短消息，不生成诊断报告。未启用或没有 Webhook 时不访问网络。最近一次结果记下成功或失败原因、北京时间和这次是测试发送还是报告推送。传输失败再试两次；推送失败不把报告生成改成失败 | P1 |
 
 ### 3.8 Agent 安装（FR-DEPLOY）
 
@@ -430,7 +431,8 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 | GET | `/api/v1/reports` 与 `/api/v1/reports/{id}` | 列表与详情（含 Markdown） |
 | GET | `/api/v1/reports/{id}/markdown` 与 `.../rankings.csv` | 下载。排行 CSV 表头为中文 |
 | GET | `/api/v1/export/field-guide.txt` 与 `hosts-fields.csv`、`period-stats-fields.csv`、`rankings-fields.csv` | 汉字字段说明（含义和单位）。不要把说明行塞进数据 CSV 的表头下面 |
-| GET/POST | `/api/v1/settings` | 管理 Token 与报告推送。GET 不回显明文 |
+| GET/POST | `/api/v1/settings` | 管理 Token、诊断报告推送和最近一次推送结果。GET 不回显 Token 明文和 Webhook 原文 |
+| POST | `/api/v1/settings/push-test` | 「测试发送」。不生成报告。未启用或没有 Webhook 时不访问网络。与其它写接口同一套管理 Token |
 | GET/POST | `/api/v1/data-guard` | 重点数据守护。GET 列出主机、资源组和已保存策略；POST 保存或清除，要管理 Token。上报响应里的 `data_guard` 是下发给该采集端的策略 |
 | * | `/api/v1/deploy/*` | 部署清单、设置、任务、安装脚本、模板 |
 | GET | `/`、`/deploy.html`、`/settings.html` | 监测台、部署、设置 |
@@ -444,7 +446,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 下面这些不是本产品的现行能力。已经交付的页面着色、使用诊断和报告 Webhook 不在此列。
 
 - 把 Prometheus、Grafana、Zabbix 或其他监控栈装进运行依赖
-- 按阈值即时通知（邮件、短信、电话）和自动修复。黄/红只是页面着色
+- 按阈值即时通知（邮件、短信、电话）和自动修复。黄/红只是页面着色。今日关注、离线、数据外传异常都不即时推送；诊断报告推送只在报告生成成功或手动「测试发送」时发出
 - 双中心、双活、SQLite 多写、自动故障切换
 - 按用户拆分的监控中心，或把管理 Token 做成多用户登录
 - 容器 / Kubernetes 深度监控、应用 APM
@@ -466,7 +468,7 @@ Agent 只从 `/deploy.html` 或中心机 `deploy_fleet.sh` / `deploy_agent.sh` �
 5. 时段统计能按相对分钟和绝对起止返回 avg / min / max / p95 / busy_ratio，集群为样本加权。
 6. 使用诊断能生成并再次打开日/周/月报告。窗口里没有上报时，三份报告都留在列表里，页面标明无数据，不消失。基本不用必须同时满足平均 <5% 和繁忙 <5%（有卡时加速卡同样）。平均 14% 或加速卡平均 9% 不是基本不用。高负荷为样本足够且繁忙占比 ≥40% 或 P95 ≥85%。
 7. 停止 Agent 超过离线阈值后状态变为离线，今日关注把它算进离线。实时页不出现第二种离线徽章。采集端在送不出去时把样本留在 `data/spool`，恢复后按采集时间补报；时段统计把补上的时段写成「断网（已补报）」，没有样本的空档写成「离线（无数据）」。
-8. 未设置管理 Token 时写接口可用；设置后，不带 `X-Management-Token` 的写操作被拒绝，读报告仍可用。未配置 Webhook 时生成报告只入库。
+8. 未设置管理 Token 时写接口可用；设置后，不带 `X-Management-Token` 的写操作被拒绝，读报告仍可用。保存 Webhook 和启用推送不依赖管理 Token。未配置 Webhook 时生成报告只入库，「测试发送」不访问网络。推送失败时报告仍然成功。设置页能看到最近一次推送结果，且看不到 Webhook 原文。
 9. 全程无外部监控软件依赖。自测 `PYTHONPATH=. python3 -m unittest discover -s tests` 通过。
 10. 未标记的主机不出现重点数据机徽章，上报里的重点数据字段也不入库。标记后，路径变小、大归档、允许网段之外的连接、外传阈值和可移动磁盘会进入「数据外传异常」；白名单中的备份目的或进程不报。报文中没有文件内容。
 

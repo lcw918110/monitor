@@ -62,6 +62,22 @@
         : "https://…";
     }
     refreshChannelHint();
+    showLastPush(settings.push_last);
+  }
+
+  function showLastPush(last) {
+    var node = $("pushLast");
+    if (!node) return;
+    if (!last || !last.at) {
+      node.textContent = "还没有推送记录。";
+      node.className = "push-last";
+      return;
+    }
+    node.textContent = last.summary || "最近一次推送已记录。";
+    var state = "bad";
+    if (last.skipped) state = "skip";
+    else if (last.ok) state = "ok";
+    node.className = "push-last " + state;
   }
 
   function refreshChannelHint() {
@@ -394,6 +410,31 @@
     say("pushHint", "推送设置已保存。地址不会完整显示。");
   }
 
+  async function testPush() {
+    say("pushHint", "正在测试发送…");
+    var res = await fetch("/api/v1/settings/push-test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    var data = await readJson(res);
+    if (!res.ok || !data.ok) {
+      say("pushHint", (data && data.error) || "测试发送失败");
+      return;
+    }
+    if (data.settings) applyView(data.settings);
+    var push = data.push || {};
+    if (push.skipped) {
+      say("pushHint", push.message || "未启用推送或没有 Webhook，未访问网络。");
+      return;
+    }
+    if (push.ok) {
+      say("pushHint", "测试发送已完成。最近一次结果显示在下方。");
+      return;
+    }
+    say("pushHint", push.error || "测试发送失败");
+  }
+
   async function clearPush() {
     if (!window.confirm("清空后不再向外发送诊断报告。确定清空 Webhook？")) return;
     var res = await fetch("/api/v1/settings", {
@@ -611,6 +652,7 @@
   $("btnSaveToken").addEventListener("click", saveToken);
   $("btnClearToken").addEventListener("click", clearToken);
   $("btnSavePush").addEventListener("click", savePush);
+  $("btnTestPush").addEventListener("click", testPush);
   $("btnClearPush").addEventListener("click", clearPush);
   $("pushChannel").addEventListener("change", refreshChannelHint);
   $("btnSaveAll").addEventListener("click", function () {

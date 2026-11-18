@@ -29,13 +29,17 @@ def deliver_report(report: Dict[str, Any]) -> Dict[str, Any]:
     调度器只在成功写入新报告后调用。未配置时不发请求。
     推送失败不影响报告入库，也不把 Webhook 写进日志。
     """
-    from center.report_push import CHANNEL_LABELS, push_report
+    from center.report_push import CHANNEL_LABELS, get_push_store, push_report, remember_push_result
 
     try:
-        result = push_report(report or {})
+        result = push_report(report or {}, kind="report")
     except Exception as exc:  # noqa: BLE001
         print("[report-push] 推送失败: %s" % type(exc).__name__, flush=True)
-        return {"ok": False, "skipped": False, "error": "推送失败"}
+        return remember_push_result(
+            get_push_store(),
+            {"ok": False, "skipped": False, "kind": "report", "error": "推送失败"},
+            "report",
+        )
     if result.get("skipped"):
         return result
     label = result.get("channel_label") or CHANNEL_LABELS.get(result.get("channel") or "", "")
