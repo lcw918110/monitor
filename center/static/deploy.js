@@ -27,6 +27,70 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  let modalReturnFocus = null;
+
+  function modalTop() {
+    const header = document.querySelector("header.top");
+    const bar = document.querySelector(".admin-token-bar");
+    let top = 8;
+    if (header) {
+      const rect = header.getBoundingClientRect();
+      if (rect.bottom > 0) top = Math.max(top, rect.bottom + 8);
+    }
+    if (bar && !bar.hidden) {
+      const rect = bar.getBoundingClientRect();
+      if (rect.bottom > 0 && rect.top < window.innerHeight) {
+        top = Math.max(top, rect.bottom + 8);
+      }
+    }
+    return top;
+  }
+
+  function placeModal(node) {
+    if (!node) return;
+    const top = modalTop();
+    node.style.top = top + "px";
+    const backdrop = node.querySelector(".ops-modal-backdrop");
+    if (backdrop) backdrop.style.top = top + "px";
+  }
+
+  function openModal(id) {
+    document.querySelectorAll(".ops-modal").forEach((node) => {
+      if (node.id !== id) node.hidden = true;
+    });
+    const node = $(id);
+    if (!node) return;
+    modalReturnFocus = document.activeElement;
+    node.hidden = false;
+    document.body.classList.add("modal-open");
+    placeModal(node);
+    const focus =
+      node.querySelector(
+        "input:not([type='file']):not([hidden]), select, textarea"
+      ) || node.querySelector(".ops-modal-panel button, .ops-modal-panel a");
+    if (focus && focus.focus) focus.focus();
+  }
+
+  function closeModal(id) {
+    const node = $(id);
+    if (node) node.hidden = true;
+    if (!document.querySelector(".ops-modal:not([hidden])")) {
+      document.body.classList.remove("modal-open");
+      if (modalReturnFocus && modalReturnFocus.focus) {
+        try {
+          modalReturnFocus.focus();
+        } catch (e) {
+          /* 触发按钮可能已经不在页面上 */
+        }
+      }
+      modalReturnFocus = null;
+    }
+  }
+
+  function closeAddModal() {
+    clearEdit();
+    closeModal("dlgAdd");
+  }
 
   function escapeHtml(s) {
     return String(s ?? "")
@@ -327,7 +391,11 @@
     Array.from(document.querySelectorAll("[data-test-row]")).forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = Number(btn.getAttribute("data-test-row"));
-        $("testHint").textContent = "正在测试 #" + id + " ...";
+        const hint = $("rowTestHint");
+        if (hint) {
+          hint.textContent = "正在测试 #" + id + " ...";
+          hint.style.color = "";
+        }
         const res = await fetch("/api/v1/deploy/test-ssh", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -335,8 +403,10 @@
         });
         const data = await res.json();
         const r = (data && data.result) || {};
-        $("testHint").textContent = r.message || data.error || "测试完成";
-        $("testHint").style.color = r.ok ? "var(--ok)" : "var(--bad)";
+        if (hint) {
+          hint.textContent = r.message || data.error || "测试完成";
+          hint.style.color = r.ok ? "var(--ok)" : "var(--bad)";
+        }
       });
     });
   }
@@ -358,15 +428,17 @@
     $("tPeers").value = t.peer_hosts_text || "";
     $("btnAdd").textContent = "保存修改";
     $("btnCancelEdit").hidden = false;
+    $("dlgAddTitle").textContent = "编辑这台机器";
     $("testHint").textContent = "正在编辑 #" + t.id + " " + (t.ip || "");
     $("testHint").style.color = "";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    openModal("dlgAdd");
   }
 
   function clearEdit() {
     editingId = null;
     $("btnAdd").textContent = "加入清单";
     $("btnCancelEdit").hidden = true;
+    if ($("dlgAddTitle")) $("dlgAddTitle").textContent = "加入一台机器";
     $("tIp").value = "";
     $("tHostId").value = "";
     $("tHostname").value = "";
@@ -423,6 +495,7 @@
       return;
     }
     clearEdit();
+    closeModal("dlgAdd");
     loadTargets();
   }
 
@@ -530,6 +603,7 @@
 
   async function ensureSettingsSaved() {
     if (!$("publicUrl").value.trim()) {
+      openModal("dlgSettings");
       alert("请先填写并保存「中心对外访问地址」");
       return false;
     }
@@ -578,7 +652,30 @@
   $("btnSaveSettings").addEventListener("click", saveSettings);
   $("btnAdd").addEventListener("click", addTarget);
   $("btnTestSsh").addEventListener("click", testSshFromForm);
-  $("btnCancelEdit").addEventListener("click", clearEdit);
+  $("btnCancelEdit").addEventListener("click", closeAddModal);
+  $("btnOpenAdd").addEventListener("click", () => {
+    clearEdit();
+    openModal("dlgAdd");
+  });
+  $("btnOpenExcel").addEventListener("click", () => openModal("dlgExcel"));
+  $("btnOpenSettings").addEventListener("click", () => openModal("dlgSettings"));
+  document.querySelectorAll("[data-close]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const id = node.getAttribute("data-close");
+      if (id === "dlgAdd") clearEdit();
+      closeModal(id);
+    });
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    const open = document.querySelector(".ops-modal:not([hidden])");
+    if (!open) return;
+    if (open.id === "dlgAdd") clearEdit();
+    closeModal(open.id);
+  });
+  window.addEventListener("resize", () => {
+    document.querySelectorAll(".ops-modal:not([hidden])").forEach(placeModal);
+  });
   document.querySelectorAll(".pwd-toggle").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.getAttribute("data-target");

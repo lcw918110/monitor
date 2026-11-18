@@ -17,7 +17,6 @@
     </div>
     <nav class="shell-nav" aria-label="主导航">
       <a class="shell-link" href="/#realtime" data-shell="realtime">实时监控</a>
-      <a class="shell-link" href="/#hosts" data-shell="hosts">主机</a>
       <a class="shell-link" href="/#period" data-shell="period">时段统计</a>
       <a class="shell-link" href="/#reports" data-shell="reports">使用诊断</a>
       <a class="shell-link active" href="/deploy.html" data-shell="ops" aria-current="page">运维</a>
@@ -35,6 +34,9 @@
         <div class="filters">
           <button type="button" id="btnDeploySelected" class="btn primary">部署勾选</button>
           <button type="button" id="btnDeployAll" class="btn">全部部署</button>
+          <button type="button" id="btnOpenAdd" class="btn">加入一台机器</button>
+          <button type="button" id="btnOpenExcel" class="btn">用表格一次加入</button>
+          <button type="button" id="btnOpenSettings" class="btn">不常改的连接</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -59,6 +61,7 @@
           </tbody>
         </table>
       </div>
+      <p class="ops-inline-hint muted" id="rowTestHint"></p>
     </section>
 
     <section class="panel wide" id="opsLog">
@@ -68,9 +71,15 @@
       </div>
       <pre class="log" id="jobLog">还没有部署任务。</pre>
     </section>
+  </main>
 
-    <section class="panel" id="opsAdd">
-      <div class="panel-head"><h2 class="tip-host" data-tip-id="ops-add">加入一台机器</h2></div>
+  <div class="ops-modal" id="dlgAdd" hidden>
+    <div class="ops-modal-backdrop" data-close="dlgAdd"></div>
+    <div class="ops-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dlgAddTitle">
+      <div class="panel-head">
+        <h2 class="tip-host" id="dlgAddTitle" data-tip-id="ops-add">加入一台机器</h2>
+        <button type="button" class="btn btn-sm" data-close="dlgAdd">关闭</button>
+      </div>
       <div class="form-grid">
         <label>IP / 主机名 <span class="req">*</span>
           <input id="tIp" placeholder="例如 10.0.0.21" />
@@ -89,7 +98,7 @@
           </select>
         </label>
         <label>SSH 用户
-          <input id="tUser" placeholder="不填就用右侧的默认用户" />
+          <input id="tUser" placeholder="不填就用「不常改的连接」里的默认用户" />
         </label>
         <label>这台机器的 SSH 密码
           <div class="password-field">
@@ -104,10 +113,10 @@
           <input id="tPort" type="number" value="22" min="1" max="65535" placeholder="22" />
         </label>
         <label>这台机器单独用的私钥
-          <input id="tKey" placeholder="不填就用右侧的默认私钥" />
+          <input id="tKey" placeholder="不填就用「不常改的连接」里的默认私钥" />
         </label>
         <label>安装目录
-          <input id="tRemoteDir" placeholder="不填就用默认 /opt/monitor-agent" />
+          <input id="tRemoteDir" placeholder="不填就用「不常改的连接」里的默认目录" />
         </label>
         <label style="grid-column: 1 / -1;">要一起探测的机器
           <input id="tPeers" placeholder="例如 网关=10.0.0.1;存储=10.0.0.50" />
@@ -119,23 +128,34 @@
         <button type="button" id="btnCancelEdit" class="btn" hidden>取消编辑</button>
         <span class="muted" id="testHint"></span>
       </div>
-      <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
-        <h2 class="tip-host" data-tip-id="ops-excel">用表格一次加入</h2>
-      </div>
-      <div class="pad">
-        <div class="form-actions" style="padding-left:0;">
-          <a class="link" href="/api/v1/deploy/template.xlsx">下载表格模板</a>
-          <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;">
-            选择 Excel/CSV
-            <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
-          </label>
-          <span class="muted" id="excelHint"></span>
-        </div>
-      </div>
-    </section>
+    </div>
+  </div>
 
-    <section class="panel" id="opsSettings">
-      <div class="panel-head"><h2 class="tip-host" data-tip-id="ops-settings">不常改的连接</h2></div>
+  <div class="ops-modal" id="dlgExcel" hidden>
+    <div class="ops-modal-backdrop" data-close="dlgExcel"></div>
+    <div class="ops-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dlgExcelTitle">
+      <div class="panel-head">
+        <h2 class="tip-host" id="dlgExcelTitle" data-tip-id="ops-excel">用表格一次加入</h2>
+        <button type="button" class="btn btn-sm" data-close="dlgExcel">关闭</button>
+      </div>
+      <div class="form-actions">
+        <a class="link" href="/api/v1/deploy/template.xlsx">下载表格模板</a>
+        <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;">
+          选择 Excel/CSV
+          <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
+        </label>
+        <span class="muted" id="excelHint"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="ops-modal" id="dlgSettings" hidden>
+    <div class="ops-modal-backdrop" data-close="dlgSettings"></div>
+    <div class="ops-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dlgSettingsTitle">
+      <div class="panel-head">
+        <h2 class="tip-host" id="dlgSettingsTitle" data-tip-id="ops-settings">不常改的连接</h2>
+        <button type="button" class="btn btn-sm" data-close="dlgSettings">关闭</button>
+      </div>
       <div class="form-grid" id="settingsForm">
         <label>中心地址 <span class="req">*</span>
           <input id="publicUrl" placeholder="http://&lt;中心IP&gt;:8080，自动填本机局域网，不要用 127.0.0.1" />
@@ -161,11 +181,11 @@
       </div>
       <div class="form-actions">
         <button type="button" id="btnSaveSettings" class="btn primary">保存连接设置</button>
-        <a class="link tip-host" href="/api/v1/deploy/install-script" data-tip-id="ops-rerun">补跑脚本</a>
+        <a class="link tip-host" href="/api/v1/deploy/install-script" data-tip-id="ops-rerun" download="install-agent.sh">补跑脚本</a>
         <span class="muted" id="settingsHint"></span>
       </div>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <script src="/ux.js"></script>
   <script src="/admin.js"></script>
