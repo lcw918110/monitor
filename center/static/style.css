@@ -137,55 +137,66 @@ html, body {
   padding: 10px 0 0;
 }
 
-.help-btn {
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 2px 8px;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.6;
-  cursor: pointer;
-}
-
-.help-btn:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-.help-pop {
+.tip-pop {
   position: fixed;
   z-index: 50;
-  max-height: min(70vh, 420px);
+  max-width: 320px;
+  max-height: min(70vh, 280px);
   overflow: auto;
   background: var(--bg-elev);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 10px 12px 12px;
+  padding: 8px 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   font-size: 12px;
   line-height: 1.5;
+  pointer-events: none;
 }
 
-.help-pop[hidden] { display: none; }
+.tip-pop:has(a) { pointer-events: auto; }
 
-.help-pop h3 {
-  margin: 0 0 6px;
-  font-size: 13px;
+.tip-pop[hidden] { display: none; }
+
+.tip-pop p { margin: 0; }
+
+.tip-pop p + p { margin-top: 6px; }
+
+.tip-host { cursor: help; }
+
+span.tip-host,
+code.tip-host,
+strong.tip-host {
+  border-bottom: 1px dotted rgba(139, 155, 176, 0.85);
 }
 
-.help-pop dl { margin: 0; }
-
-.help-pop dt {
-  margin-top: 8px;
-  font-weight: 600;
-}
-
-.help-pop dd {
-  margin: 2px 0 0;
+h2.tip-host::after,
+h3.tip-host::after,
+.section-title.tip-host::after,
+th.tip-host::after,
+.spec-label.tip-host::after,
+.period-control-label.tip-host::after,
+.param-label.tip-host::after,
+p.sub.tip-host::after {
+  content: "i";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 650;
+  font-style: normal;
   color: var(--muted);
+  vertical-align: 1px;
+}
+
+button.attention-chip.tip-host {
+  text-decoration: underline dotted rgba(139, 155, 176, 0.85);
+  text-underline-offset: 3px;
 }
 
 .period-title {
@@ -715,7 +726,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   color: var(--muted);
 }
 
-.section-title .help-btn {
+.section-title .tip-host {
   margin-left: 6px;
   vertical-align: 1px;
 }
@@ -1477,6 +1488,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+  padding: 0 16px 8px;
 }
 
 .ops-state {

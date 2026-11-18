@@ -12,7 +12,7 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>简易多机监控</h1>
-        <p class="sub">运维 · 客户端部署 · v1.13.0</p>
+        <p class="sub tip-host" data-tip-id="ops-foot">运维 · 客户端部署 · v1.13.0</p>
       </div>
     </div>
     <nav class="shell-nav" aria-label="主导航">
@@ -29,21 +29,9 @@
   </header>
 
   <main class="deploy-layout">
-    <section class="panel wide ops-intro">
-      <div class="panel-head"><h2>给机器装上采集</h2></div>
-      <div class="pad">
-        <ol>
-          <li>确认「中心地址」是别的机器能访问的地址，不要填 127.0.0.1。</li>
-          <li>把机器加进下面的清单，或用表格一次导入。导入只改清单，不会马上安装。</li>
-          <li>勾选后点「部署勾选」。部署会在对方机器安装或覆盖采集端，点之前会再确认。</li>
-        </ol>
-        <p class="muted">采集端默认装在 <code>/opt/monitor-agent</code>，中心仍在 <code>/opt/monitor</code>。密码登录需要这台中心机已安装 sshpass，也可以改用密钥。清单里的「删除」只去掉这一行，不会卸载已经装好的采集端。</p>
-      </div>
-    </section>
-
     <section class="panel wide" id="opsTargets">
       <div class="panel-head">
-        <h2>部署清单</h2>
+        <h2 class="tip-host" data-tip-id="ops-list">部署清单</h2>
         <div class="filters">
           <button type="button" id="btnDeploySelected" class="btn primary">部署勾选</button>
           <button type="button" id="btnDeployAll" class="btn">全部部署</button>
@@ -75,14 +63,14 @@
 
     <section class="panel wide" id="opsLog">
       <div class="panel-head">
-        <h2>部署过程</h2>
+        <h2 class="tip-host" data-tip-id="ops-log">部署过程</h2>
         <span class="muted" id="jobMeta">还没有开始</span>
       </div>
-      <pre class="log" id="jobLog">还没有部署任务。勾选机器后点「部署勾选」，过程会写在这里。</pre>
+      <pre class="log" id="jobLog">还没有部署任务。</pre>
     </section>
 
     <section class="panel" id="opsAdd">
-      <div class="panel-head"><h2>加入一台机器</h2></div>
+      <div class="panel-head"><h2 class="tip-host" data-tip-id="ops-add">加入一台机器</h2></div>
       <div class="form-grid">
         <label>IP / 主机名 <span class="req">*</span>
           <input id="tIp" placeholder="例如 10.0.0.21" />
@@ -125,8 +113,6 @@
           <input id="tPeers" placeholder="例如 网关=10.0.0.1;存储=10.0.0.50" />
         </label>
       </div>
-      <p class="muted">改一台已有机器时，可以改 IP 和 host_id。另一台已经占用这个 IP 时会拒绝保存。密码留空不会清掉已经保存的密码。停用只是不再参与部署，密码还在。同一台机器换 IP，请到监测台主机详情里用「更换 IP」。</p>
-      <p class="muted">对方没有 Python 3.6 或更新版本时，中心会带上便携解释器。失败时看清单里的短码，下面有人话说明。</p>
       <div class="form-actions">
         <button type="button" id="btnAdd" class="btn primary">加入清单</button>
         <button type="button" id="btnTestSsh" class="btn">先测能不能连上</button>
@@ -134,7 +120,7 @@
         <span class="muted" id="testHint"></span>
       </div>
       <div class="panel-head" style="border-top:1px solid var(--line); margin-top:8px;">
-        <h2>用表格一次加入</h2>
+        <h2 class="tip-host" data-tip-id="ops-excel">用表格一次加入</h2>
       </div>
       <div class="pad">
         <div class="form-actions" style="padding-left:0;">
@@ -143,16 +129,13 @@
             选择 Excel/CSV
             <input id="excelFile" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden />
           </label>
-          <span class="muted" id="excelHint">表头含 ip、ssh_port、ssh_user、ssh_password、ssh_key_path。端口不填就是 22。导入前会再确认，确认后只写入清单。</span>
+          <span class="muted" id="excelHint"></span>
         </div>
       </div>
     </section>
 
     <section class="panel" id="opsSettings">
-      <div class="panel-head"><h2>不常改的连接</h2></div>
-      <div class="settings-copy">
-        <p>中心地址和默认登录方式设好后很少再动。单台机器可以在左边覆盖。</p>
-      </div>
+      <div class="panel-head"><h2 class="tip-host" data-tip-id="ops-settings">不常改的连接</h2></div>
       <div class="form-grid" id="settingsForm">
         <label>中心地址 <span class="req">*</span>
           <input id="publicUrl" placeholder="http://&lt;中心IP&gt;:8080，自动填本机局域网，不要用 127.0.0.1" />
@@ -178,16 +161,12 @@
       </div>
       <div class="form-actions">
         <button type="button" id="btnSaveSettings" class="btn primary">保存连接设置</button>
-        <a class="link" href="/api/v1/deploy/install-script">补跑脚本</a>
-        <span class="muted" id="settingsHint">中心地址是采集端回传数据用的。密码方式要在这台中心机安装 sshpass，或改用密钥。不要从自己的笔记本另拷一份安装包。</span>
+        <a class="link tip-host" href="/api/v1/deploy/install-script" data-tip-id="ops-rerun">补跑脚本</a>
+        <span class="muted" id="settingsHint"></span>
       </div>
-      <p class="muted">补跑脚本只在清单部署已经把代码同步过去之后，到那台机器上再跑一次。它不是另一条安装办法。</p>
     </section>
   </main>
 
-  <footer class="foot">
-    <span>唯一部署方式：本页 SSH 部署，或在中心机跑 deploy_fleet.sh / deploy_agent.sh。密码登录需中心机已装 sshpass（否则短码 sshpass_missing），或改用密钥。非 root 写 /opt 会 sudo。Agent 默认 /opt/monitor-agent。SSH 端口默认 22（不扫端口）。失败消息带短码。</span>
-  </footer>
   <script src="/ux.js"></script>
   <script src="/admin.js"></script>
   <script src="/deploy.js"></script>

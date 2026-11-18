@@ -1,12 +1,6 @@
 (function () {
   "use strict";
 
-  var hints = {
-    wecom: "企业微信群机器人。消息类型为 markdown。",
-    dingtalk: "钉钉自定义机器人。安全设置请用自定义关键词，并包含「诊断」。当前不算加签。",
-    feishu: "飞书自定义机器人。报告以文本发送。",
-  };
-
   function $(id) {
     return document.getElementById(id);
   }
@@ -38,10 +32,6 @@
       "tokenStatus",
       settings.management_token_set ? "已设置（不以明文保存，页面不再显示）" : "未设置"
     );
-    var bootstrap = $("tokenBootstrap");
-    if (bootstrap) {
-      bootstrap.hidden = !!settings.management_token_set;
-    }
     say(
       "pushStatus",
       settings.push_webhook_set
@@ -82,7 +72,11 @@
 
   function refreshChannelHint() {
     var channel = ($("pushChannel") && $("pushChannel").value) || "wecom";
-    say("channelHint", hints[channel] || "");
+    var label = $("channelLabel");
+    if (!label) return;
+    var id = channel === "dingtalk" ? "channel-dingtalk" : channel === "feishu" ? "channel-feishu" : "channel-wecom";
+    label.setAttribute("data-tip-id", id);
+    label.classList.add("tip-host");
   }
 
   function inputInitial(field) {
@@ -143,7 +137,9 @@
         return (
           '<article class="param-field">' +
           '<div class="param-top">' +
-          "<div><div class=\"param-label\">" +
+          "<div><div class=\"param-label tip-host\" data-tip=\"" +
+          esc(field.description) +
+          "\">" +
           esc(field.label) +
           unit +
           "</div><div class=\"param-key\">" +
@@ -154,9 +150,6 @@
           '<button type="button" class="btn btn-sm" data-restore="' +
           esc(field.key) +
           '">恢复默认</button></div></div>' +
-          '<p class="param-desc">' +
-          esc(field.description) +
-          "</p>" +
           '<div class="param-control">' +
           controlHtml(field) +
           "</div></article>"
@@ -166,11 +159,11 @@
     return (
       '<section class="panel" id="group-' +
       esc(group.id) +
-      '"><div class="panel-head"><h2>' +
-      esc(group.title) +
-      "</h2></div><div class=\"settings-copy\"><p>" +
+      '"><div class="panel-head"><h2 class="tip-host" data-tip="' +
       esc(group.description) +
-      '</p></div><div class="param-list">' +
+      '">' +
+      esc(group.title) +
+      '</h2></div><div class="param-list">' +
       fields +
       '</div><div class="form-actions"><button type="button" class="btn primary" data-save-group="' +
       esc(group.id) +
@@ -544,10 +537,16 @@
       if ($("guardVolumeWindow")) $("guardVolumeWindow").value = "3600";
       say(
         "guardSource",
-        scope === "host"
-          ? "这台主机还没有单独的设置。若它所在的资源组已标为重点数据机，会跟随资源组。"
-          : "这个资源组还没有设置。保存后，组里没有单独设置的主机会成为重点数据机。"
+        scope === "host" ? "尚未单独设置" : "尚未设置"
       );
+      var emptySource = $("guardSource");
+      if (emptySource) {
+        emptySource.classList.add("tip-host");
+        emptySource.setAttribute(
+          "data-tip-id",
+          scope === "host" ? "guard-host-follow" : "guard-group-new"
+        );
+      }
       return;
     }
     if (enabled) enabled.checked = !!policy.enabled;
@@ -566,6 +565,11 @@
       "guardSource",
       policy.enabled ? "已标为重点数据机。" : "这条设置存在，但没有标为重点数据机。"
     );
+    var source = $("guardSource");
+    if (source) {
+      source.classList.remove("tip-host");
+      source.removeAttribute("data-tip-id");
+    }
   }
 
   async function loadDataGuard() {

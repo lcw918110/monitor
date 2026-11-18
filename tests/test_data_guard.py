@@ -469,7 +469,8 @@ class StaticCopyTests(unittest.TestCase):
             ux = handle.read()
         for name in ("重点数据机", "数据外传异常", "外传异常", "路径完整性变化", "未允许网段外连", "可移动磁盘挂载"):
             self.assertIn(name, app)
-        self.assertIn('data-help="guard"', settings)
+        self.assertIn('data-tip-id="guard"', settings)
+        self.assertNotIn("data-help=", settings)
         self.assertIn("白名单", settings)
         self.assertIn("不能保证数据出不去", ux)
         self.assertIn("白名单", ux)

@@ -172,10 +172,24 @@
     reportParagraphGlossary: function () {
       return false;
     },
+    reportParagraphView: function (text) {
+      return { show: String(text || ""), anchor: "", tip: "" };
+    },
+    reportSectionLong: function () {
+      return true;
+    },
   };
 
-  function helpButton(topic) {
-    return '<button type="button" class="help-btn" data-help="' + topic + '">说明</button>';
+  function tipOpen(id, text) {
+    if (id) return ' class="tip-host" data-tip-id="' + escapeHtml(id) + '"';
+    if (text) return ' class="tip-host" data-tip="' + escapeHtml(text) + '"';
+    return "";
+  }
+
+  function tipLabel(label, id, text) {
+    const attrs = tipOpen(id, text);
+    if (!attrs) return escapeHtml(label);
+    return "<span" + attrs + ">" + escapeHtml(label) + "</span>";
   }
 
   function setPeriodPane(mode, title) {
@@ -1110,7 +1124,7 @@
       '" />' +
       '<button type="button" class="period-btn" id="btnPeriodCustom">应用</button>' +
       "</span></div>" +
-      '<div class="period-control-group"><span class="period-control-label">繁忙阈值</span>' +
+      '<div class="period-control-group"><span class="period-control-label tip-host" data-tip-id="busy-line">繁忙阈值</span>' +
       '<label class="muted">CPU <input id="busyCpu" type="number" min="0" max="100" step="1" value="' +
       busyCpu +
       '" />%</label>' +
@@ -1121,7 +1135,7 @@
       '<a class="link" id="periodExport" href="/api/v1/export/period-stats.csv?' +
       periodQuery() +
       '">导出 CSV</a>' +
-      '<a class="link" href="/api/v1/export/period-stats-fields.csv">字段说明</a>' +
+      '<a class="link tip-host" href="/api/v1/export/period-stats-fields.csv" data-tip-id="field-guide">字段说明</a>' +
       "</div></div>";
     bindPeriodControls();
   }
@@ -1237,13 +1251,22 @@
     let html =
       meta +
       '<table class="period-stats-table"><thead><tr>' +
-      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th><th>P95</th><th>繁忙占比</th>" +
+      "<th>指标</th><th>平均</th><th>最低</th><th>最高</th><th>P95</th><th" +
+      tipOpen("busy-ratio") +
+      ">繁忙占比</th>" +
       "</tr></thead><tbody>";
+    const metricTips = {
+      disk_percent: "disk-cap",
+      disk_read_mbps: "disk-rw",
+      disk_write_mbps: "disk-rw",
+      disk_io_util_percent: "disk-io",
+      load1: "load-high",
+    };
     PERIOD_METRIC_ROWS.forEach(([label, key, suffix]) => {
       const a = metrics[key] || {};
       html +=
         "<tr><td>" +
-        label +
+        tipLabel(label, metricTips[key] || "") +
         "</td><td>" +
         fmtStatNum(a.avg, suffix) +
         "</td><td>" +
@@ -1286,10 +1309,10 @@
     };
   }
 
-  function offlineFigure(label, part) {
+  function offlineFigure(label, part, tipId) {
     return (
       '<div class="stat"><div class="label">' +
-      escapeHtml(label) +
+      tipLabel(label, tipId) +
       '</div><div class="value">' +
       (part.count || 0) +
       ' 段</div><div class="sub">' +
@@ -1304,11 +1327,11 @@
     const nodata = offlinePart(off.no_data, off.interval_count, off.total_seconds);
     const filled = offlinePart(off.backfill, 0, 0);
     let html = '<div class="offline-overview">';
-    html += '<div class="section-title">离线概览 ' + helpButton("period") + "</div>";
+    html += '<div class="section-title">离线概览</div>';
     html +=
       '<div class="offline-figures">' +
-      offlineFigure("离线（无数据）", nodata) +
-      offlineFigure("断网（已补报）", filled) +
+      offlineFigure("离线（无数据）", nodata, "nodata") +
+      offlineFigure("断网（已补报）", filled, "backfill") +
       "</div>";
     if (!hosts.length) {
       html += '<p class="empty">这一时段没有离线（无数据），也没有断网（已补报）。</p>';
@@ -1382,20 +1405,20 @@
       nodata.intervals = offline.intervals;
     }
     let html = '<div class="offline-overview">';
-    html += '<div class="section-title">离线时段 ' + helpButton("period") + "</div>";
+    html += '<div class="section-title">离线时段</div>';
     html +=
       '<div class="offline-figures">' +
-      offlineFigure("离线（无数据）", nodata) +
-      offlineFigure("断网（已补报）", filled) +
+      offlineFigure("离线（无数据）", nodata, "nodata") +
+      offlineFigure("断网（已补报）", filled, "backfill") +
       "</div>";
     if (!nodata.count && !filled.count) {
       html += '<p class="empty">这一时段该机没有离线（无数据），也没有断网（已补报）。</p>';
     } else {
       if (nodata.intervals.length) {
-        html += '<p class="muted">离线（无数据）</p>' + renderSpanList(nodata.intervals);
+        html += '<p class="muted">' + tipLabel("离线（无数据）", "nodata") + "</p>" + renderSpanList(nodata.intervals);
       }
       if (filled.intervals.length) {
-        html += '<p class="muted">断网（已补报）</p>' + renderSpanList(filled.intervals);
+        html += '<p class="muted">' + tipLabel("断网（已补报）", "backfill") + "</p>" + renderSpanList(filled.intervals);
       }
     }
     const overflows = offline.overflows || [];
@@ -1479,9 +1502,9 @@
     const hosts = ((data && data.hosts) || []).filter(
       (host) => host && host.data_guard && host.data_guard.marked
     );
-    let html = '<div class="section-title">重点数据守护 ' + helpButton("guard") + "</div>";
+    let html = '<div class="section-title tip-host" data-tip-id="guard">重点数据守护</div>';
     if (!hosts.length) {
-      html += '<p class="muted">当前没有重点数据机。到设置里勾选之后，这里才会计数。</p>';
+      html += '<p class="muted tip-host" data-tip-id="guard-empty">当前没有重点数据机。</p>';
       return html;
     }
     html +=
@@ -1520,12 +1543,10 @@
     return html;
   }
 
-  function summaryCard(label, value, sub, title) {
+  function summaryCard(label, value, sub, tipId, tipText) {
     return (
-      '<div class="stat"' +
-      (title ? ' title="' + escapeHtml(title) + '"' : "") +
-      '><div class="label">' +
-      escapeHtml(label) +
+      '<div class="stat"><div class="label">' +
+      tipLabel(label, tipId, tipText) +
       '</div><div class="value">' +
       value +
       "</div>" +
@@ -1542,18 +1563,27 @@
       "有样本",
       (summary.hostsWithSamples || 0) + "/" + (summary.hostCount || 0),
       accelNote ? escapeHtml(accelNote) : "",
-      (accelNote ? accelNote + "。" : "") + "这一窗口有历史上报的未隐藏主机"
+      "",
+      "这一窗口有历史上报的未隐藏主机"
     );
-    html += summaryCard("样本点", String(summary.sampleCount || 0), "", summary.rollupNote || "");
+    html += summaryCard(
+      "样本点",
+      String(summary.sampleCount || 0),
+      "",
+      "",
+      summary.rollupNote || "集群汇总按样本加权"
+    );
     html += summaryCard(
       summary.noDataLabel,
       (summary.noDataCount || 0) + " 段",
-      fmtDuration(summary.noDataSeconds)
+      fmtDuration(summary.noDataSeconds),
+      "nodata"
     );
     html += summaryCard(
       summary.backfillLabel,
       (summary.backfillCount || 0) + " 段",
-      fmtDuration(summary.backfillSeconds)
+      fmtDuration(summary.backfillSeconds),
+      "backfill"
     );
     el.periodSummary.innerHTML = html;
   }
@@ -1576,7 +1606,7 @@
     el.periodDetailBody.innerHTML = html;
     if (el.periodCharts) {
       resetTrendCharts();
-      el.periodCharts.innerHTML = '<p class="empty">点选主机后，这里显示该机趋势</p>';
+      el.periodCharts.innerHTML = '<p class="empty">未选择主机</p>';
     }
   }
 
@@ -1593,11 +1623,13 @@
       '<div class="table-wrap"><table class="period-hosts-table"><thead><tr>' +
       '<th class="sortable" data-sort="host">集群与主机</th>' +
       '<th class="sortable" data-sort="samples">样本</th>' +
-      '<th class="sortable" data-sort="cpu_avg" title="窗口内 CPU 平均。闲忙只看 CPU 和加速卡">CPU</th>' +
-      '<th class="sortable" data-sort="accel_avg" title="窗口内加速卡平均。没有加速卡或读不到显示 -">加速卡</th>' +
+      '<th class="sortable tip-host" data-sort="cpu_avg" data-tip-id="period-cpu">CPU</th>' +
+      '<th class="sortable tip-host" data-sort="accel_avg" data-tip-id="period-accel">加速卡</th>' +
       "</tr></thead><tbody>";
     html +=
-      '<tr data-kind="cluster" data-id=""><td>集群</td><td>' +
+      '<tr data-kind="cluster" data-id=""><td>' +
+      tipLabel("集群", "cluster") +
+      "</td><td>" +
       (data.sample_count || 0) +
       "</td><td>" +
       fmtStatNum(clusterCpu, "%") +
@@ -1691,9 +1723,13 @@
     return num > 0 ? num : 90;
   }
 
-  function chartCard(title, pts, color, kind, pick) {
+  function chartCard(title, pts, color, kind, pick, tipId) {
     return (
-      '<div class="chart-card"><div class="title">' +
+      '<div class="chart-card"><div class="title' +
+      (tipId ? " tip-host" : "") +
+      '"' +
+      (tipId ? ' data-tip-id="' + tipId + '"' : "") +
+      ">" +
       escapeHtml(title) +
       "</div>" +
       trendChart(title, chartPoints(pts, pick), color, kind, chartGapSeconds()) +
@@ -1721,15 +1757,16 @@
     html += chartCard("加速卡利用率（%）", pts, "#c9a0ff", "percent", accelUtil);
     html += chartCard("加速卡最高温度（°C）", pts, "#e25c5c", "temp", accelTemp);
     html += chartCard("内存利用率（%）", pts, "#46c2b0", "percent", (point) => point.mem_percent);
-    html += chartCard("磁盘占用率（%）", pts, "#8fd18a", "percent", (point) => point.disk_percent);
-    html += chartCard("磁盘读取速率（Mbps）", pts, "#7ec8e3", "mbps", (point) => point.disk_read_mbps);
-    html += chartCard("磁盘写入速率（Mbps）", pts, "#e3c07e", "mbps", (point) => point.disk_write_mbps);
+    html += chartCard("磁盘占用率（%）", pts, "#8fd18a", "percent", (point) => point.disk_percent, "disk-cap");
+    html += chartCard("磁盘读取速率（Mbps）", pts, "#7ec8e3", "mbps", (point) => point.disk_read_mbps, "disk-rw");
+    html += chartCard("磁盘写入速率（Mbps）", pts, "#e3c07e", "mbps", (point) => point.disk_write_mbps, "disk-rw");
     html += chartCard(
       "磁盘I/O利用率（%）",
       pts,
       "#d6a23a",
       "percent",
-      (point) => point.disk_io_util_percent
+      (point) => point.disk_io_util_percent,
+      "disk-io"
     );
     html += chartCard("网络接收速率（Mbps）", pts, "#9ec7ff", "mbps", (point) => point.net_rx_mbps);
     html += chartCard("网络发送速率（Mbps）", pts, "#f0b4a0", "mbps", (point) => point.net_tx_mbps);
@@ -1802,7 +1839,7 @@
         '<p class="empty">点选左侧主机，查看该机时段指标</p>';
       if (el.periodCharts) {
         resetTrendCharts();
-        el.periodCharts.innerHTML = '<p class="empty">点选主机后，这里显示该机趋势</p>';
+        el.periodCharts.innerHTML = '<p class="empty">未选择主机</p>';
       }
       return;
     }
@@ -1997,11 +2034,11 @@
   function renderAttention(hosts) {
     if (!el.attentionList) return;
     const defs = [
-      ["offline", "离线"],
-      ["disk", "磁盘快满"],
-      ["accel", "卡异常"],
-      ["load", "高负载"],
-      ["data_exfil", "数据外传异常"],
+      ["offline", "离线", "offline-live"],
+      ["disk", "磁盘快满", "disk-full"],
+      ["accel", "卡异常", "accel-bad"],
+      ["load", "高负载", "load-high"],
+      ["data_exfil", "数据外传异常", "data-exfil"],
     ];
     const buckets = { offline: [], disk: [], accel: [], load: [], data_exfil: [] };
     (hosts || []).forEach((h) => {
@@ -2013,12 +2050,15 @@
       .map((pair) => {
         const key = pair[0];
         const label = pair[1];
+        const tipId = pair[2];
         const on = attentionKey === key ? " active" : "";
         return (
-          '<button type="button" class="attention-chip' +
+          '<button type="button" class="attention-chip tip-host' +
           on +
           '" data-attention="' +
           key +
+          '" data-tip-id="' +
+          tipId +
           '">' +
           label +
           '<span class="count">' +
@@ -2059,7 +2099,9 @@
       .join("");
     if (names.length > 12) {
       el.attentionNames.innerHTML +=
-        '<span class="muted">另有 ' + (names.length - 12) + " 台，用筛选看全表</span>";
+        '<span class="muted tip-host" data-tip="用筛选看全表">另有 ' +
+        (names.length - 12) +
+        " 台</span>";
     }
   }
 
@@ -2072,12 +2114,12 @@
     function anomalyPill(level, label, count, title) {
       const on = current === level ? " active" : "";
       return (
-        '<button type="button" class="pill ' +
+        '<button type="button" class="pill tip-host ' +
         level +
         on +
         '" data-anomaly="' +
         level +
-        '" title="' +
+        '" data-tip="' +
         escapeHtml(title) +
         '">' +
         label +
@@ -2187,7 +2229,7 @@
 
   
   function offlineMetricCell() {
-    return '<span class="muted" title="主机离线，不展示实时指标">—</span>';
+    return '<span class="muted tip-host" data-tip-id="offline-metric">—</span>';
   }
 
 function renderHosts(hosts) {
@@ -2199,11 +2241,16 @@ function renderHosts(hosts) {
     const hostTable = el.hostBody && el.hostBody.closest("table");
     syncSortHeaders(hostTable, hostSortKey, hostSortDir);
     if (!view.length) {
-      const hint = attentionKey
-        ? "今日关注里这一类没有主机"
-        : "无匹配主机（可调整筛选或部署 Agent）";
+      const hint = attentionKey ? "今日关注里这一类没有主机" : "无匹配主机";
+      const tip = attentionKey ? "" : "可调整筛选，或到运维页部署采集端。";
       el.hostBody.innerHTML =
-        '<tr><td colspan="15" class="muted">' + hint + "</td></tr>";
+        '<tr><td colspan="15" class="muted' +
+        (tip ? " tip-host" : "") +
+        '"' +
+        (tip ? ' data-tip="' + escapeHtml(tip) + '"' : "") +
+        ">" +
+        hint +
+        "</td></tr>";
       return;
     }
     el.hostBody.innerHTML = view
@@ -2303,7 +2350,7 @@ function renderHosts(hosts) {
   function renderDataGuardDetail(data) {
     const guard = (data && data.data_guard) || {};
     if (!guard.marked) return "";
-    let html = '<div class="section-title">重点数据守护 ' + helpButton("guard") + "</div>";
+    let html = '<div class="section-title tip-host" data-tip-id="guard">重点数据守护</div>';
     const events = guard.events || [];
     if (!events.length) {
       html += "<p>当前没有数据外传异常。</p>";
@@ -2360,7 +2407,7 @@ function renderHosts(hosts) {
     const accelStatus = (anomaly.accel || anomaly.npu || {}).status;
 
     let html = renderDataGuardDetail(data);
-    html += '<div class="section-title">资源异常判定（黄=偏高 / 红=异常）</div>';
+    html += '<div class="section-title tip-host" data-tip-id="anomaly-colors">资源异常判定</div>';
     html +=
       "<div class=\"kv\"><div class=\"k\">总体</div><div class=\"v\">" +
       statusBadge(anomaly.overall) +
@@ -2396,9 +2443,10 @@ function renderHosts(hosts) {
     html += renderAssetSection(data);
 
     html +=
-      '<div class="section-title">CPU / 基础资源（' +
-      (data.online ? "实时用量" : "末次快照，非实时") +
-      " + 额定/总量）</div>";
+      '<div class="section-title tip-host" data-tip="实时用量，以及额定或总量。">' +
+      "CPU / 基础资源" +
+      (data.online ? "" : " · 末次快照，非实时") +
+      "</div>";
     html += '<div class="kv">';
     html +=
       '<div class="k">地址</div><div class="v">' +
@@ -2550,7 +2598,7 @@ function renderHosts(hosts) {
       '<div class="section-title">加速卡明细（英伟达 / AMD / 华为 / 寒武纪 / 瑞芯微 RKNN）</div>';
     if (!cards.length) {
       html +=
-        '<p class="muted">未检测到加速卡（cpu 类型不采集；或本机无 nvidia-smi / rocm-smi / amd-smi / npu-smi / cnmon / rknpu）</p>';
+        '<p class="muted tip-host" data-tip-id="no-accel">未检测到加速卡</p>';
     } else {
       const invText = accelSummaryOf(data) || accelListInventory(cards);
       if (invText) {
@@ -2699,11 +2747,10 @@ function renderHosts(hosts) {
       escapeHtml(data.host_id || "") +
       "</div></div>" +
       '<div class="asset-actions">' +
-      '<button type="button" class="btn btn-sm" id="btnReaddress">更换 IP</button>' +
+      '<button type="button" class="btn btn-sm tip-host" id="btnReaddress" data-tip-id="readdress">更换 IP</button>' +
       (data.readdress_undo
-        ? ' <button type="button" class="btn btn-sm" id="btnReaddressUndo">撤销更换 IP</button>'
+        ? ' <button type="button" class="btn btn-sm tip-host" id="btnReaddressUndo" data-tip-id="readdress-undo">撤销更换 IP</button>'
         : "") +
-      '<span class="muted">旧 IP 留在历史里，监控 ID 和历史上报不改。新 IP 上的部署目标会改指向这台主机，旧 IP 目标停用但不删除。撤销会按当时记下的 host_id 和停用状态恢复，并清掉这次写入的手工地址和那一条历史 IP。</span>' +
       "</div>"
     );
   }
@@ -2927,7 +2974,7 @@ function renderHosts(hosts) {
     });
     const flag = assetValue(data, "monitor_flag");
     return (
-      '<div class="section-title">资产信息（手工维护，Agent 不会覆盖）</div>' +
+      '<div class="section-title tip-host" data-tip-id="asset-manual">资产信息</div>' +
       '<div class="asset-grid">' +
       '<div><form id="assetForm" class="asset-form">' +
       fields +
@@ -2942,7 +2989,7 @@ function renderHosts(hosts) {
       '<label class="muted"><input type="checkbox" id="hideAlsoDeploy" /> 同时移除部署清单里对应的目标</label>' +
       '<button type="button" class="btn btn-sm btn-danger" id="btnDeleteHost">彻底删除…</button>' +
       "</div></div>" +
-      '<div><div class="spec-label">采集规格（Agent 上报，只读）</div>' +
+      '<div><div class="spec-label tip-host" data-tip-id="asset-collected">采集规格</div>' +
       renderCollectedHardware(data.hardware) +
       "</div></div>"
     );
@@ -3273,11 +3320,30 @@ function renderHosts(hosts) {
     return source === "scheduled" ? "定时" : "手动";
   }
 
-  function renderReportSectionBody(sec, paragraphs) {
-    let html = "<h3>" + escapeHtml(sec.title || "") + "</h3>";
-    (paragraphs || []).forEach((p) => {
-      html += "<p>" + escapeHtml(p) + "</p>";
-    });
+  function renderReportViewParagraph(view, muted) {
+    if (!view || !view.show) return "";
+    const show = String(view.show);
+    const tip = view.tip ? String(view.tip) : "";
+    const anchor = view.anchor ? String(view.anchor) : "";
+    let inner = escapeHtml(show);
+    if (tip && anchor && show.indexOf(anchor) >= 0) {
+      inner = escapeHtml(show).replace(
+        escapeHtml(anchor),
+        '<span class="tip-host" data-tip="' +
+          escapeHtml(tip) +
+          '">' +
+          escapeHtml(anchor) +
+          "</span>"
+      );
+    } else if (tip) {
+      inner =
+        '<span class="tip-host" data-tip="' + escapeHtml(tip) + '">' + escapeHtml(show) + "</span>";
+    }
+    return '<p' + (muted ? ' class="muted"' : "") + ">" + inner + "</p>";
+  }
+
+  function renderReportTables(sec) {
+    let html = "";
     (sec.tables || []).forEach((table) => {
       if (table.caption) {
         html += '<p class="report-caption">' + escapeHtml(table.caption) + "</p>";
@@ -3303,38 +3369,65 @@ function renderHosts(hosts) {
       });
       html += "</tbody></table></div>";
     });
-    (sec.notes || []).forEach((n) => {
-      html += '<p class="muted">' + escapeHtml(n) + "</p>";
-    });
     return html;
+  }
+
+  function splitReportCopy(items, headingTips, visible) {
+    (items || []).forEach((item) => {
+      const view = UX.reportParagraphView(item);
+      if (!view.show) {
+        if (view.tip) headingTips.push(view.tip);
+        return;
+      }
+      visible.push(view);
+    });
   }
 
   function renderReportSection(sec) {
     const title = (sec && sec.title) || "";
     const paragraphs = (sec && sec.paragraphs) || [];
-    if (UX.reportSectionCollapsed(title)) {
+    const notes = (sec && sec.notes) || [];
+    if (UX.reportSectionCollapsed(title) && UX.reportSectionLong(sec)) {
+      let inner = "";
+      paragraphs.forEach((p) => {
+        inner += "<p>" + escapeHtml(p) + "</p>";
+      });
+      inner += renderReportTables(sec);
+      notes.forEach((n) => {
+        inner += '<p class="muted">' + escapeHtml(n) + "</p>";
+      });
       return (
-        '<details class="report-gloss"><summary>说明 · ' +
+        '<details class="report-gloss"><summary class="tip-host" data-tip-id="report-long">' +
         escapeHtml(title) +
         "</summary>" +
-        renderReportSectionBody(sec, paragraphs) +
+        inner +
         "</details>"
       );
     }
-    const body = [];
-    const gloss = [];
-    paragraphs.forEach((p) => {
-      if (UX.reportParagraphGlossary(p)) gloss.push(p);
-      else body.push(p);
-    });
-    let html = renderReportSectionBody(sec, body);
-    if (gloss.length) {
-      html += '<details class="report-gloss"><summary>说明</summary>';
-      gloss.forEach((p) => {
-        html += "<p>" + escapeHtml(p) + "</p>";
+    const headingTips = [];
+    const visible = [];
+    const visibleNotes = [];
+    if (UX.reportSectionCollapsed(title)) {
+      paragraphs.concat(notes).forEach((item) => {
+        if (item) headingTips.push(String(item));
       });
-      html += "</details>";
+    } else {
+      splitReportCopy(paragraphs, headingTips, visible);
+      splitReportCopy(notes, headingTips, visibleNotes);
     }
+    let html =
+      "<h3" +
+      (headingTips.length ? ' class="tip-host" data-tip="' + escapeHtml(headingTips.join("\n")) + '"' : "") +
+      ">" +
+      escapeHtml(title) +
+      "</h3>";
+    visible.forEach((view) => {
+      html += renderReportViewParagraph(view, false);
+    });
+    html += renderReportTables(sec);
+    visibleNotes.forEach((view) => {
+      html += renderReportViewParagraph(view, true);
+    });
     return html;
   }
 
@@ -3346,13 +3439,22 @@ function renderHosts(hosts) {
         const match = part.match(/^##\s+(.+)$/m);
         const title = match ? match[1] : "";
         const block = "<pre>" + escapeHtml(part) + "</pre>";
-        if (title && UX.reportSectionCollapsed(title)) {
+        if (title && UX.reportSectionCollapsed(title) && part.length > 420) {
           return (
-            '<details class="report-gloss"><summary>说明 · ' +
+            '<details class="report-gloss"><summary class="tip-host" data-tip-id="report-long">' +
             escapeHtml(title) +
             "</summary>" +
             block +
             "</details>"
+          );
+        }
+        if (title && UX.reportSectionCollapsed(title)) {
+          return (
+            '<h3 class="tip-host" data-tip="' +
+            escapeHtml(part) +
+            '">' +
+            escapeHtml(title) +
+            "</h3>"
           );
         }
         return block;
@@ -3377,13 +3479,16 @@ function renderHosts(hosts) {
       " · 实际生成 " +
       escapeHtml(fmtReportTime(report.generated_at || report.created_at)) +
       "</p>";
-    if (view.mode !== "full") {
+    if (view.mode === "failed") {
       html +=
-        '<div class="report-empty"><strong>' +
-        (failed ? "这份报告没有生成成功" : "没有可汇总的上报") +
-        "</strong><p>" +
+        '<div class="report-empty"><strong>这份报告没有生成成功</strong><p>' +
         escapeHtml(view.message) +
         "</p></div>";
+    } else if (view.mode === "empty") {
+      html +=
+        '<div class="report-empty"><strong class="tip-host" data-tip="' +
+        escapeHtml(view.message) +
+        '">没有可汇总的上报</strong></div>';
     } else if (!sections.length && report.markdown) {
       html += renderReportMarkdown(report.markdown);
     }
@@ -3406,7 +3511,7 @@ function renderHosts(hosts) {
         '<a class="link" href="/api/v1/reports/' +
         id +
         '/rankings.csv">下载排行 CSV</a>' +
-        '<a class="link" href="/api/v1/export/rankings-fields.csv">字段说明</a>';
+        '<a class="link tip-host" href="/api/v1/export/rankings-fields.csv" data-tip-id="field-guide">字段说明</a>';
       const regen = document.getElementById("btnRegenReport");
       if (regen) {
         regen.addEventListener("click", () => {
@@ -3428,7 +3533,7 @@ function renderHosts(hosts) {
     const visible = (reports || []).filter((item) => UX.reportListItemVisible(item));
     if (!visible.length) {
       el.reportList.innerHTML =
-        '<p class="empty">还没有报告。选择日报、周报或月报后点「生成并保存」。没有上报时也会留下一份，并标明无数据。</p>';
+        '<p class="empty tip-host" data-tip-id="report-empty-list">还没有报告。</p>';
       return;
     }
     el.reportList.innerHTML = visible
@@ -3521,8 +3626,14 @@ function renderHosts(hosts) {
       let text = (data.label || "") + " " + (data.range_text || "");
       if (data.clamped) text += "（将被保留期裁剪）";
       if (data.window_error) text += "（" + data.window_error + "）";
-      if (data.empty) text += " · 这一窗口没有上报，生成后仍会留下报告";
       el.reportWindowHint.textContent = text;
+      if (data.empty) {
+        el.reportWindowHint.classList.add("tip-host");
+        el.reportWindowHint.setAttribute("data-tip-id", "report-window-empty");
+      } else {
+        el.reportWindowHint.classList.remove("tip-host");
+        el.reportWindowHint.removeAttribute("data-tip-id");
+      }
     } catch (e) {
       el.reportWindowHint.textContent = e.message || "";
     }

@@ -88,21 +88,40 @@ class AgentVersionTests(unittest.TestCase):
         self.assertIn("reportPresentation", app_js)
         with open(os.path.join(ROOT, "center/static/index.html"), encoding="utf-8") as fh:
             console = fh.read()
+        with open(os.path.join(ROOT, "center/static/ux.js"), encoding="utf-8") as fh:
+            ux_js = fh.read()
         self.assertIn('id="periodSummary"', console)
-        self.assertIn('data-help="realtime"', console)
-        self.assertIn('data-help="period"', console)
-        self.assertIn('data-help="charts"', console)
-        self.assertIn('data-help="reports"', console)
+        self.assertIn('data-tip-id="attention"', console)
+        self.assertIn('data-tip-id="period-list"', console)
+        self.assertIn('data-tip-id="trend"', console)
+        self.assertIn('data-tip-id="reports"', console)
+        self.assertNotIn("data-help=", console)
+        self.assertNotIn(">说明</button>", console)
         self.assertNotIn("按当前快照。重点数据机上的数据外传异常也在这里", console)
         self.assertNotIn("悬停显示上海时间和数值；没有补上的空档", console)
         self.assertNotIn("中心按配置自动生成上一完整周期（默认每日 00:10", console)
+        self.assertIn('data-tip-id="readdress"', app_js)
+        self.assertNotIn("旧 IP 留在历史里", app_js)
+        self.assertIn("旧 IP 留在历史里", ux_js)
+        self.assertIn("reportParagraphView", app_js)
         with open(os.path.join(ROOT, "center/static/settings.html"), encoding="utf-8") as fh:
             settings = fh.read()
-        self.assertIn('data-help="guard"', settings)
+        self.assertIn('data-tip-id="guard"', settings)
+        self.assertIn("测试发送", settings)
+        self.assertIn('data-tip-id="push-test"', settings)
+        self.assertIn('id="pushLast"', settings)
+        self.assertNotIn("只向已经保存的渠道和 Webhook 发一条短消息", settings)
+        self.assertIn("只向已经保存的渠道和 Webhook 发一条短消息", ux_js)
+        self.assertIn("最近一次推送结果", ux_js)
+        self.assertNotIn("data-help=", settings)
         self.assertNotIn("它不能保证数据出不去，也不拦截连接", settings)
+        with open(os.path.join(ROOT, "center/static/settings.js"), encoding="utf-8") as fh:
+            settings_js = fh.read()
+        self.assertNotIn('<p class="param-desc">', settings_js)
         self.assertNotIn("loadPeriodHostDetail(selectedId);\n        renderHosts(allHosts);", app_js)
         self.assertIn("applyHealthVersion", deploy_js)
-        self.assertIn("不会卸载", deploy_html)
+        self.assertIn("不会卸载", ux_js)
+        self.assertNotIn("不会卸载已经装好的采集端", deploy_html)
         self.assertIn("部署勾选", deploy_html)
         self.assertIn('src="/ux.js"', deploy_html)
         self.assertLess(deploy_html.find('src="/ux.js"'), deploy_html.find('src="/deploy.js"'))
@@ -294,6 +313,22 @@ assert.strictEqual(ux.reportSectionCollapsed("名词解释"), true);
 assert.strictEqual(ux.reportSectionCollapsed("2. 总览"), false);
 assert.strictEqual(ux.reportParagraphGlossary("口径：集群 avg。闲忙两极只看 CPU 与加速卡。"), true);
 assert.strictEqual(ux.reportParagraphGlossary("窗口在线率 1 / 2。"), false);
+assert.strictEqual(ux.reportParagraphGlossary("简评里的高负荷 / 偏低只对 CPU 与加速卡。"), true);
+var onlineRate = ux.reportParagraphView("窗口在线率 1 / 2（50.0%）。窗口内至少有一条历史上报即计入；没有单独的在线心跳，采样中断算未上报。");
+assert.strictEqual(onlineRate.show, "窗口在线率 1 / 2（50.0%）。");
+assert.strictEqual(onlineRate.anchor, "窗口在线率");
+assert.ok(onlineRate.show.indexOf("没有单独的在线心跳") < 0);
+assert.ok(onlineRate.tip.indexOf("没有单独的在线心跳") >= 0);
+var generated = ux.reportParagraphView("生成时刻在线 1、离线 1。闲忙里的「离线」和「基本不用」仍按生成时刻是否在线，不回溯窗口内状态。离线主机不把末次快照当成实时用量。");
+assert.strictEqual(generated.show, "生成时刻在线 1、离线 1。");
+assert.strictEqual(generated.anchor, "离线");
+assert.ok(generated.tip.indexOf("末次快照") >= 0);
+assert.strictEqual(ux.reportParagraphView("窗口在线率 1 / 2。").tip, "");
+assert.strictEqual(ux.reportParagraphView("口径：样本加权。").show, "");
+assert.strictEqual(ux.reportSectionLong({ tables: [{ rows: [] }], paragraphs: [] }), true);
+assert.strictEqual(ux.reportSectionLong({ tables: [], paragraphs: ["短"] }), false);
+assert.ok(ux.tipEntry("readdress").text.indexOf("监控 ID") >= 0);
+assert.ok(ux.tipEntry("nodata").text.indexOf("离线（无数据）") >= 0);
 const plan = ux.reportPreviewPlan([
   { title: "1. 抬头", paragraphs: ["时间窗：昨天。", "口径：样本加权。"] },
   { title: "2. 总览", paragraphs: ["窗口在线率 1 / 2。"] },
