@@ -450,7 +450,8 @@ class HttpReportTests(unittest.TestCase):
             self.assertIn('data-shell="reports"', page)
             self.assertIn('id="viewReports"', page)
             self.assertIn("reportWindowDate", page)
-            self.assertIn("reportScheduleNote", page)
+            self.assertIn('data-tip-id="reports"', page)
+            self.assertNotIn("reportScheduleNote", page)
         finally:
             httpd.shutdown()
             httpd.server_close()

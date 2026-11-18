@@ -131,6 +131,80 @@ html, body {
 
 .attention-names { margin-top: 8px; }
 
+.attention-names:empty { display: none; }
+
+.attention .anomaly-summary {
+  padding: 10px 0 0;
+}
+
+.tip-pop {
+  position: fixed;
+  z-index: 50;
+  max-width: 320px;
+  max-height: min(70vh, 280px);
+  overflow: auto;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.tip-pop:has(a) { pointer-events: auto; }
+
+.tip-pop[hidden] { display: none; }
+
+.tip-pop p { margin: 0; }
+
+.tip-pop p + p { margin-top: 6px; }
+
+.tip-host { cursor: help; }
+
+span.tip-host,
+code.tip-host,
+strong.tip-host {
+  border-bottom: 1px dotted rgba(139, 155, 176, 0.85);
+}
+
+h2.tip-host::after,
+h3.tip-host::after,
+.section-title.tip-host::after,
+th.tip-host::after,
+.spec-label.tip-host::after,
+.period-control-label.tip-host::after,
+.param-label.tip-host::after,
+p.sub.tip-host::after {
+  content: "i";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 650;
+  font-style: normal;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+button.attention-chip.tip-host {
+  text-decoration: underline dotted rgba(139, 155, 176, 0.85);
+  text-underline-offset: 3px;
+}
+
+.period-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 button.attention-chip,
 button.attention-name,
 button.pill,
@@ -321,6 +395,47 @@ button.attention-name:hover { text-decoration: underline; }
   font-family: var(--mono);
   font-size: 24px;
   font-weight: 600;
+}
+
+.stat .sub {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.period-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 28px 0;
+}
+
+.period-summary .stat {
+  padding: 10px 12px;
+}
+
+.period-summary .stat .value {
+  font-size: 18px;
+}
+
+.offline-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.offline-figures .stat {
+  min-width: 140px;
+  padding: 8px 10px;
+}
+
+.offline-figures .stat .value {
+  font-size: 16px;
 }
 
 .layout {
@@ -550,6 +665,8 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 }
 
 .detail-body { padding: 16px; }
+
+.period-detail .detail-body { overflow: auto; }
 .empty { color: var(--muted); margin: 24px 0; text-align: center; }
 
 .kv {
@@ -607,6 +724,11 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   margin: 8px 0 10px;
   font-size: 13px;
   color: var(--muted);
+}
+
+.section-title .tip-host {
+  margin-left: 6px;
+  vertical-align: 1px;
 }
 
 .period-bar {
@@ -678,7 +800,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 
 .period-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(260px, 0.72fr) minmax(360px, 1.2fr);
   grid-template-areas:
     "hosts detail"
     "charts charts";
@@ -870,6 +992,22 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   margin: 16px 0 8px;
   font-size: 15px;
 }
+
+.report-gloss {
+  margin: 8px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: rgba(15, 20, 25, 0.28);
+}
+
+.report-gloss summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-gloss p:last-child { margin-bottom: 0; }
 
 .report-preview p {
   margin: 0 0 8px;
@@ -1164,7 +1302,8 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
 }
 
 @media (max-width: 1100px) {
-  .stats { grid-template-columns: repeat(3, 1fr); }
+  .stats,
+  .period-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .layout { grid-template-columns: 1fr; }
   .period-layout {
     grid-template-columns: 1fr;
@@ -1349,6 +1488,7 @@ tbody tr.active { background: rgba(61, 156, 253, 0.08); }
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+  padding: 0 16px 8px;
 }
 
 .ops-state {
